@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "indexes": [
+    {
+      "id": "voltagent-awesome-agent-skills",
+      "kind": "official-index",
+      "url": "https://raw.githubusercontent.com/VoltAgent/awesome-agent-skills/refs/heads/main/README.md",
+      "description": "Discovery index for official and community agent skills. Official upstream repos remain canonical."
+    }
+  ]
+}

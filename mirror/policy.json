@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "selection": {
+    "officialBeatsPopularity": true,
+    "requirePinnedProvenance": true,
+    "communityDefaultPolicy": "catalog-only-unless-promoted"
+  },
+  "audit": {
+    "alwaysAudit": true,
+    "quarantineOn": [
+      "unknown-provenance",
+      "unverified-publisher-with-exec",
+      "unexpected-hooks",
+      "oversized-context-payload"
+    ]
+  },
+  "store": {
+    "root": "./mirror",
+    "rawDirectories": [
+      "repo",
+      "package",
+      "marketplace",
+      "docs",
+      "local"
+    ],
+    "normalizedDirectories": [
+      "assets"
+    ],
+    "bundlesDirectory": "./mirror/bundles",
+    "quarantineDirectory": "./mirror/quarantine",
+    "auditDirectory": "./mirror/audit"
+  },
+  "bundleTemplates": [
+    {
+      "id": "opencode-global",
+      "host": "opencode",
+      "description": "Curated staged install set for the OpenCode global harness.",
+      "assetKinds": [
+        "skill",
+        "plugin",
+        "agent",
+        "instruction",
+        "mcp-server"
+      ],
+      "defaultPromotion": "manual"
+    },
+    {
+      "id": "copilot-core",
+      "host": "copilot-vscode",
+      "description": "Minimal Copilot baseline with strict context-budget controls.",
+      "assetKinds": [
+        "skill",
+        "instruction",
+        "agent",
+        "workflow",
+        "plugin",
+        "mcp-server"
+      ],
+      "defaultPromotion": "manual"
+    },
+    {
+      "id": "shared-mcp",
+      "host": "shared",
+      "description": "Shared MCP candidates installable by multiple hosts.",
+      "assetKinds": [
+        "mcp-server"
+      ],
+      "defaultPromotion": "manual"
+    },
+    {
+      "id": "community-stable",
+      "host": "shared",
+      "description": "Promoted community assets that have passed curation and audit.",
+      "assetKinds": [
+        "skill",
+        "plugin",
+        "agent"
+      ],
+      "defaultPromotion": "explicit-only"
+    }
+  ]
+}

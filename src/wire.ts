@@ -1,0 +1,69 @@
+#!/usr/bin/env node
+
+import { fileURLToPath } from "node:url"
+
+import { resolveProjectRoot } from "./files.js"
+import { wireVsCode } from "./host-vscode.js"
+import { wireOpenCode } from "./host-opencode.js"
+
+export async function runWire(
+  args: string[],
+  workingDirectory: string,
+  projectRoot: string
+): Promise<number> {
+  const [target = "help", ...rest] = args
+  const mode = getWireMode(rest)
+
+  switch (target) {
+    case "vscode":
+      await wireVsCode({ projectRoot, workspaceRoot: workingDirectory, mode })
+      return 0
+    case "opencode":
+      await wireOpenCode({ projectRoot, workspaceRoot: workingDirectory, mode })
+      return 0
+    case "help":
+      printWireHelp()
+      return 0
+    default:
+      printWireHelp()
+      return 1
+  }
+}
+
+function getWireMode(args: string[]): "preview" | "apply" | "reset" {
+  if (args.includes("--reset")) {
+    return "reset"
+  }
+
+  if (args.includes("--preview")) {
+    return "preview"
+  }
+
+  return "apply"
+}
+
+function printWireHelp(): void {
+  console.log(`wire commands:
+  vscode    Preview/apply/reset VS Code user-scoped wiring and workspace instructions export
+  opencode  Preview/apply/reset OpenCode project-local overlay export
+
+Options:
+  --preview
+  --apply
+  --reset`)
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const [, , ...args] = process.argv
+  const projectRoot = resolveProjectRoot(fileURLToPath(import.meta.url))
+  const workingDirectory = process.cwd()
+
+  runWire(args, workingDirectory, projectRoot)
+    .then((exitCode) => {
+      process.exitCode = exitCode
+    })
+    .catch((error: unknown) => {
+      console.error(error)
+      process.exitCode = 1
+    })
+}

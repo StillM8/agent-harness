@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-harness.local/discover/selection-registry.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "selectionPolicies",
+    "rankingOrder",
+    "duplicateGroups"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "selectionPolicies": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "officialBeatsPopularity",
+        "starsAreTieBreakerOnly",
+        "preferNativeOverAdaptable",
+        "preferLowerRiskWhenEquivalent",
+        "preferLowerContextCostWhenEquivalent",
+        "communityDefaultPolicy"
+      ],
+      "properties": {
+        "officialBeatsPopularity": {
+          "type": "boolean"
+        },
+        "starsAreTieBreakerOnly": {
+          "type": "boolean"
+        },
+        "preferNativeOverAdaptable": {
+          "type": "boolean"
+        },
+        "preferLowerRiskWhenEquivalent": {
+          "type": "boolean"
+        },
+        "preferLowerContextCostWhenEquivalent": {
+          "type": "boolean"
+        },
+        "communityDefaultPolicy": {
+          "type": "string",
+          "enum": [
+            "catalog-only-unless-promoted"
+          ]
+        }
+      }
+    },
+    "rankingOrder": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "duplicateGroups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "capability",
+          "preferredAuthorityTier",
+          "selectionReason"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "capability": {
+            "type": "string"
+          },
+          "preferredAuthorityTier": {
+            "type": "string"
+          },
+          "selectionReason": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

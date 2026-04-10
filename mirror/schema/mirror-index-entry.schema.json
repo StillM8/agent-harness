@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-harness.local/mirror/mirror-index-entry.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "mirrorId",
+    "assetId",
+    "upstream",
+    "source",
+    "mirroredAt",
+    "contentHash",
+    "status"
+  ],
+  "properties": {
+    "mirrorId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "assetId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "upstream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "url"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "repo",
+            "package",
+            "marketplace",
+            "docs",
+            "local"
+          ]
+        },
+        "url": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorityTier",
+        "publisher",
+        "publisherVerified"
+      ],
+      "properties": {
+        "authorityTier": {
+          "type": "string"
+        },
+        "publisher": {
+          "type": "string"
+        },
+        "publisherVerified": {
+          "type": "boolean"
+        }
+      }
+    },
+    "mirroredAt": {
+      "type": "string"
+    },
+    "contentHash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "projectionCandidates": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "approved",
+        "approved-with-warning",
+        "quarantined",
+        "metadata-only",
+        "reference-only"
+      ]
+    }
+  }
+}

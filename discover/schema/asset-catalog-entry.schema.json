@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-harness.local/discover/asset-catalog-entry.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "displayName",
+    "assetKind",
+    "hosts",
+    "compatibilityMode",
+    "source",
+    "capabilities",
+    "risk",
+    "contextCost",
+    "status"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "assetKind": {
+      "type": "string",
+      "enum": [
+        "skill",
+        "plugin",
+        "mcp-server",
+        "agent",
+        "instruction",
+        "workflow",
+        "hook",
+        "extension",
+        "prompt-pack",
+        "reference-pack"
+      ]
+    },
+    "hosts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "enum": [
+          "copilot-vscode",
+          "opencode",
+          "shared"
+        ]
+      }
+    },
+    "compatibilityMode": {
+      "type": "string",
+      "enum": [
+        "native",
+        "adaptable",
+        "partial",
+        "reference-only",
+        "incompatible"
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceId",
+        "authorityTier",
+        "originUrl",
+        "publisher",
+        "publisherVerified"
+      ],
+      "properties": {
+        "sourceId": {
+          "type": "string"
+        },
+        "authorityTier": {
+          "type": "string"
+        },
+        "originUrl": {
+          "type": "string"
+        },
+        "publisher": {
+          "type": "string"
+        },
+        "publisherVerified": {
+          "type": "boolean"
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "install": {
+      "type": "object"
+    },
+    "evidence": {
+      "type": "object"
+    },
+    "maintenance": {
+      "type": "object"
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "level"
+      ],
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "hasHooks": {
+          "type": "boolean"
+        },
+        "hasExecScripts": {
+          "type": "boolean"
+        },
+        "requiresNetwork": {
+          "type": "boolean"
+        }
+      }
+    },
+    "contextCost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sizeClass"
+      ],
+      "properties": {
+        "sizeClass": {
+          "type": "string",
+          "enum": [
+            "tiny",
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        "estimatedPromptWeight": {
+          "type": "number"
+        }
+      }
+    },
+    "fit": {
+      "type": "object"
+    },
+    "dedupe": {
+      "type": "object"
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cataloged",
+        "mirrorEligible",
+        "installEligible",
+        "activationEligible"
+      ],
+      "properties": {
+        "cataloged": {
+          "type": "boolean"
+        },
+        "mirrorEligible": {
+          "type": "boolean"
+        },
+        "installEligible": {
+          "type": "boolean"
+        },
+        "activationEligible": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

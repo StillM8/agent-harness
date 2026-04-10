@@ -1,0 +1,29 @@
+{
+  "$schema": "./schema/selection-registry.schema.json",
+  "schemaVersion": 1,
+  "selectionPolicies": {
+    "officialBeatsPopularity": true,
+    "starsAreTieBreakerOnly": true,
+    "preferNativeOverAdaptable": true,
+    "preferLowerRiskWhenEquivalent": true,
+    "preferLowerContextCostWhenEquivalent": true,
+    "communityDefaultPolicy": "catalog-only-unless-promoted"
+  },
+  "rankingOrder": [
+    "authorityTier",
+    "compatibilityMode",
+    "portfolioFit",
+    "risk",
+    "contextCost",
+    "maintenance",
+    "popularity"
+  ],
+  "duplicateGroups": [
+    {
+      "id": "supabase-skills",
+      "capability": "supabase project support",
+      "preferredAuthorityTier": "official-first-party",
+      "selectionReason": "Official vendor sources outrank unofficial alternatives regardless of GitHub stars."
+    }
+  ]
+}

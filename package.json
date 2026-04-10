@@ -1,0 +1,44 @@
+{
+  "name": "agent-harness",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Discovery and mirror pipeline for curated agent tooling across OpenCode and GitHub Copilot.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "agent-harness": "./dist/cli.js",
+    "agent-harness-vscode": "./dist/workspace-vscode.js",
+    "agent-harness-opencode": "./dist/workspace-opencode.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "start": "node ./dist/cli.js",
+    "discover:demand": "node ./dist/cli.js discover demand-profile",
+    "discover:sources": "node ./dist/cli.js discover sources",
+    "discover:catalog": "node ./dist/cli.js discover catalog",
+    "discover:select": "node ./dist/cli.js discover select",
+    "discover:stats": "node ./dist/cli.js discover stats",
+    "mirror:plan": "node ./dist/cli.js mirror plan",
+    "mirror:locks": "node ./dist/cli.js mirror locks",
+    "mirror:acquire": "node ./dist/cli.js mirror acquire --batch-size 120",
+    "install:bundle": "node ./dist/cli.js install bundle --batch-size 250",
+    "install:reconcile": "node ./dist/cli.js install reconcile",
+    "install:reset": "node ./dist/cli.js install reset",
+    "activate:host": "node ./dist/cli.js activate host",
+    "activate:reset": "node ./dist/cli.js activate reset",
+    "rebuild:clean": "node ./dist/cli.js rebuild clean",
+    "rebuild:full": "node ./dist/cli.js rebuild full",
+    "workspace:vscode": "node ./dist/workspace-vscode.js",
+    "workspace:opencode": "node ./dist/workspace-opencode.js",
+    "wire:vscode": "node ./dist/cli.js wire vscode --apply",
+    "wire:opencode": "node ./dist/cli.js wire opencode --apply"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

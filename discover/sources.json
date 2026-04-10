@@ -1,0 +1,932 @@
+{
+  "$schema": "./schema/source-registry.schema.json",
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "id": "copilot-docs",
+      "name": "GitHub Copilot Docs",
+      "kind": "docs",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "GitHub",
+        "verified": true,
+        "owner": "github"
+      },
+      "hosts": [
+        "copilot-vscode"
+      ],
+      "assetKinds": [
+        "instruction",
+        "agent",
+        "workflow",
+        "plugin"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 100,
+      "enabled": true,
+      "endpoints": {
+        "docsUrl": "https://docs.github.com/en/copilot"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "github-awesome-copilot",
+      "name": "GitHub Awesome Copilot",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "GitHub",
+        "verified": true,
+        "owner": "github"
+      },
+      "hosts": [
+        "copilot-vscode"
+      ],
+      "assetKinds": [
+        "skill",
+        "agent",
+        "instruction",
+        "workflow",
+        "hook",
+        "plugin"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 100,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/github/awesome-copilot"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "vscode-marketplace",
+      "name": "VS Code Marketplace",
+      "kind": "marketplace",
+      "authorityTier": "official-marketplace",
+      "publisher": {
+        "name": "Microsoft",
+        "verified": true,
+        "owner": "microsoft"
+      },
+      "hosts": [
+        "copilot-vscode"
+      ],
+      "assetKinds": [
+        "extension",
+        "plugin",
+        "mcp-server"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 95,
+      "enabled": true,
+      "endpoints": {
+        "baseUrl": "https://marketplace.visualstudio.com"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "claude-code-docs",
+      "name": "Claude Code Docs",
+      "kind": "docs",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Anthropic",
+        "verified": true,
+        "owner": "anthropic"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "plugin",
+        "hook",
+        "agent",
+        "workflow"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 90,
+      "enabled": true,
+      "endpoints": {
+        "docsUrl": "https://docs.anthropic.com"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "skills-sh",
+      "name": "skills.sh",
+      "kind": "registry",
+      "authorityTier": "unverified-community",
+      "publisher": {
+        "name": "skills.sh",
+        "verified": false
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "agent",
+        "instruction",
+        "prompt-pack"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 60,
+      "enabled": true,
+      "endpoints": {
+        "baseUrl": "https://skills.sh"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": false,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "mcp-spec-docs",
+      "name": "Model Context Protocol Docs",
+      "kind": "docs",
+      "authorityTier": "official-compatible",
+      "publisher": {
+        "name": "Model Context Protocol",
+        "verified": true
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "mcp-server"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 95,
+      "enabled": true,
+      "endpoints": {
+        "docsUrl": "https://modelcontextprotocol.io"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "npm-registry",
+      "name": "npm Registry",
+      "kind": "package-registry",
+      "authorityTier": "official-marketplace",
+      "publisher": {
+        "name": "npm",
+        "verified": true
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "mcp-server",
+        "plugin",
+        "skill"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 80,
+      "enabled": true,
+      "endpoints": {
+        "baseUrl": "https://www.npmjs.com"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "pypi-registry",
+      "name": "PyPI",
+      "kind": "package-registry",
+      "authorityTier": "official-marketplace",
+      "publisher": {
+        "name": "PyPI",
+        "verified": true
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "mcp-server",
+        "plugin",
+        "skill"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 75,
+      "enabled": true,
+      "endpoints": {
+        "baseUrl": "https://pypi.org"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "supabase-agent-skills",
+      "name": "Supabase Agent Skills",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Supabase",
+        "verified": true,
+        "owner": "supabase"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "instruction",
+        "agent"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 100,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/supabase/agent-skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "local-antigravity-manifest",
+      "name": "Local Antigravity Install Manifest",
+      "kind": "local-manifest",
+      "authorityTier": "trusted-local",
+      "publisher": {
+        "name": "local"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "plugin",
+        "agent"
+      ],
+      "discoveryMode": "seed",
+      "priority": 95,
+      "enabled": true,
+      "endpoints": {
+        "file": "C:/Users/ar271/.agents/skills/.antigravity-install-manifest.json"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "local-antigravity-skills",
+      "name": "Local Antigravity Skills Directory",
+      "kind": "local-directory",
+      "authorityTier": "trusted-local",
+      "publisher": {
+        "name": "local-antigravity"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill"
+      ],
+      "discoveryMode": "seed",
+      "priority": 96,
+      "enabled": true,
+      "endpoints": {
+        "path": "C:/Users/ar271/.agents/skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "antigravity-awesome-skills",
+      "name": "Antigravity Awesome Skills",
+      "kind": "repo",
+      "authorityTier": "trusted-community",
+      "publisher": {
+        "name": "antigravity"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "agent",
+        "instruction",
+        "workflow",
+        "hook",
+        "plugin",
+        "mcp-server"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 55,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/rmyndharis/antigravity-skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": false,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "anthropics-skills",
+      "name": "Anthropics Skills",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Anthropic",
+        "verified": true,
+        "owner": "anthropics"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "agent",
+        "instruction",
+        "workflow"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 100,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/anthropics/skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "anthropics-claude-cookbooks",
+      "name": "Anthropics Claude Cookbooks",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Anthropic",
+        "verified": true,
+        "owner": "anthropics"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "reference-pack",
+        "instruction",
+        "workflow"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 95,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/anthropics/claude-cookbooks"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "remotion-dev-skills",
+      "name": "Remotion Dev Skills",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Remotion",
+        "verified": true,
+        "owner": "remotion-dev"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "instruction",
+        "workflow"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 95,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/remotion-dev/skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "vercel-labs-agent-skills",
+      "name": "Vercel Labs Agent Skills",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Vercel",
+        "verified": true,
+        "owner": "vercel-labs"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "instruction",
+        "workflow"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 100,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/vercel-labs/agent-skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "openai-skills",
+      "name": "OpenAI Skills",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "OpenAI",
+        "verified": true,
+        "owner": "openai"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "agent",
+        "instruction",
+        "workflow"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 100,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/openai/skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "microsoft-skills",
+      "name": "Microsoft Skills",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Microsoft",
+        "verified": true,
+        "owner": "microsoft"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "instruction",
+        "workflow",
+        "reference-pack"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 100,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/microsoft/skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "google-gemini-skills",
+      "name": "Google Gemini Skills",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Google Gemini",
+        "verified": true,
+        "owner": "google-gemini"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "instruction",
+        "workflow"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 100,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/google-gemini/gemini-skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "apify-agent-skills",
+      "name": "Apify Agent Skills",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Apify",
+        "verified": true,
+        "owner": "apify"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "instruction",
+        "workflow"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 95,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/apify/agent-skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "expo-skills",
+      "name": "Expo Skills",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Expo",
+        "verified": true,
+        "owner": "expo"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "instruction",
+        "workflow"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 95,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/expo/skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "huggingface-skills",
+      "name": "Hugging Face Skills",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Hugging Face",
+        "verified": true,
+        "owner": "huggingface"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "instruction",
+        "workflow",
+        "reference-pack"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 95,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/huggingface/skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "neondatabase-agent-skills",
+      "name": "Neon Database Agent Skills",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Neon",
+        "verified": true,
+        "owner": "neondatabase"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "instruction",
+        "workflow"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 95,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/neondatabase/agent-skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "scopeblind-gateway",
+      "name": "Scopeblind Gateway",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Scopeblind",
+        "verified": true,
+        "owner": "scopeblind"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode",
+        "shared"
+      ],
+      "assetKinds": [
+        "mcp-server",
+        "workflow",
+        "reference-pack"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 95,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/scopeblind/scopeblind-gateway"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "pbakaus-impeccable",
+      "name": "Impeccable",
+      "kind": "repo",
+      "authorityTier": "trusted-community",
+      "publisher": {
+        "name": "pbakaus",
+        "verified": false,
+        "owner": "pbakaus"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "instruction",
+        "workflow"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 70,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/pbakaus/impeccable.git"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "flutter-skills",
+      "name": "Flutter Skills",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Flutter",
+        "verified": true,
+        "owner": "flutter"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "instruction",
+        "workflow"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 95,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/flutter/skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "genkit-ai-skills",
+      "name": "Genkit AI Skills",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Genkit",
+        "verified": true,
+        "owner": "genkit-ai"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "instruction",
+        "workflow"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 95,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/genkit-ai/skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "firebase-skills",
+      "name": "Firebase Skills",
+      "kind": "repo",
+      "authorityTier": "official-first-party",
+      "publisher": {
+        "name": "Firebase",
+        "verified": true,
+        "owner": "firebase"
+      },
+      "hosts": [
+        "copilot-vscode",
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "instruction",
+        "workflow"
+      ],
+      "discoveryMode": "catalog",
+      "priority": 95,
+      "enabled": true,
+      "endpoints": {
+        "repo": "https://github.com/firebase/skills"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "local-opencode-config",
+      "name": "Local OpenCode Config",
+      "kind": "local-directory",
+      "authorityTier": "trusted-local",
+      "publisher": {
+        "name": "local"
+      },
+      "hosts": [
+        "opencode"
+      ],
+      "assetKinds": [
+        "skill",
+        "plugin",
+        "agent",
+        "workflow",
+        "hook",
+        "instruction"
+      ],
+      "discoveryMode": "seed",
+      "priority": 100,
+      "enabled": true,
+      "endpoints": {
+        "path": "C:/Users/ar271/.config/opencode"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    },
+    {
+      "id": "local-opencode-context",
+      "name": "Local OpenCode Context",
+      "kind": "local-directory",
+      "authorityTier": "trusted-local",
+      "publisher": {
+        "name": "local"
+      },
+      "hosts": [
+        "opencode"
+      ],
+      "assetKinds": [
+        "instruction",
+        "workflow",
+        "reference-pack"
+      ],
+      "discoveryMode": "seed",
+      "priority": 90,
+      "enabled": true,
+      "endpoints": {
+        "path": "C:/Users/ar271/.config/opencode/context"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
+      }
+    }
+  ]
+}

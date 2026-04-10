@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-harness.local/mirror/bundle-lock.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "bundleId",
+    "generatedAt",
+    "assets"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "bundleId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generatedAt": {
+      "type": "string"
+    },
+    "host": {
+      "type": "string",
+      "enum": [
+        "copilot-vscode",
+        "opencode",
+        "shared"
+      ]
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "assetId",
+          "mirrorId",
+          "projectionType",
+          "activationEligible"
+        ],
+        "properties": {
+          "assetId": {
+            "type": "string"
+          },
+          "mirrorId": {
+            "type": "string"
+          },
+          "projectionType": {
+            "type": "string"
+          },
+          "activationEligible": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
