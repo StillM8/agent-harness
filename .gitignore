@@ -5,6 +5,8 @@ activate/
 install/
 state/
 
+.tmp/
+
 discover/output/
 discover/catalog.assets.jsonl
 
