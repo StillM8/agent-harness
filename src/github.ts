@@ -114,6 +114,48 @@ export async function fetchGitHubRepoSnapshot(
   }
 
   const { owner, repo } = coordinates
+  return fetchGitHubRepoSnapshotFromCoordinates({
+    owner,
+    repo,
+    projectRoot,
+    sourceId: source.id
+  })
+}
+
+export async function fetchGitHubRepoSnapshotByRepoUrl(options: {
+  repoUrl: string
+  projectRoot: string
+  sourceId: string
+}): Promise<GitHubRepoSnapshot | null> {
+  const coordinates = parseGitHubRepoCoordinates(options.repoUrl)
+  if (!coordinates) {
+    return null
+  }
+
+  return fetchGitHubRepoSnapshotFromCoordinates({
+    owner: coordinates.owner,
+    repo: coordinates.repo,
+    projectRoot: options.projectRoot,
+    sourceId: options.sourceId
+  })
+}
+
+export function buildGitHubRawFileUrl(options: {
+  owner: string
+  repo: string
+  branch: string
+  filePath: string
+}): string {
+  return `https://raw.githubusercontent.com/${options.owner}/${options.repo}/${options.branch}/${options.filePath}`
+}
+
+async function fetchGitHubRepoSnapshotFromCoordinates(options: {
+  owner: string
+  repo: string
+  projectRoot: string
+  sourceId: string
+}): Promise<GitHubRepoSnapshot | null> {
+  const { owner, repo, projectRoot, sourceId } = options
   const cachePath = join(projectRoot, "state", "remote-cache", "github", `${owner}__${repo}.json`)
 
   if (isRateLimited()) {
@@ -133,7 +175,7 @@ export async function fetchGitHubRepoSnapshot(
     const snapshot: GitHubRepoSnapshot = {
       owner,
       repo,
-      sourceId: source.id,
+      sourceId,
       fetchedAt: new Date().toISOString(),
       repoSummary: {
         name: repoResponse.name,

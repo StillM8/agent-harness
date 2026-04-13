@@ -53,6 +53,7 @@
         "instruction",
         "agent",
         "workflow",
+        "hook",
         "plugin",
         "mcp-server"
       ],

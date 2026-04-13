@@ -426,6 +426,7 @@ export interface RecommendationEntry {
   host: HostTarget
   score: number
   reasons: string[]
+  assetKind?: AssetKind
 }
 
 export interface RecommendationReport {

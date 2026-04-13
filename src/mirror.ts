@@ -1,11 +1,23 @@
 import { join } from "node:path"
 
 import { createContentHash, ensureDirectory, pathExists, readJsonFile, readJsonFileOrNull, readJsonLinesFile, readTextFileOrNull, toPosixPath, writeJsonFile, writeJsonLinesFile, writeTextFile, removePath } from "./files.js"
+import { buildGitHubRawFileUrl, fetchGitHubRepoSnapshotByRepoUrl } from "./github.js"
+import { fetchOfficialIndexPageContent } from "./official-index.js"
 import type { AssetCatalogEntry, BundleLock, BundleLockAsset, DemandProfile, MirrorAcquireState, MirrorIndexEntry, MirrorPlan, MirrorPolicy, SourceIndex } from "./types.js"
 
 const MIRROR_PLAN_OUTPUT_PATH = ["mirror", "audit", "mirror-plan.json"]
 const MIRROR_INDEX_OUTPUT_PATH = ["mirror", "index.jsonl"]
 const MIRROR_ACQUIRE_STATE_OUTPUT_PATH = ["state", "mirror", "acquire-state.json"]
+const MAX_OFFICIAL_INDEX_PACKAGE_FILES = 50
+const MAX_OFFICIAL_INDEX_FILE_SIZE_BYTES = 150_000
+
+interface MaterializedMirrorArtifact {
+  content: string
+  files?: Array<{
+    relativePath: string
+    content: string
+  }>
+}
 
 export async function runMirror(
   args: string[],
@@ -160,15 +172,20 @@ async function acquireMirrorArtifacts(projectRoot: string, args: string[]): Prom
   const newMirrorIndexEntries: MirrorIndexEntry[] = []
 
   for (const entry of entriesToAcquire) {
-    const materializedContent = await materializeMirrorContent(entry, projectRoot)
-    if (materializedContent === null) {
+    const materializedArtifact = await materializeMirrorArtifact(entry, projectRoot)
+    if (materializedArtifact === null) {
       continue
     }
 
-    const mirrorId = `sha256-${createContentHash(`${entry.id}\n${materializedContent}`)}`
+    const mirrorId = `sha256-${createContentHash(`${entry.id}\n${materializedArtifact.content}`)}`
     const rawRoot = join(projectRoot, "mirror", "raw", sanitizeMirrorId(mirrorId))
     await ensureDirectory(rawRoot)
-    await writeTextFile(join(rawRoot, "content.txt"), materializedContent)
+    await writeTextFile(join(rawRoot, "content.txt"), materializedArtifact.content)
+
+    for (const file of materializedArtifact.files ?? []) {
+      await writeTextFile(join(rawRoot, file.relativePath), file.content)
+    }
+
     await writeJsonFile(join(rawRoot, "asset.json"), entry)
 
     const mirrorIndexEntry: MirrorIndexEntry = {
@@ -181,7 +198,7 @@ async function acquireMirrorArtifacts(projectRoot: string, args: string[]): Prom
         publisherVerified: entry.source.publisherVerified
       },
       mirroredAt: new Date().toISOString(),
-      contentHash: createContentHash(materializedContent),
+      contentHash: createContentHash(materializedArtifact.content),
       projectionCandidates: entry.hosts.map((host) => ({
         host,
         projectionType: entry.compatibilityMode === "native" ? `native-${entry.assetKind}` : `adapted-${entry.assetKind}`
@@ -192,7 +209,7 @@ async function acquireMirrorArtifacts(projectRoot: string, args: string[]): Prom
     if (mirrorIndexEntry.status === "approved-with-warning" || mirrorIndexEntry.status === "quarantined") {
       const quarantineRoot = join(projectRoot, "mirror", "quarantine", sanitizeMirrorId(mirrorId))
       await ensureDirectory(quarantineRoot)
-      await writeTextFile(join(quarantineRoot, "content.txt"), materializedContent)
+      await writeTextFile(join(quarantineRoot, "content.txt"), materializedArtifact.content)
       await writeJsonFile(join(quarantineRoot, "asset.json"), entry)
     }
 
@@ -237,6 +254,7 @@ function shouldIncludeEntryInBundle(
       entry.assetKind === "instruction" ||
       entry.assetKind === "agent" ||
       entry.assetKind === "workflow" ||
+      entry.assetKind === "hook" ||
       entry.assetKind === "plugin" ||
       (entry.assetKind === "skill" && entry.source.authorityTier === "official-first-party" && entry.fit.portfolioFit >= 0.3)
     )
@@ -275,12 +293,28 @@ function determineProjectionType(entry: AssetCatalogEntry, bundleId: string): st
   return `adapted-${entry.assetKind}`
 }
 
-async function materializeMirrorContent(entry: AssetCatalogEntry, projectRoot: string): Promise<string | null> {
+async function materializeMirrorArtifact(entry: AssetCatalogEntry, projectRoot: string): Promise<MaterializedMirrorArtifact | null> {
+  if (entry.install.method === "official-index-entry") {
+    const officialIndexPackageArtifact = await materializeOfficialIndexPackage(entry, projectRoot)
+    if (officialIndexPackageArtifact !== null) {
+      return officialIndexPackageArtifact
+    }
+
+    const officialIndexContent = await fetchOfficialIndexPageContent(entry.source.originUrl)
+    if (officialIndexContent !== null) {
+      return {
+        content: officialIndexContent
+      }
+    }
+  }
+
   const filePath = entry.evidence.filePath
   if (filePath && (await pathLooksReadable(filePath))) {
     const fileContent = await readTextFileOrNull(filePath)
     if (fileContent !== null) {
-      return fileContent
+      return {
+        content: fileContent
+      }
     }
   }
 
@@ -288,11 +322,126 @@ async function materializeMirrorContent(entry: AssetCatalogEntry, projectRoot: s
   if (cachePath && (await pathLooksReadable(cachePath))) {
     const cacheContent = await readTextFileOrNull(cachePath)
     if (cacheContent !== null) {
-      return cacheContent
+      return {
+        content: cacheContent
+      }
     }
   }
 
-  return JSON.stringify(entry, null, 2)
+  return {
+    content: JSON.stringify(entry, null, 2)
+  }
+}
+
+async function materializeOfficialIndexPackage(
+  entry: AssetCatalogEntry,
+  projectRoot: string
+): Promise<MaterializedMirrorArtifact | null> {
+  const slug = entry.install.manifestEntry
+  const owner = entry.source.sourceId.split(":")[1]
+
+  if (!slug || !owner) {
+    return null
+  }
+
+  for (const repoUrl of buildOfficialIndexRepoUrlCandidates(entry, owner)) {
+    const snapshot = await fetchGitHubRepoSnapshotByRepoUrl({
+      repoUrl,
+      projectRoot,
+      sourceId: entry.source.sourceId
+    })
+
+    if (!snapshot) {
+      continue
+    }
+
+    const skillRootPath = findOfficialIndexSkillRoot(snapshot.tree.entries, slug)
+    if (!skillRootPath) {
+      continue
+    }
+
+    const packageFiles = snapshot.tree.entries
+      .filter((treeEntry) => treeEntry.type === "blob" && treeEntry.path.startsWith(`${skillRootPath}/`))
+      .filter((treeEntry) => treeEntry.size === null || treeEntry.size <= MAX_OFFICIAL_INDEX_FILE_SIZE_BYTES)
+      .slice(0, MAX_OFFICIAL_INDEX_PACKAGE_FILES)
+
+    if (packageFiles.length === 0) {
+      continue
+    }
+
+    const materializedFiles: Array<{ relativePath: string; content: string }> = []
+
+    for (const packageFile of packageFiles) {
+      const fileContent = await fetchGitHubFileContent(snapshot.owner, snapshot.repo, snapshot.repoSummary.defaultBranch, packageFile.path)
+      if (fileContent === null) {
+        continue
+      }
+
+      materializedFiles.push({
+        relativePath: packageFile.path.slice(skillRootPath.length + 1),
+        content: fileContent
+      })
+    }
+
+    if (materializedFiles.length === 0) {
+      continue
+    }
+
+    const skillMarkdownFile = materializedFiles.find((file) => file.relativePath === "SKILL.md")
+
+    return {
+      content: skillMarkdownFile?.content ?? JSON.stringify(entry, null, 2),
+      files: materializedFiles
+    }
+  }
+
+  return null
+}
+
+function buildOfficialIndexRepoUrlCandidates(entry: AssetCatalogEntry, owner: string): string[] {
+  const candidateRepoUrls = [
+    entry.evidence.rootPath,
+    `https://github.com/${owner}/${owner}-skills`,
+    `https://github.com/${owner}/skills`
+  ].filter((value): value is string => typeof value === "string" && value.includes("github.com"))
+
+  return [...new Set(candidateRepoUrls)]
+}
+
+function findOfficialIndexSkillRoot(
+  treeEntries: Array<{ path: string; type: string; size: number | null; sha: string }>,
+  slug: string
+): string | null {
+  const skillMarkdownPath = treeEntries
+    .filter((treeEntry) => treeEntry.type === "blob" && treeEntry.path.endsWith("/SKILL.md"))
+    .map((treeEntry) => treeEntry.path)
+    .filter((path) => path.includes(`/${slug}/`))
+    .sort((left, right) => left.length - right.length)[0]
+
+  return skillMarkdownPath ? skillMarkdownPath.slice(0, -"/SKILL.md".length) : null
+}
+
+async function fetchGitHubFileContent(
+  owner: string,
+  repo: string,
+  branch: string,
+  filePath: string
+): Promise<string | null> {
+  try {
+    const response = await fetch(buildGitHubRawFileUrl({ owner, repo, branch, filePath }), {
+      headers: {
+        "User-Agent": "agent-harness"
+      }
+    })
+
+    if (!response.ok) {
+      return null
+    }
+
+    return await response.text()
+  } catch {
+    return null
+  }
 }
 
 function buildUpstreamMetadata(entry: AssetCatalogEntry): MirrorIndexEntry["upstream"] {

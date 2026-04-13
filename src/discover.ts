@@ -13,6 +13,7 @@ import {
   fetchNpmPackageMetadata,
   fetchPypiPackageMetadata
 } from "./package-registries.js"
+import { buildOfficialIndexAssetStatus, fetchOfficialIndexPageContent } from "./official-index.js"
 import { writeRecommendationReport } from "./recommend.js"
 import {
   listFilesRecursive,
@@ -51,8 +52,19 @@ interface PackageJsonShape {
   description?: string
   dependencies?: Record<string, string>
   devDependencies?: Record<string, string>
+  engines?: {
+    node?: string
+  }
   keywords?: string[]
   name?: string
+}
+
+interface ActorJsonShape {
+  categories?: string[]
+  description?: string
+  dockerfile?: string
+  title?: string
+  webServerSchema?: string
 }
 
 interface LocalManifestShape {
@@ -108,6 +120,12 @@ interface ClassifiedLocalFile {
   compatibilityMode: CompatibilityMode
   hosts: HostTarget[]
 }
+
+const APIFY_ACTOR_JSON_PATH_PATTERN = /[\\/]\.actor[\\/]actor\.json$/iu
+const LOGGING_TEXT_MARKERS = ["logger", "logging", "debugger", "debug"]
+const MOCKING_TEXT_MARKERS = ["mock", "mocking"]
+const REPLAY_TEXT_MARKERS = ["replay", "forwarding", "forwarder"]
+const WEBHOOK_TEXT_MARKERS = ["webhook", "webhooks"]
 
 const DEMAND_PROFILE_OUTPUT_PATH = ["discover", "output", "demand-profile.json"]
 const SOURCE_INDEX_OUTPUT_PATH = ["discover", "output", "source-index.json"]
@@ -169,6 +187,10 @@ async function generateDemandProfile(scanRoot: string, projectRoot: string): Pro
 
     if (fileName === "package.json") {
       await enrichPackageJsonSignals(filePath, matchedSignals)
+    }
+
+    if (isActorJsonFile(fileName, filePath)) {
+      await enrichActorJsonSignals(filePath, matchedSignals)
     }
 
     if (!hasAnySignals(matchedSignals)) {
@@ -698,7 +720,23 @@ async function harvestOfficialSkillIndexes(
 
     const officialSkillRepoUrlsByOwnerAndSlug = extractOfficialSkillRepoUrls(content)
 
-    for (const entry of parseOfficialIndexEntries(content, demandProfile, selectionRegistry)) {
+    for (const parsedEntry of parseOfficialIndexEntries(content, demandProfile, selectionRegistry)) {
+      const sourceIdParts = parsedEntry.source.sourceId.split(":")
+      const owner = sourceIdParts[1]
+      const manifestEntry = parsedEntry.install.manifestEntry
+      const officialRepoUrl = owner && manifestEntry
+        ? officialSkillRepoUrlsByOwnerAndSlug.get(`${owner}:${manifestEntry}`)
+        : undefined
+      const entry = officialRepoUrl
+        ? {
+            ...parsedEntry,
+            evidence: {
+              ...parsedEntry.evidence,
+              rootPath: officialRepoUrl
+            }
+          }
+        : parsedEntry
+
       if (seenIds.has(entry.id)) {
         continue
       }
@@ -706,11 +744,7 @@ async function harvestOfficialSkillIndexes(
       seenIds.add(entry.id)
       entries.push(entry)
 
-      const sourceIdParts = entry.source.sourceId.split(":")
-      const owner = sourceIdParts[1]
-      const manifestEntry = entry.install.manifestEntry
       if (owner && manifestEntry) {
-        const officialRepoUrl = officialSkillRepoUrlsByOwnerAndSlug.get(`${owner}:${manifestEntry}`)
         const resolvedRepoSource = await resolveOfficialIndexEntryToRepoSource(owner, manifestEntry, entry, projectRoot, officialRepoUrl)
         if (resolvedRepoSource && !seenIds.has(resolvedRepoSource.id)) {
           seenIds.add(resolvedRepoSource.id)
@@ -846,12 +880,7 @@ function parseOfficialIndexEntries(
         duplicateGroup: buildOfficialIndexDuplicateGroup(owner, slug) ?? findDuplicateGroup(capabilities, selectionRegistry),
         candidateRankHint: buildCandidateRankHint(authorityTier)
       },
-      status: {
-        cataloged: true,
-        mirrorEligible: false,
-        installEligible: false,
-        activationEligible: false
-      }
+      status: buildOfficialIndexAssetStatus(authorityTier)
     })
   }
 
@@ -915,6 +944,7 @@ function isOfficialIndexOwner(owner: string): boolean {
     "genkit-ai",
     "firebase",
     "apify",
+    "duckdb",
     "scopeblind"
   ].includes(owner)
 }
@@ -988,7 +1018,9 @@ async function resolveOfficialIndexEntryToRepoSource(
     },
     status: {
       ...entry.status,
-      mirrorEligible: matchingSource.rules.allowMirror
+      mirrorEligible: matchingSource.rules.allowMirror,
+      installEligible: matchingSource.rules.allowMirror,
+      activationEligible: matchingSource.rules.allowMirror
     }
   }
 }
@@ -2311,6 +2343,10 @@ function shouldInspectFile(fileName: string, filePath: string): boolean {
   return /docker-compose\./iu.test(filePath)
 }
 
+function isActorJsonFile(fileName: string, filePath: string): boolean {
+  return /^actor\.json$/iu.test(fileName) || APIFY_ACTOR_JSON_PATH_PATTERN.test(filePath)
+}
+
 function collectStaticSignals(fileName: string, filePath: string): DemandSignalSet {
   const matchedSignals = createEmptySignalSet()
 
@@ -2434,10 +2470,18 @@ async function enrichPackageJsonSignals(filePath: string, matchedSignals: Demand
   ]
     .join(" ")
     .toLowerCase()
+  const hasExpress = hasDependency(dependencyNames, ["express"])
+  const hasFastify = hasDependency(dependencyNames, ["fastify"])
+  const hasNestJs = hasDependency(dependencyNames, ["@nestjs/core"])
+  const hasDuckDb = hasDependency(dependencyNames, ["@duckdb/node-api", "duckdb"])
 
   if (hasDependency(dependencyNames, ["typescript"])) {
     addSignals(matchedSignals.languages, ["typescript"])
     addSignals(matchedSignals.tooling, ["typescript"])
+  }
+
+  if (packageJson.engines?.node) {
+    addSignals(matchedSignals.tooling, ["node"])
   }
 
   if (hasDependency(dependencyNames, ["react"])) {
@@ -2465,9 +2509,22 @@ async function enrichPackageJsonSignals(filePath: string, matchedSignals: Demand
     addSignals(matchedSignals.concerns, ["backend", "api-design"])
   }
 
-  if (hasDependency(dependencyNames, ["express", "fastify", "@nestjs/core"])) {
+  if (hasExpress || hasFastify || hasNestJs) {
     addSignals(matchedSignals.frameworks, ["node-backend"])
     addSignals(matchedSignals.concerns, ["backend"])
+    addSignals(matchedSignals.tooling, ["node"])
+  }
+
+  if (hasExpress) {
+    addSignals(matchedSignals.frameworks, ["express"])
+  }
+
+  if (hasFastify) {
+    addSignals(matchedSignals.frameworks, ["fastify"])
+  }
+
+  if (hasNestJs) {
+    addSignals(matchedSignals.frameworks, ["nestjs"])
   }
 
   if (hasDependency(dependencyNames, ["@playwright/test", "playwright"])) {
@@ -2489,10 +2546,32 @@ async function enrichPackageJsonSignals(filePath: string, matchedSignals: Demand
     addSignals(matchedSignals.concerns, ["backend", "database"])
   }
 
+  if (hasDuckDb || containsAnyText(packageTextSignals, ["duckdb"])) {
+    addSignals(matchedSignals.concerns, ["database", "analytics"])
+    addSignals(matchedSignals.tooling, ["duckdb"])
+  }
+
   if (hasDependency(dependencyNames, ["apify", "@apify/"]) || containsAnyText(packageTextSignals, ["apify", "actor", "webhook-debugger-logger"])) {
     addSignals(matchedSignals.frameworks, ["apify"])
     addSignals(matchedSignals.concerns, ["automation", "actor-development", "web-scraping"])
     addSignals(matchedSignals.tooling, ["actor", "crawler"])
+  }
+
+  if (containsAnyText(packageTextSignals, WEBHOOK_TEXT_MARKERS)) {
+    addSignals(matchedSignals.concerns, ["webhook", "integration"])
+    addSignals(matchedSignals.tooling, ["webhook"])
+  }
+
+  if (containsAnyText(packageTextSignals, REPLAY_TEXT_MARKERS)) {
+    addSignals(matchedSignals.concerns, ["replay"])
+  }
+
+  if (containsAnyText(packageTextSignals, MOCKING_TEXT_MARKERS)) {
+    addSignals(matchedSignals.concerns, ["mocking"])
+  }
+
+  if (containsAnyText(packageTextSignals, LOGGING_TEXT_MARKERS)) {
+    addSignals(matchedSignals.concerns, ["logging", "debugging"])
   }
 
   if (hasDependency(dependencyNames, ["drizzle-orm", "prisma"])) {
@@ -2503,6 +2582,52 @@ async function enrichPackageJsonSignals(filePath: string, matchedSignals: Demand
   if (hasDependency(dependencyNames, ["openai", "anthropic", "genkit"])) {
     addSignals(matchedSignals.concerns, ["ai"])
     addSignals(matchedSignals.tooling, ["ai-sdk"])
+  }
+}
+
+async function enrichActorJsonSignals(filePath: string, matchedSignals: DemandSignalSet): Promise<void> {
+  const actorJson = await readJsonFileOrNull<ActorJsonShape>(filePath)
+
+  if (!actorJson) {
+    return
+  }
+
+  const actorTextSignals = [
+    actorJson.title ?? "",
+    actorJson.description ?? "",
+    ...(actorJson.categories ?? []).map((value) => value.replaceAll("_", " "))
+  ]
+    .join(" ")
+    .toLowerCase()
+
+  if (actorJson.dockerfile) {
+    addSignals(matchedSignals.concerns, ["containerization"])
+    addSignals(matchedSignals.tooling, ["docker"])
+  }
+
+  if (actorJson.webServerSchema) {
+    addSignals(matchedSignals.concerns, ["backend"])
+  }
+
+  if (containsAnyText(actorTextSignals, WEBHOOK_TEXT_MARKERS)) {
+    addSignals(matchedSignals.concerns, ["webhook", "integration"])
+    addSignals(matchedSignals.tooling, ["webhook"])
+  }
+
+  if (containsAnyText(actorTextSignals, REPLAY_TEXT_MARKERS)) {
+    addSignals(matchedSignals.concerns, ["replay"])
+  }
+
+  if (containsAnyText(actorTextSignals, MOCKING_TEXT_MARKERS)) {
+    addSignals(matchedSignals.concerns, ["mocking"])
+  }
+
+  if (containsAnyText(actorTextSignals, LOGGING_TEXT_MARKERS)) {
+    addSignals(matchedSignals.concerns, ["logging", "debugging"])
+  }
+
+  if (containsAnyText(actorTextSignals, ["integration"])) {
+    addSignals(matchedSignals.concerns, ["integration"])
   }
 }
 

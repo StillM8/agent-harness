@@ -1,6 +1,7 @@
 import { join } from "node:path"
 
 import { readJsonFileOrNull, readTextFileOrNull } from "./files.js"
+import { fetchOfficialIndexPageContent } from "./official-index.js"
 import type { AssetCatalogEntry } from "./types.js"
 
 export async function resolveAssetContent(options: {
@@ -50,6 +51,10 @@ function shouldUseMirroredContent(asset: AssetCatalogEntry, mirroredContent: str
     return false
   }
 
+  if (asset.install.method === "official-index-entry") {
+    return true
+  }
+
   if (asset.install.method === "local-file") {
     return true
   }
@@ -92,26 +97,7 @@ async function resolveOfficialSkillPageContent(asset: AssetCatalogEntry): Promis
     return null
   }
 
-  try {
-    const response = await fetch(asset.source.originUrl, {
-      headers: buildGitHubHeaders()
-    })
-    if (!response.ok) {
-      return null
-    }
-
-    const html = await response.text()
-    const text = html
-      .replace(/<script[\s\S]*?<\/script>/giu, "")
-      .replace(/<style[\s\S]*?<\/style>/giu, "")
-      .replace(/<[^>]+>/gu, " ")
-      .replace(/\s+/gu, " ")
-      .trim()
-
-    return text.length > 0 ? text : null
-  } catch {
-    return null
-  }
+  return fetchOfficialIndexPageContent(asset.source.originUrl)
 }
 
 function buildMetadataFallback(asset: AssetCatalogEntry, mirroredContent?: string): string {

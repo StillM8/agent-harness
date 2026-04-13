@@ -3,6 +3,7 @@ import { basename, dirname, extname, join } from "node:path"
 import { resolveAssetContent } from "./asset-content.js"
 import { ensureCleanDirectory, ensureDirectory, readJsonFileOrNull, removePath, toPosixPath, writeJsonFile, writeTextFile } from "./files.js"
 import type { AssetCatalogEntry, CopilotWorkspaceOverlayManifest, CopilotWorkspaceProfileManifest, WirePlanManifest, WirePreviewManifest } from "./types.js"
+import { patchVsCodeSettings, readVsCodeSettings } from "./vscode-settings.js"
 
 const VSCODE_USER_SETTINGS_PATH = join(process.env.APPDATA ?? "", "Code", "User", "settings.json")
 
@@ -87,7 +88,7 @@ async function patchVsCodeUserSettings(paths: {
   curatedRoot: string
   materializedPaths: MaterializedVsCodePaths
 }): Promise<void> {
-  const currentSettings = (await readJsonFileOrNull<Record<string, unknown>>(VSCODE_USER_SETTINGS_PATH)) ?? {}
+  const currentSettings = await readVsCodeSettings(VSCODE_USER_SETTINGS_PATH)
   const basePluginLocations = stripManagedVsCodeLocationEntries(currentSettings["chat.pluginLocations"], paths.curatedRoot)
   const baseAgentSkillsLocations = stripManagedVsCodeLocationEntries(currentSettings["chat.agentSkillsLocations"], paths.curatedRoot)
   const baseHookFilesLocations = stripManagedVsCodeLocationEntries(currentSettings["chat.hookFilesLocations"], paths.curatedRoot)
@@ -97,23 +98,23 @@ async function patchVsCodeUserSettings(paths: {
     ...currentSettings,
     "chat.pluginLocations": {
       ...basePluginLocations,
-      ...Object.fromEntries(paths.materializedPaths.pluginFolders.map((pathValue) => [toHomePath(pathValue), true]))
+      [toHomePath(join(paths.curatedRoot, "plugins"))]: true
     },
     "chat.agentSkillsLocations": {
       ...baseAgentSkillsLocations,
-      ...Object.fromEntries(paths.materializedPaths.skillRoots.map((pathValue) => [toHomePath(pathValue), true]))
+      ...buildVsCodeSkillLocationOverrides(paths.curatedRoot)
     },
     "chat.hookFilesLocations": {
       ...baseHookFilesLocations,
-      ...Object.fromEntries(paths.materializedPaths.hookFiles.map((pathValue) => [toHomePath(pathValue), true]))
+      [toHomePath(join(paths.curatedRoot, "hooks"))]: true
     },
     "chat.agentFilesLocations": {
       ...baseAgentFilesLocations,
-      ...Object.fromEntries(paths.materializedPaths.agentFiles.map((pathValue) => [toHomePath(dirname(pathValue)), true]))
+      [toHomePath(join(paths.curatedRoot, "agents"))]: true
     },
     "chat.instructionsFilesLocations": {
       ...baseInstructionsFilesLocations,
-      ...Object.fromEntries(paths.materializedPaths.instructionFiles.map((pathValue) => [toHomePath(dirname(pathValue)), true]))
+      [toHomePath(join(paths.curatedRoot, "instructions"))]: true
     },
     "github.copilot.chat.codeGeneration.instructions": [
       {
@@ -122,8 +123,7 @@ async function patchVsCodeUserSettings(paths: {
     ]
   }
 
-  await ensureDirectory(dirname(VSCODE_USER_SETTINGS_PATH))
-  await writeJsonFile(VSCODE_USER_SETTINGS_PATH, nextSettings)
+  await patchVsCodeSettings(VSCODE_USER_SETTINGS_PATH, nextSettings)
 }
 
 async function materializeWorkspaceInstructions(
@@ -307,7 +307,7 @@ function buildVsCodeWirePlan(
 }
 
 async function resetVsCodeUserSettings(curatedRoot: string): Promise<void> {
-  const currentSettings = (await readJsonFileOrNull<Record<string, unknown>>(VSCODE_USER_SETTINGS_PATH)) ?? {}
+  const currentSettings = await readVsCodeSettings(VSCODE_USER_SETTINGS_PATH)
   const nextSettings = {
     ...currentSettings,
     "chat.pluginLocations": stripManagedVsCodeLocationEntries(currentSettings["chat.pluginLocations"], curatedRoot),
@@ -317,8 +317,7 @@ async function resetVsCodeUserSettings(curatedRoot: string): Promise<void> {
     "chat.instructionsFilesLocations": stripManagedVsCodeLocationEntries(currentSettings["chat.instructionsFilesLocations"], curatedRoot)
   }
 
-  await ensureDirectory(dirname(VSCODE_USER_SETTINGS_PATH))
-  await writeJsonFile(VSCODE_USER_SETTINGS_PATH, nextSettings)
+  await patchVsCodeSettings(VSCODE_USER_SETTINGS_PATH, nextSettings)
 }
 
 function stripManagedVsCodeLocationEntries(value: unknown, curatedRoot: string): Record<string, boolean> {
@@ -330,6 +329,16 @@ function stripManagedVsCodeLocationEntries(value: unknown, curatedRoot: string):
   return Object.fromEntries(
     Object.entries(value as Record<string, boolean>).filter(([key]) => !key.startsWith(normalizedCuratedRoot))
   )
+}
+
+function buildVsCodeSkillLocationOverrides(curatedRoot: string): Record<string, boolean> {
+  return {
+    "~/.copilot/skills": false,
+    "~/.agents/skills": false,
+    "~/.claude/skills": false,
+    "~/.config/opencode/skills": false,
+    [toHomePath(join(curatedRoot, "skills"))]: true
+  }
 }
 
 async function readActivationAssetData(

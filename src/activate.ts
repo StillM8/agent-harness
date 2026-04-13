@@ -4,8 +4,8 @@ import { copyPath, ensureDirectory, listFilesRecursive, pathExists, readJsonFile
 import type { ActivationManifest, CopilotWorkspaceOverlayManifest, CopilotWorkspaceProfileManifest, InstallGenerationManifest, InstalledBundleManifest, InstalledPackageManifest, RecommendationReport } from "./types.js"
 
 const HOST_TO_INTENT_TERMS: Record<"opencode" | "copilot-vscode" | "shared", string[]> = {
-  opencode: ["backend", "architecture", "skill", "workflow", "infrastructure", "security"],
-  "copilot-vscode": ["instruction", "frontend", "typescript", "testing", "developer-workflow", "docs", "skill", "apify", "actor", "scraper", "automation"],
+  opencode: ["backend", "architecture", "workflow", "infrastructure", "security", "docker", "container", "database", "webhook", "apify", "duckdb"],
+  "copilot-vscode": ["instruction", "plugin", "hook", "agent", "workflow", "skill", "backend", "node", "nodejs", "express", "webhook", "integration", "docker", "container", "duckdb", "apify", "actor", "automation", "testing", "security", "developer-workflow", "docs"],
   shared: ["mcp", "integration", "governance", "tooling"]
 }
 
@@ -313,6 +313,8 @@ function buildConcernBuckets(assetIds: string[]): Record<string, string[]> {
   const buckets: Record<string, string[]> = {
     frontend: [],
     backend: [],
+    integration: [],
+    data: [],
     security: [],
     docs: [],
     testing: [],
@@ -324,8 +326,22 @@ function buildConcernBuckets(assetIds: string[]): Record<string, string[]> {
     if (normalizedAssetId.includes("front") || normalizedAssetId.includes("react") || normalizedAssetId.includes("ui")) {
       buckets.frontend.push(assetId)
     }
-    if (normalizedAssetId.includes("backend") || normalizedAssetId.includes("api") || normalizedAssetId.includes("service")) {
+    if (
+      normalizedAssetId.includes("backend") ||
+      normalizedAssetId.includes("api") ||
+      normalizedAssetId.includes("service") ||
+      normalizedAssetId.includes("webhook") ||
+      normalizedAssetId.includes("express") ||
+      normalizedAssetId.includes("node") ||
+      normalizedAssetId.includes("apify")
+    ) {
       buckets.backend.push(assetId)
+    }
+    if (normalizedAssetId.includes("webhook") || normalizedAssetId.includes("integration") || normalizedAssetId.includes("apify")) {
+      buckets.integration.push(assetId)
+    }
+    if (normalizedAssetId.includes("duckdb") || normalizedAssetId.includes("database") || normalizedAssetId.includes("sql")) {
+      buckets.data.push(assetId)
     }
     if (normalizedAssetId.includes("security") || normalizedAssetId.includes("auth") || normalizedAssetId.includes("threat")) {
       buckets.security.push(assetId)
@@ -336,7 +352,14 @@ function buildConcernBuckets(assetIds: string[]): Record<string, string[]> {
     if (normalizedAssetId.includes("test") || normalizedAssetId.includes("playwright") || normalizedAssetId.includes("qa")) {
       buckets.testing.push(assetId)
     }
-    if (normalizedAssetId.includes("infra") || normalizedAssetId.includes("devops") || normalizedAssetId.includes("terraform") || normalizedAssetId.includes("azure")) {
+    if (
+      normalizedAssetId.includes("infra") ||
+      normalizedAssetId.includes("devops") ||
+      normalizedAssetId.includes("terraform") ||
+      normalizedAssetId.includes("azure") ||
+      normalizedAssetId.includes("docker") ||
+      normalizedAssetId.includes("container")
+    ) {
       buckets.infra.push(assetId)
     }
   }

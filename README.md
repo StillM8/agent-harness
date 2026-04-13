@@ -1,28 +1,43 @@
 # agent-harness
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Node >=22](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](./package.json)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](./package.json)
+[![Latest Release](https://img.shields.io/github/v/release/ar27111994/agent-harness?display_name=tag)](https://github.com/ar27111994/agent-harness/releases)
+
 `agent-harness` is a dynamic, authority-aware asset supply chain for:
 
 - OpenCode
 - GitHub Copilot in VS Code
 
-It separates the lifecycle of agent assets into four explicit phases:
+It keeps agent tooling curated, reproducible, and context-efficient by treating agent assets as a lifecycle instead of a one-step install.
 
-1. Discover
-2. Mirror
-3. Install
-4. Activate
+## At a glance
 
-The project is designed to keep agent tooling curated, reproducible, and context-efficient while preferring official sources over popularity.
+- prefers official sources over stars and popularity
+- keeps discovery, mirroring, installation, and activation separate
+- narrows activation to stay within practical context budgets
+- supports local assets, official indexes, repo-backed skills, docs, and shared MCP assets
+- generates host-specific runtime views for OpenCode and GitHub Copilot
 
 ## Why this exists
 
-Modern agent ecosystems expose a huge number of skills, plugins, MCP servers, instructions, workflows, and agent definitions. Blindly installing everything creates three major problems:
+Modern agent ecosystems expose a large number of skills, plugins, MCP servers, instructions, workflows, and agent definitions. Blindly installing everything creates three persistent problems:
 
 - low-quality or duplicate sources pollute the runtime
 - global activation exhausts context windows
 - there is no deterministic path from discovery to active runtime state
 
-`agent-harness` solves that by treating agent assets like a supply chain.
+`agent-harness` solves this by treating agent assets like a supply chain.
+
+## Lifecycle model
+
+The project separates asset handling into four explicit phases:
+
+1. **Discover** — detect workspace signals, harvest metadata, classify assets, and select canonical candidates
+2. **Mirror** — create pinned, inert local artifacts and bundle locks
+3. **Install** — project mirrored artifacts into host-specific staged package stores
+4. **Activate** — materialize smaller runtime views from installed generations
 
 ## Core principles
 
@@ -95,35 +110,79 @@ Activation outputs include:
 - generation-aware activation manifests
 - Copilot workspace profile manifests
 
-## Project structure
+## Quick start
 
-```text
-agent-harness/
-├── discover/
-│   ├── source-packs/
-│   ├── schema/
-│   ├── output/
-│   ├── sources.json
-│   ├── selections.json
-│   ├── pipeline.json
-│   └── official-skills-indexes.json
-├── mirror/
-│   ├── audit/
-│   ├── bundles/
-│   ├── quarantine/
-│   ├── raw/
-│   ├── schema/
-│   └── policy.json
-├── install/
-├── activate/
-├── state/
-├── src/
-├── package.json
-├── tsconfig.json
-└── IMPLEMENTATION-PLAN.md
+### Requirements
+
+- Node.js 22+
+- npm
+- optional GitHub token for better GitHub API throughput:
+  - `GITHUB_PERSONAL_ACCESS_TOKEN`
+  - or `GITHUB_TOKEN`
+
+### Install dependencies
+
+```bash
+npm install
 ```
 
-## Commands
+### Build
+
+```bash
+npm run build
+npm run check
+```
+
+### Run a full workspace pipeline
+
+From any target workspace:
+
+#### VS Code / GitHub Copilot
+
+```bash
+agent-harness-vscode --intent frontend
+```
+
+or from this repository:
+
+```bash
+npm run workspace:vscode -- --intent frontend
+```
+
+#### OpenCode
+
+```bash
+agent-harness-opencode --intent backend
+```
+
+or from this repository:
+
+```bash
+npm run workspace:opencode -- --intent backend
+```
+
+#### Generic wrapper form
+
+```bash
+agent-harness workspace vscode --intent docs
+agent-harness workspace opencode --intent security
+```
+
+These wrappers currently execute the full pipeline for the target workspace:
+
+1. demand profile
+2. source index
+3. catalog generation
+4. canonical selection
+5. mirror plan
+6. mirror locks
+7. batched mirror acquisition
+8. batched install
+9. install reconcile
+10. activation
+11. host wire-in apply
+
+## Command reference
 
 ### Build and validation
 
@@ -173,62 +232,13 @@ npm run rebuild:clean
 npm run rebuild:full
 ```
 
-### One-command workspace wrappers
-
-From any target workspace, you can now run the full pipeline in one command.
-
-#### VS Code / GitHub Copilot workspace
-
-```bash
-agent-harness-vscode --intent frontend
-```
-
-or from the project itself:
-
-```bash
-npm run workspace:vscode -- --intent frontend
-```
-
-#### OpenCode workspace
-
-```bash
-agent-harness-opencode --intent backend
-```
-
-or from the project itself:
-
-```bash
-npm run workspace:opencode -- --intent backend
-```
-
-#### Generic wrapper form
-
-```bash
-agent-harness workspace vscode --intent docs
-agent-harness workspace opencode --intent security
-```
-
-These wrappers perform the full current pipeline for the target workspace:
-
-1. demand profile
-2. source index
-3. catalog generation
-4. canonical selection
-5. mirror plan
-6. mirror locks
-7. batched mirror acquisition
-8. batched install
-9. install reconcile
-10. activation
-11. host wire-in apply
-
 ## Host wire-in
 
 ### VS Code / GitHub Copilot
 
-The project now supports semi-automatic / automatic VS Code wire-in.
+The project supports semi-automatic and automatic VS Code wire-in.
 
-Supported integration behavior:
+Supported behavior:
 
 - updates **User-scoped** VS Code settings for protected AI path settings
 - writes workspace-local `.github/copilot-instructions.md`
@@ -257,6 +267,17 @@ Patched VS Code user settings can include:
 - `chat.agentFilesLocations`
 - `chat.instructionsFilesLocations`
 
+For skills specifically, the wire-in uses the **parent curated skills folder**:
+
+- `~/.copilot/agent-harness/skills`: `true`
+
+and disables competing global skills roots such as:
+
+- `~/.copilot/skills`
+- `~/.agents/skills`
+- `~/.claude/skills`
+- `~/.config/opencode/skills`
+
 Curated user-level runtime folders include:
 
 - `~/.copilot/agent-harness/instructions`
@@ -271,9 +292,9 @@ Workspace-local export:
 
 ### OpenCode
 
-The project now supports semi-automatic project-local OpenCode wire-in.
+The project supports semi-automatic project-local OpenCode wire-in.
 
-Supported integration behavior:
+Supported behavior:
 
 - writes a project-local overlay under `.opencode/context/project-intelligence/agent-harness/`
 - updates a managed `AGENTS.md` section for the workspace
@@ -296,7 +317,7 @@ npm run wire:opencode
 
 ### Automatic wire-in through workspace wrappers
 
-The workspace wrappers now run wire-in automatically after activation:
+The workspace wrappers run wire-in automatically after activation:
 
 ```bash
 agent-harness-vscode --intent frontend
@@ -308,6 +329,63 @@ or:
 ```bash
 agent-harness workspace vscode --intent docs
 agent-harness workspace opencode --intent security
+```
+
+## Common workflows
+
+### Standard full rebuild
+
+```bash
+npm run rebuild:full
+```
+
+This performs:
+
+1. clean transient state
+2. demand profile generation
+3. source index generation
+4. catalog generation
+5. canonical selection
+6. mirror planning
+7. mirror lock generation
+8. batched mirror acquisition
+9. batched install
+10. install reconcile
+11. activation
+
+### Session-intent-aware activation
+
+```bash
+node ./dist/cli.js activate host --intent frontend
+node ./dist/cli.js activate host --intent security
+node ./dist/cli.js activate host --intent docs
+```
+
+This biases activation ordering toward assets whose ids and capabilities align with the requested session intent.
+
+The same intent can be used through the one-command wrappers:
+
+```bash
+agent-harness-vscode --intent frontend
+agent-harness-opencode --intent security
+```
+
+### Clean reset only
+
+```bash
+npm run rebuild:clean
+```
+
+### Install state reset only
+
+```bash
+npm run install:reset
+```
+
+### Activation reset only
+
+```bash
+npm run activate:reset
 ```
 
 ## Environment variables
@@ -346,7 +424,7 @@ The harness prefers sources in roughly this order:
 5. trusted community sources
 6. unverified community sources
 
-The important rule is:
+The governing rule is:
 
 > If an official vendor source exists, it outranks a more popular unofficial source.
 
@@ -374,64 +452,39 @@ Trust scoring currently incorporates:
 - dependency declarations
 - risk penalties
 
-## Operational flow
+## Repository structure
 
-### Standard full rebuild
-
-```bash
-npm run rebuild:full
+```text
+agent-harness/
+├── discover/
+│   ├── source-packs/
+│   ├── schema/
+│   ├── output/
+│   ├── sources.json
+│   ├── selections.json
+│   ├── pipeline.json
+│   └── official-skills-indexes.json
+├── mirror/
+│   ├── audit/
+│   ├── bundles/
+│   ├── quarantine/
+│   ├── raw/
+│   ├── schema/
+│   └── policy.json
+├── install/
+├── activate/
+├── state/
+├── src/
+├── package.json
+├── tsconfig.json
+└── IMPLEMENTATION-PLAN.md
 ```
 
-This performs:
+## Contribution and project hygiene
 
-1. clean transient state
-2. demand profile generation
-3. source index generation
-4. catalog generation
-5. canonical selection
-6. mirror planning
-7. mirror lock generation
-8. batched mirror acquisition
-9. batched install
-10. install reconcile
-11. activation
-
-### Session-intent-aware activation
-
-Activation now supports a lightweight session intent signal:
-
-```bash
-node ./dist/cli.js activate host --intent frontend
-node ./dist/cli.js activate host --intent security
-node ./dist/cli.js activate host --intent docs
-```
-
-This biases activation ordering toward assets whose ids and capabilities align with the requested session intent.
-
-The same intent can be used through the one-command wrappers:
-
-```bash
-agent-harness-vscode --intent frontend
-agent-harness-opencode --intent security
-```
-
-### Clean reset only
-
-```bash
-npm run rebuild:clean
-```
-
-### Install state reset only
-
-```bash
-npm run install:reset
-```
-
-### Activation reset only
-
-```bash
-npm run activate:reset
-```
+- start with [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- use the issue templates under [`.github/ISSUE_TEMPLATE/`](./.github/ISSUE_TEMPLATE/)
+- use the pull request template at [`.github/pull_request_template.md`](./.github/pull_request_template.md)
 
 ## Current refinement boundaries
 
@@ -443,9 +496,10 @@ The lifecycle is implemented end-to-end. The remaining work is refinement rather
 
 ## Documentation
 
-For the current implementation details and roadmap, see:
+For current implementation details and roadmap, see:
 
 - [`IMPLEMENTATION-PLAN.md`](./IMPLEMENTATION-PLAN.md)
+- [`FUTURE-IMPROVEMENTS.md`](./FUTURE-IMPROVEMENTS.md)
 
 ## License
 

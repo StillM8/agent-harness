@@ -63,7 +63,8 @@ async function installBundles(projectRoot: string, args: string[]): Promise<void
     )
     const existingRelevantPackages = (existingBundleManifest?.packages ?? []).filter((pkg) => currentBundleAssetIds.has(pkg.assetId))
     const alreadyInstalledAssetIds = new Set(existingRelevantPackages.map((pkg) => pkg.assetId))
-    const pendingAssets = getPendingAssets(bundleLock.assets, alreadyInstalledAssetIds)
+    const installableAssets = getInstallableAssets(bundleLock.assets, mirrorIndexById)
+    const pendingAssets = getPendingAssets(installableAssets, alreadyInstalledAssetIds)
     const batchOffset = Number(manualBatchOffset ?? "0")
     const assetsToInstall = pendingAssets.slice(batchOffset, batchOffset + batchSize)
 
@@ -135,7 +136,7 @@ async function installBundles(projectRoot: string, args: string[]): Promise<void
       bundleLock.bundleId,
       bundleLock.host,
       batchSize,
-      bundleLock.assets,
+      installableAssets,
       bundleManifest.packages,
       assetsToInstall.map((asset) => asset.assetId)
     )
@@ -209,6 +210,16 @@ function getPendingAssets(
   return bundleAssets.filter((asset) => !installedAssetIds.has(asset.assetId))
 }
 
+function getInstallableAssets(
+  bundleAssets: BundleLock["assets"],
+  mirrorIndexById: Map<string, MirrorIndexEntry>
+): BundleLock["assets"] {
+  return bundleAssets.filter((asset) => {
+    const mirrorEntry = mirrorIndexById.get(asset.mirrorId)
+    return Boolean(mirrorEntry && mirrorEntry.status !== "quarantined")
+  })
+}
+
 function extractBundleId(bundlePath: string): string {
   return bundlePath.split(/[/\\]/u).at(-1)?.replace(/\.lock\.json$/u, "") ?? bundlePath
 }
@@ -243,6 +254,8 @@ async function updateInstallProgressState(
 }
 
 async function reconcileInstallState(projectRoot: string): Promise<void> {
+  const mirrorIndexEntries = await readJsonLinesFile<MirrorIndexEntry>(join(projectRoot, "mirror", "index.jsonl"))
+  const mirrorIndexById = new Map(mirrorIndexEntries.map((entry) => [entry.mirrorId, entry]))
   const hosts: Array<BundleLock["host"]> = ["opencode", "copilot-vscode", "shared"]
   const reconciledState: InstallProgressState = {
     schemaVersion: 1,
@@ -268,7 +281,8 @@ async function reconcileInstallState(projectRoot: string): Promise<void> {
           host,
           assets: []
         }
-      const currentBundleAssetIds = new Set(bundleLock.assets.map((asset) => asset.assetId))
+      const installableAssets = getInstallableAssets(bundleLock.assets, mirrorIndexById)
+      const currentBundleAssetIds = new Set(installableAssets.map((asset) => asset.assetId))
       const uniqueInstalledAssetIds = [
         ...new Set(
           bundleManifest.packages
@@ -280,9 +294,9 @@ async function reconcileInstallState(projectRoot: string): Promise<void> {
       reconciledState.bundles[bundleManifest.bundleId] = {
         host,
         batchSize: Math.min(250, uniqueInstalledAssetIds.length),
-        totalAssets: bundleLock.assets.length,
+        totalAssets: installableAssets.length,
         installedAssets: uniqueInstalledAssetIds.length,
-        remainingAssets: Math.max(0, bundleLock.assets.length - uniqueInstalledAssetIds.length),
+        remainingAssets: Math.max(0, installableAssets.length - uniqueInstalledAssetIds.length),
         lastBatchAssetIds: uniqueInstalledAssetIds.slice(-Math.min(50, uniqueInstalledAssetIds.length))
       }
     }
