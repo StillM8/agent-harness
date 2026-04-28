@@ -1,20 +1,72 @@
-import { join } from "node:path"
+import { createHash } from "node:crypto";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
-import { ensureCleanDirectory, ensureDirectory, readJsonFileOrNull, readTextFileOrNull, removeManagedSection, toPosixPath, upsertManagedSection, writeJsonFile, writeTextFile } from "./files.js"
-import type { ActivationManifest, WirePlanManifest, WirePreviewManifest } from "./types.js"
+import {
+  createDirectoryLink,
+  ensureDirectory,
+  pathExists,
+  readJsonFile,
+  readJsonFileOrNull,
+  readTextFileOrNull,
+  removeManagedSection,
+  removePath,
+  toPosixPath,
+  writeJsonFile,
+  writeTextFile,
+} from "./files.js";
+import { assertWirePlanManifest } from "./manifest-validation.js";
+import type {
+  ActivationManifest,
+  AssetKind,
+  InstalledBundleManifest,
+  InstalledPackageManifest,
+  WirePlanManifest,
+  WirePreviewManifest,
+} from "./types.js";
+
+const OPENCODE_DIRECTORY_BY_ASSET_KIND: Record<AssetKind, string> = {
+  agent: "agents",
+  skill: "skills",
+  instruction: "instructions",
+  workflow: "workflows",
+  hook: "hooks",
+  plugin: "plugins",
+  "mcp-server": "mcp-servers",
+  extension: "extensions",
+  "prompt-pack": "prompt-packs",
+  "reference-pack": "reference-packs",
+};
+
+interface OpenCodeLinkedAsset {
+  assetId: string;
+  assetKind: AssetKind;
+  sourcePath: string;
+  linkPath: string;
+}
 
 export async function wireOpenCode(options: {
-  projectRoot: string
-  workspaceRoot: string
-  mode: "preview" | "apply" | "reset"
+  projectRoot: string;
+  workspaceRoot: string;
+  mode: "preview" | "apply" | "reset";
 }): Promise<void> {
-  const { projectRoot, workspaceRoot, mode } = options
-  const activationRoot = join(projectRoot, "activate", "opencode")
-  const activationManifest = await readJsonFileOrNull<ActivationManifest>(join(activationRoot, "activation-manifest.json"))
+  const { projectRoot, workspaceRoot, mode } = options;
+  const activationRoot = join(projectRoot, "activate", "opencode");
+  const activationManifest = await readJsonFileOrNull<ActivationManifest>(
+    join(activationRoot, "activation-manifest.json"),
+  );
 
-  const localOverlayRoot = join(workspaceRoot, ".opencode")
-  const localContextRoot = join(localOverlayRoot, "context", "project-intelligence", "agent-harness")
-  const localAgentsPath = join(workspaceRoot, "AGENTS.md")
+  const localOverlayRoot = join(workspaceRoot, ".opencode");
+  const localContextRoot = join(
+    localOverlayRoot,
+    "context",
+    "project-intelligence",
+    "agent-harness",
+  );
+  const localAgentsPath = join(workspaceRoot, "AGENTS.md");
+  const previousWirePlan = await readValidatedOpenCodeWirePlan(
+    join(localContextRoot, "wire-plan.json"),
+    localOverlayRoot,
+  );
 
   const preview: WirePreviewManifest = {
     schemaVersion: 1,
@@ -23,52 +75,67 @@ export async function wireOpenCode(options: {
     generatedAt: new Date().toISOString(),
     workspaceRoot: toPosixPath(workspaceRoot),
     targetPaths: [
+      toPosixPath(localAgentsPath),
       toPosixPath(localContextRoot),
-      toPosixPath(localAgentsPath)
+      ...buildOpenCodeLinkRoots(localOverlayRoot),
     ],
     notes: [
       "OpenCode wire-in writes a project-local overlay under .opencode/context/project-intelligence/agent-harness.",
-      "The global OpenAgentsControl-managed install is not modified."
-    ]
-  }
+      "Selected assets are exposed through managed directory links under .opencode/<asset-kind>/.",
+      "The global OpenAgentsControl-managed install is not modified.",
+    ],
+  };
 
-  await writeJsonFile(join(activationRoot, "wire-preview-opencode.json"), preview)
+  await writeJsonFile(
+    join(activationRoot, "wire-preview-opencode.json"),
+    preview,
+  );
 
   if (mode === "preview") {
-    return
+    return;
   }
 
   if (mode === "reset") {
-    const existingAgentsContent = (await readTextFileOrNull(localAgentsPath)) ?? ""
-    const nextAgentsContent = removeManagedSection({
-      originalContent: existingAgentsContent,
-      markerId: "agent-harness"
-    })
-    await writeTextFile(localAgentsPath, nextAgentsContent)
-    await writeTextFile(join(localContextRoot, "activation-manifest.json"), "")
-    return
+    await removeManagedAgentsSection(localAgentsPath);
+    await removeManagedLinks(previousWirePlan?.linkedPaths ?? []);
+    await removePath(localContextRoot);
+    return;
   }
 
-  await ensureCleanDirectory(localContextRoot)
+  await removeManagedAgentsSection(localAgentsPath);
+  await removeManagedLinks(previousWirePlan?.linkedPaths ?? []);
+  await ensureDirectory(localContextRoot);
 
-  await writeJsonFile(join(localContextRoot, "activation-manifest.json"), activationManifest ?? {
-    schemaVersion: 1,
-    host: "opencode",
-    generatedAt: new Date().toISOString(),
-    activeBundles: [],
-    activeAssets: [],
-    runtimeRoot: toPosixPath(localContextRoot),
-    notes: ["No OpenCode activation manifest was found at apply time."]
-  })
+  await writeJsonFile(
+    join(localContextRoot, "activation-manifest.json"),
+    activationManifest ?? {
+      schemaVersion: 1,
+      host: "opencode",
+      generatedAt: new Date().toISOString(),
+      activeBundles: [],
+      activeAssets: [],
+      runtimeRoot: toPosixPath(localContextRoot),
+      notes: ["No OpenCode activation manifest was found at apply time."],
+    },
+  );
 
-  const agentsContent = buildManagedAgentsSection(activationManifest)
-  const existingAgentsContent = (await readTextFileOrNull(localAgentsPath)) ?? ""
-  const nextAgentsContent = upsertManagedSection({
-    originalContent: existingAgentsContent,
-    markerId: "agent-harness",
-    bodyLines: agentsContent.split("\n")
-  })
-  await writeTextFile(localAgentsPath, nextAgentsContent)
+  const linkedAssets = await resolveOpenCodeLinkedAssets({
+    projectRoot,
+    activationRoot,
+    activationManifest,
+    localOverlayRoot,
+  });
+
+  const createdLinkPaths: string[] = [];
+  try {
+    for (const linkedAsset of linkedAssets) {
+      await createDirectoryLink(linkedAsset.linkPath, linkedAsset.sourcePath);
+      createdLinkPaths.push(linkedAsset.linkPath);
+    }
+  } catch (error) {
+    await removeManagedLinksBestEffort(createdLinkPaths);
+    throw error;
+  }
 
   const wirePlan: WirePlanManifest = {
     schemaVersion: 1,
@@ -76,25 +143,173 @@ export async function wireOpenCode(options: {
     generatedAt: new Date().toISOString(),
     workspaceRoot: toPosixPath(workspaceRoot),
     runtimeRoot: toPosixPath(localOverlayRoot),
+    linkedPaths: createdLinkPaths.map(toPosixPath),
     notes: [
       "Project-local OpenCode overlay written under .opencode/context/project-intelligence/agent-harness.",
-      "AGENTS.md managed section updated to expose curated activation context without overriding global OpenAgentsControl state."
-    ]
-  }
+      "Selected assets are linked into project-local .opencode installation directories by asset kind.",
+      "On Windows, managed directory links are created as junctions for compatibility.",
+    ],
+  };
 
-  await writeJsonFile(join(localContextRoot, "wire-plan.json"), wirePlan)
+  await writeJsonFile(join(localContextRoot, "wire-plan.json"), wirePlan);
 }
 
-function buildManagedAgentsSection(activationManifest: ActivationManifest | null): string {
-  const assetLines = (activationManifest?.activeAssets ?? []).map((assetId) => `- ${assetId}`)
+function buildOpenCodeLinkRoots(localOverlayRoot: string): string[] {
+  return [...new Set(Object.values(OPENCODE_DIRECTORY_BY_ASSET_KIND))]
+    .map((directoryName) => toPosixPath(join(localOverlayRoot, directoryName)))
+    .sort((left, right) => left.localeCompare(right));
+}
 
-  return [
-    "## agent-harness managed overlay",
-    "",
-    "This workspace is wired to a curated OpenCode overlay generated by agent-harness.",
-    "",
-    "### Active assets",
-    ...assetLines,
-    ""
-  ].join("\n")
+async function resolveOpenCodeLinkedAssets(options: {
+  projectRoot: string;
+  activationRoot: string;
+  activationManifest: ActivationManifest | null;
+  localOverlayRoot: string;
+}): Promise<OpenCodeLinkedAsset[]> {
+  const { projectRoot, activationRoot, activationManifest, localOverlayRoot } =
+    options;
+
+  if (!activationManifest) {
+    return [];
+  }
+
+  const activeAssetIds = new Set(activationManifest.activeAssets);
+  const linkedAssets: OpenCodeLinkedAsset[] = [];
+  const seenAssetIds = new Set<string>();
+
+  for (const bundleId of activationManifest.activeBundles) {
+    const bundleManifestPath = join(
+      projectRoot,
+      "install",
+      "opencode",
+      "bundles",
+      `${bundleId}.install.json`,
+    );
+    const bundleManifest =
+      await readJsonFileOrNull<InstalledBundleManifest>(bundleManifestPath);
+
+    if (!bundleManifest) {
+      continue;
+    }
+
+    for (const pkg of bundleManifest.packages) {
+      if (!activeAssetIds.has(pkg.assetId) || seenAssetIds.has(pkg.assetId)) {
+        continue;
+      }
+
+      const packageManifest = await readJsonFile<InstalledPackageManifest>(
+        pkg.manifestPath,
+      );
+      const sourcePath = join(
+        activationRoot,
+        sanitizeAssetId(packageManifest.assetId),
+      );
+
+      if (!(await pathExists(sourcePath))) {
+        continue;
+      }
+
+      linkedAssets.push({
+        assetId: packageManifest.assetId,
+        assetKind: packageManifest.assetKind,
+        sourcePath,
+        linkPath: join(
+          localOverlayRoot,
+          OPENCODE_DIRECTORY_BY_ASSET_KIND[packageManifest.assetKind],
+          sanitizeAssetId(packageManifest.assetId),
+        ),
+      });
+      seenAssetIds.add(pkg.assetId);
+    }
+  }
+
+  return linkedAssets.sort((left, right) =>
+    left.linkPath.localeCompare(right.linkPath),
+  );
+}
+
+async function removeManagedAgentsSection(
+  localAgentsPath: string,
+): Promise<void> {
+  const existingAgentsContent = await readTextFileOrNull(localAgentsPath);
+
+  if (existingAgentsContent === null) {
+    return;
+  }
+
+  const nextAgentsContent = removeManagedSection({
+    originalContent: existingAgentsContent,
+    markerId: "agent-harness",
+  });
+  await writeTextFile(localAgentsPath, nextAgentsContent);
+}
+
+async function removeManagedLinks(linkedPaths: string[]): Promise<void> {
+  for (const linkedPath of linkedPaths) {
+    await removePath(linkedPath);
+  }
+}
+
+async function removeManagedLinksBestEffort(
+  linkedPaths: string[],
+): Promise<void> {
+  for (const linkedPath of linkedPaths) {
+    try {
+      await removePath(linkedPath);
+    } catch (error) {
+      console.warn(
+        `Failed to roll back managed link ${linkedPath}: ${toLoggableErrorMessage(error)}`,
+      );
+    }
+  }
+}
+
+async function readValidatedOpenCodeWirePlan(
+  wirePlanPath: string,
+  managedRoot: string,
+): Promise<WirePlanManifest | null> {
+  const wirePlan = await readJsonFileOrNull<unknown>(wirePlanPath);
+  if (wirePlan === null) {
+    return null;
+  }
+
+  assertWirePlanManifest(wirePlan, wirePlanPath);
+  const linkedPaths = wirePlan.linkedPaths ?? [];
+  for (const linkedPath of linkedPaths) {
+    if (!isPathWithinRoot(linkedPath, managedRoot)) {
+      throw new Error(
+        `Wire plan contains linkedPath outside managed OpenCode root (${toPosixPath(managedRoot)}): ${linkedPath}`,
+      );
+    }
+  }
+
+  return {
+    ...wirePlan,
+    linkedPaths,
+  };
+}
+
+function isPathWithinRoot(pathValue: string, rootPath: string): boolean {
+  const absoluteRoot = resolve(rootPath);
+  const absolutePath = resolve(pathValue);
+  const relativePath = relative(absoluteRoot, absolutePath);
+  return (
+    relativePath === "" ||
+    (!relativePath.startsWith("..") && !isAbsolute(relativePath))
+  );
+}
+
+function sanitizeAssetId(value: string): string {
+  const base =
+    value.replace(/[^a-zA-Z0-9_-]+/gu, "-").replace(/^-+|-+$/gu, "") || "asset";
+  const suffix = createHash("sha256").update(value).digest("hex").slice(0, 12);
+  return `${base}-${suffix}`;
+}
+
+function toLoggableErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.stack ?? `${error.name}: ${error.message}`;
+  }
+
+  return String(error);
 }
