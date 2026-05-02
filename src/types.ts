@@ -27,7 +27,14 @@ export type AssetKind =
   | "prompt-pack"
   | "reference-pack";
 
-export type HostTarget = "copilot-vscode" | "opencode" | "shared";
+export type HostTarget =
+  | "copilot-vscode"
+  | "opencode"
+  | "shared"
+  | "cursor"
+  | "zed"
+  | "claude-code"
+  | "pi";
 
 export type CompatibilityMode =
   | "native"
@@ -114,6 +121,9 @@ export interface DemandProfile {
   summary: {
     scannedFiles: number;
     matchedFiles: number;
+    scanTruncated?: boolean;
+    truncationReason?: string;
+    scannedBytes?: number;
   };
   signals: DemandSignalSet;
   evidence: DemandEvidence[];
@@ -664,6 +674,7 @@ export interface CopilotWorkspaceProfileManifest {
   selectedAgentIds: string[];
   selectedWorkflowIds: string[];
   selectedPluginIds?: string[];
+  selectedExtensionIds?: string[];
   selectedHookIds?: string[];
   selectedSkillIds?: string[];
   activationBudget: number;
@@ -672,7 +683,14 @@ export interface CopilotWorkspaceProfileManifest {
 
 export interface WirePlanManifest {
   schemaVersion: number;
-  host: HostTarget | "vscode-user" | "opencode-project";
+  host:
+    | HostTarget
+    | "vscode-user"
+    | "opencode-project"
+    | "cursor"
+    | "zed"
+    | "claude-code"
+    | "pi";
   generatedAt: string;
   workspaceRoot: string;
   runtimeRoot: string;
@@ -681,6 +699,11 @@ export interface WirePlanManifest {
   agentFiles?: string[];
   skillDirs?: string[];
   pluginDirs?: string[];
+  workflowFiles?: string[];
+  referenceFiles?: string[];
+  extensionIds?: string[];
+  mcpServers?: string[];
+  nativeInstallActions?: string[];
   hookFiles?: string[];
   notes: string[];
 }

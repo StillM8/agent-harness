@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -17,6 +17,7 @@ import { buildOfficialIndexAssetStatus } from "./official-index.js";
 import { writeRecommendationReport } from "./recommend.js";
 import {
   listFilesRecursive,
+  listFilesRecursiveWithTelemetry,
   pathExists,
   readJsonFile,
   readJsonLinesFile,
@@ -27,6 +28,13 @@ import {
   writeJsonFile,
   writeJsonLinesFile,
 } from "./files.js";
+import { getRuntimeConfig } from "./config/runtime.js";
+import {
+  collectDetectorSignals,
+  isDetectorInspectableFile,
+} from "./domains/discovery/detectors.js";
+import { buildGeneratedLocalSources } from "./domains/discovery/local-sources.js";
+import { resolvePortablePath } from "./lib/paths.js";
 import type {
   AssetCatalogEntry,
   AssetContextCost,
@@ -148,6 +156,11 @@ const SELECTION_REPORT_OUTPUT_PATH = [
   "output",
   "selection-report.json",
 ];
+const SOURCE_UTILIZATION_OUTPUT_PATH = [
+  "discover",
+  "output",
+  "source-utilization.json",
+];
 const REMOTE_HARVEST_STATE_OUTPUT_PATH = [
   "state",
   "discover",
@@ -198,7 +211,8 @@ async function generateDemandProfile(
   scanRoot: string,
   projectRoot: string,
 ): Promise<void> {
-  const scannedFiles = await listFilesRecursive(scanRoot);
+  const scanResult = await listFilesRecursiveWithTelemetry(scanRoot);
+  const scannedFiles = scanResult.files;
   const evidence: DemandEvidence[] = [];
   const aggregateSignals = createEmptySignalSet();
 
@@ -211,8 +225,18 @@ async function generateDemandProfile(
 
     const matchedSignals = collectStaticSignals(fileName, filePath);
 
+    collectDetectorSignals(fileName, filePath, matchedSignals);
+
     if (fileName === "package.json") {
       await enrichPackageJsonSignals(filePath, matchedSignals);
+    }
+
+    if (fileName === "requirements.txt") {
+      await enrichRequirementsSignals(filePath, matchedSignals);
+    }
+
+    if (fileName === "pyproject.toml") {
+      await enrichPyProjectSignals(filePath, matchedSignals);
     }
 
     if (isActorJsonFile(fileName, filePath)) {
@@ -238,6 +262,9 @@ async function generateDemandProfile(
     summary: {
       scannedFiles: scannedFiles.length,
       matchedFiles: evidence.length,
+      scanTruncated: scanResult.telemetry.truncated,
+      truncationReason: scanResult.telemetry.truncationReason,
+      scannedBytes: scanResult.telemetry.visitedBytes,
     },
     signals: sortSignalSet(aggregateSignals),
     evidence: evidence.sort((left, right) =>
@@ -296,9 +323,7 @@ async function generateCatalog(projectRoot: string): Promise<void> {
     .filter((source) => source.enabled)
     .sort(compareSourcesByPriority);
   const remoteHarvestState = await loadRemoteHarvestState(projectRoot);
-  const repoBatchSize = Number(
-    process.env.AGENT_HARNESS_REMOTE_BATCH_SIZE ?? "15",
-  );
+  const repoBatchSize = getRuntimeConfig().batches.remoteHarvest;
   const cachedRemoteCatalogEntries = await readJsonLinesFile<AssetCatalogEntry>(
     join(projectRoot, ...REMOTE_CATALOG_STATE_OUTPUT_PATH),
   );
@@ -338,6 +363,17 @@ async function generateCatalog(projectRoot: string): Promise<void> {
             demandProfile,
             selectionRegistry,
           )),
+        );
+        break;
+      case "docs":
+      case "marketplace":
+      case "registry":
+        catalogEntries.push(
+          buildReferenceSourceCatalogEntry(
+            source,
+            demandProfile,
+            selectionRegistry,
+          ),
         );
         break;
       default:
@@ -390,6 +426,11 @@ async function generateCatalog(projectRoot: string): Promise<void> {
     .sort(compareAssetCatalogEntries);
   const outputPath = join(projectRoot, ...CATALOG_OUTPUT_PATH);
   await writeJsonLinesFile(outputPath, sortedEntries);
+  await writeSourceUtilizationReport(
+    projectRoot,
+    enabledSources,
+    sortedEntries,
+  );
   await writeRemoteHarvestState(projectRoot, {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
@@ -403,6 +444,43 @@ async function generateCatalog(projectRoot: string): Promise<void> {
   console.log(
     `Catalog written to ${toPosixPath(outputPath)} (${sortedEntries.length} entries)`,
   );
+}
+
+async function writeSourceUtilizationReport(
+  projectRoot: string,
+  enabledSources: SourceDefinition[],
+  catalogEntries: AssetCatalogEntry[],
+): Promise<void> {
+  const entriesBySource = countBy(
+    catalogEntries,
+    (entry) => entry.source.sourceId,
+  );
+  const sources = enabledSources.map((source) => {
+    const harvestedEntries = entriesBySource[source.id] ?? 0;
+    return {
+      id: source.id,
+      kind: source.kind,
+      configured: true,
+      operational: harvestedEntries > 0,
+      harvestedEntries,
+      status: harvestedEntries > 0 ? "active" : "dormant",
+    };
+  });
+
+  await writeJsonFile(join(projectRoot, ...SOURCE_UTILIZATION_OUTPUT_PATH), {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    configuredSourceCount: enabledSources.length,
+    operationalSourceCount: sources.filter((source) => source.operational)
+      .length,
+    dormantSourceCount: sources.filter((source) => !source.operational).length,
+    byKind: countBy(enabledSources, (source) => source.kind),
+    harvestedByKind: countBy(
+      catalogEntries,
+      (entry) => entry.source.sourceKind,
+    ),
+    sources,
+  });
 }
 
 async function loadRemoteHarvestState(
@@ -438,8 +516,13 @@ async function loadSourceRegistry(
   );
   const sourcePackDirectory = join(projectRoot, "discover", "source-packs");
 
+  const registryWithLocalSeeds = mergeSourceDefinitions(
+    baseRegistry,
+    buildGeneratedLocalSources(),
+  );
+
   if (!(await pathExists(sourcePackDirectory))) {
-    return baseRegistry;
+    return registryWithLocalSeeds;
   }
 
   const sourcePackFiles = (await listFilesRecursive(sourcePackDirectory))
@@ -448,10 +531,10 @@ async function loadSourceRegistry(
 
   const generatedSources: SourceDefinition[] = [];
   const existingSourceIds = new Set(
-    baseRegistry.sources.map((source) => source.id),
+    registryWithLocalSeeds.sources.map((source) => source.id),
   );
   const existingRepoUrls = new Set(
-    baseRegistry.sources
+    registryWithLocalSeeds.sources
       .map((source) => source.endpoints.repo?.toLowerCase())
       .filter((value): value is string => typeof value === "string"),
   );
@@ -505,8 +588,43 @@ async function loadSourceRegistry(
   }
 
   return {
+    ...registryWithLocalSeeds,
+    sources: [...registryWithLocalSeeds.sources, ...generatedSources],
+  };
+}
+
+/**
+ * Merges generated local seeds with checked-in sources while refreshing
+ * machine-specific endpoints and preserving user-editable source settings.
+ */
+function mergeSourceDefinitions(
+  baseRegistry: SourceRegistry,
+  generatedSources: SourceDefinition[],
+): SourceRegistry {
+  const mergedSources = [...baseRegistry.sources];
+  const sourceIndexes = new Map(
+    mergedSources.map((source, index) => [source.id, index] as const),
+  );
+
+  for (const source of generatedSources) {
+    const existingIndex = sourceIndexes.get(source.id);
+
+    if (existingIndex !== undefined) {
+      mergedSources[existingIndex] = {
+        ...source,
+        ...mergedSources[existingIndex],
+        endpoints: source.endpoints,
+      };
+      continue;
+    }
+
+    mergedSources.push(source);
+    sourceIndexes.set(source.id, mergedSources.length - 1);
+  }
+
+  return {
     ...baseRegistry,
-    sources: [...baseRegistry.sources, ...generatedSources],
+    sources: mergedSources,
   };
 }
 
@@ -618,8 +736,11 @@ async function harvestPackageRegistrySource(
   demandProfile: DemandProfile | null,
   selectionRegistry: SelectionRegistry,
 ): Promise<AssetCatalogEntry[]> {
-  const packageCandidates =
-    collectPackageCandidatesFromDemandProfile(demandProfile);
+  const registryKind = source.id === "pypi-registry" ? "pypi" : "npm";
+  const packageCandidates = collectPackageCandidatesFromDemandProfile(
+    demandProfile,
+    registryKind,
+  );
   const entries: AssetCatalogEntry[] = [];
 
   for (const packageName of packageCandidates) {
@@ -668,6 +789,7 @@ async function harvestPackageRegistrySource(
 
 function collectPackageCandidatesFromDemandProfile(
   demandProfile: DemandProfile | null,
+  registryKind: "npm" | "pypi",
 ): string[] {
   if (!demandProfile) {
     return [];
@@ -683,32 +805,9 @@ function collectPackageCandidatesFromDemandProfile(
     ];
 
     for (const signal of joinedSignals) {
-      if (signal === "typescript") {
-        packageCandidates.add("typescript");
-      }
-      if (signal === "playwright") {
-        packageCandidates.add("@playwright/test");
-      }
-      if (signal === "mcp") {
-        packageCandidates.add("@modelcontextprotocol/sdk");
-      }
-      if (signal === "openapi") {
-        packageCandidates.add("openapi-typescript");
-      }
-      if (signal === "supabase") {
-        packageCandidates.add("@supabase/supabase-js");
-      }
-      if (signal === "react") {
-        packageCandidates.add("react");
-      }
-      if (signal === "nextjs") {
-        packageCandidates.add("next");
-      }
-      if (signal === "python") {
-        packageCandidates.add("fastapi");
-      }
-      if (signal === "terraform") {
-        packageCandidates.add("terraform");
+      const dependencyPrefix = `${registryKind}:`;
+      if (signal.startsWith(dependencyPrefix)) {
+        packageCandidates.add(signal.slice(dependencyPrefix.length));
       }
     }
   }
@@ -805,6 +904,100 @@ function buildPackageRegistryCatalogEntry(
     fit: {
       portfolioFit: computePortfolioFit(capabilities, demandProfile),
       hostFit: computeHostFit(hosts, compatibilityMode),
+    },
+    dedupe: {
+      duplicateGroup: findDuplicateGroup(capabilities, selectionRegistry),
+      candidateRankHint: buildCandidateRankHint(source.authorityTier),
+    },
+    status: {
+      cataloged: true,
+      mirrorEligible: false,
+      installEligible: false,
+      activationEligible: false,
+    },
+  };
+}
+
+function buildReferenceSourceCatalogEntry(
+  source: SourceDefinition,
+  demandProfile: DemandProfile | null,
+  selectionRegistry: SelectionRegistry,
+): AssetCatalogEntry {
+  const originUrl =
+    source.endpoints.docsUrl ??
+    source.endpoints.baseUrl ??
+    source.endpoints.repo ??
+    source.id;
+  const assetKind: AssetKind = "reference-pack";
+  const capabilities = uniqueStrings([
+    ...splitIntoKeywords(source.name),
+    ...splitIntoKeywords(source.id),
+    source.kind,
+    assetKind,
+  ]).filter((token) => !GENERIC_CAPABILITY_TOKENS.has(token));
+  const compatibilityMode: CompatibilityMode =
+    source.kind === "marketplace" ? "partial" : "reference-only";
+
+  return {
+    id: buildCatalogId(source.id, originUrl),
+    displayName: source.name,
+    assetKind,
+    hosts: source.hosts,
+    compatibilityMode,
+    source: {
+      sourceId: source.id,
+      authorityTier: source.authorityTier,
+      sourceKind: source.kind,
+      sourcePriority: source.priority,
+      originUrl,
+      publisher: source.publisher?.name ?? source.id,
+      publisherVerified: source.publisher?.verified ?? false,
+    },
+    trust: {
+      score: computeTrustScore({
+        authorityTier: source.authorityTier,
+        sourceKind: source.kind,
+        sourcePriority: source.priority,
+        publisherVerified: source.publisher?.verified ?? false,
+        compatibilityMode,
+        installMethod: `${source.kind}-reference`,
+      }),
+      signals: buildTrustSignals({
+        authorityTier: source.authorityTier,
+        sourceKind: source.kind,
+        sourcePriority: source.priority,
+        publisherVerified: source.publisher?.verified ?? false,
+        compatibilityMode,
+        installMethod: `${source.kind}-reference`,
+      }),
+    },
+    capabilities,
+    install: {
+      method: `${source.kind}-reference`,
+      adaptableHosts: source.hosts,
+      manifestEntry: originUrl,
+    },
+    evidence: {
+      manifestFound: false,
+      readmeFound: false,
+      examplesFound: false,
+      docsLinked: true,
+      lineCount: 1,
+      rootPath: originUrl,
+    },
+    maintenance: {
+      lastUpdated: new Date().toISOString(),
+      stars: 0,
+      releaseCadence: "source-reference",
+    },
+    risk: buildRisk(false, false, false),
+    contextCost: {
+      sizeClass: "tiny",
+      estimatedPromptWeight: 1,
+    },
+    fit: {
+      portfolioFit: computePortfolioFit(capabilities, demandProfile),
+      hostFit: computeHostFit(source.hosts, compatibilityMode),
     },
     dedupe: {
       duplicateGroup: findDuplicateGroup(capabilities, selectionRegistry),
@@ -951,8 +1144,7 @@ function buildOfficialIndexHeaders(): HeadersInit {
     "User-Agent": "agent-harness",
   };
 
-  const githubToken =
-    process.env.GITHUB_PERSONAL_ACCESS_TOKEN || process.env.GITHUB_TOKEN;
+  const githubToken = getRuntimeConfig().github.token;
   if (githubToken) {
     headers.Authorization = `Bearer ${githubToken}`;
   }
@@ -1548,7 +1740,7 @@ async function loadAntigravityManifestEntrySet(
   projectRoot: string,
 ): Promise<Set<string>> {
   const antigravityManifestPath = resolveEndpointPath(
-    "C:/Users/ar271/.agents/skills/.antigravity-install-manifest.json",
+    "~/.agents/skills/.antigravity-install-manifest.json",
     projectRoot,
   );
   const manifest = await readJsonFileOrNull<LocalManifestShape>(
@@ -1761,7 +1953,26 @@ function classifyGitHubTreePath(
     };
   }
 
+  if (isGenericRepositoryArtifact(normalizedPath)) {
+    return {
+      assetKind: "reference-pack",
+      compatibilityMode: "reference-only",
+      hosts: source.hosts,
+    };
+  }
+
   return null;
+}
+
+function isGenericRepositoryArtifact(normalizedPath: string): boolean {
+  return (
+    /(^|\/)(readme|docs?|notebooks?|data|datasets?|research|papers?|design|media|cad|hardware|firmware|models?|examples?)(\/|\.|$)/u.test(
+      normalizedPath,
+    ) ||
+    /\.(ipynb|csv|parquet|jsonl|bib|tex|stl|step|kicad_pcb|uproject|godot)$/u.test(
+      normalizedPath,
+    )
+  );
 }
 
 function collectGitHubCapabilities(
@@ -2598,9 +2809,7 @@ function resolveEndpointPath(
     return projectRoot;
   }
 
-  return isAbsolute(endpointValue)
-    ? endpointValue
-    : join(projectRoot, endpointValue);
+  return resolvePortablePath(endpointValue, projectRoot);
 }
 
 function buildCatalogId(sourceId: string, assetPath: string): string {
@@ -2728,7 +2937,10 @@ function shouldInspectFile(fileName: string, filePath: string): boolean {
     return true;
   }
 
-  return /docker-compose\./iu.test(filePath);
+  return (
+    /docker-compose\./iu.test(filePath) ||
+    isDetectorInspectableFile(fileName, filePath)
+  );
 }
 
 function isActorJsonFile(fileName: string, filePath: string): boolean {
@@ -3019,10 +3231,242 @@ async function enrichPackageJsonSignals(
     addSignals(matchedSignals.tooling, ["orm"]);
   }
 
+  addPackageDependencySignals(matchedSignals, "npm", [...dependencyNames]);
+
   if (hasDependency(dependencyNames, ["openai", "anthropic", "genkit"])) {
     addSignals(matchedSignals.concerns, ["ai"]);
     addSignals(matchedSignals.tooling, ["ai-sdk"]);
   }
+}
+
+async function enrichRequirementsSignals(
+  filePath: string,
+  matchedSignals: DemandSignalSet,
+): Promise<void> {
+  const content = await readTextFileOrNull(filePath);
+  if (!content) {
+    return;
+  }
+
+  const dependencyNames = content
+    .split(/\r?\n/u)
+    .map((line) => line.replace(/\s+#.*$/u, "").trim())
+    .filter(isPlainRequirementLine)
+    .filter((line) => !isPythonDirectReference(line))
+    .map((line) => line.split(/\s+@\s+|[<>=~!;[]/u)[0]?.trim())
+    .filter(isPlainPackageName);
+
+  addPackageDependencySignals(matchedSignals, "pypi", dependencyNames);
+  enrichPythonDependencySignals(matchedSignals, dependencyNames);
+}
+
+async function enrichPyProjectSignals(
+  filePath: string,
+  matchedSignals: DemandSignalSet,
+): Promise<void> {
+  const content = await readTextFileOrNull(filePath);
+  if (!content) {
+    return;
+  }
+
+  const dependencyNames = extractPyProjectDependencyNames(content);
+
+  addPackageDependencySignals(matchedSignals, "pypi", dependencyNames);
+  enrichPythonDependencySignals(matchedSignals, dependencyNames);
+}
+
+function extractPyProjectDependencyNames(content: string): string[] {
+  const dependencyNames: string[] = [];
+  let currentSection = "";
+  let inDependencyList = false;
+
+  for (const rawLine of content.split(/\r?\n/u)) {
+    const line = rawLine.replace(/\s+#.*$/u, "").trim();
+    const sectionMatch = line.match(/^\[([^\]]+)\]$/u);
+    if (sectionMatch) {
+      currentSection = sectionMatch[1]?.trim() ?? "";
+      inDependencyList = false;
+      continue;
+    }
+
+    if (isPyProjectDependencyListStart(line, currentSection)) {
+      inDependencyList = true;
+    }
+
+    if (!inDependencyList) {
+      const poetryDependencyName = extractPoetryDependencyName(
+        line,
+        currentSection,
+      );
+      if (poetryDependencyName) {
+        dependencyNames.push(poetryDependencyName);
+      }
+      continue;
+    }
+
+    for (const dependencyMatch of line.matchAll(/["']([^"']+)["']/gu)) {
+      const dependencySpecifier = dependencyMatch[1]?.trim();
+      if (isPythonDirectReference(dependencySpecifier)) {
+        continue;
+      }
+
+      const packageName = dependencySpecifier
+        ?.split(/\s+@\s+|[<>=~!;[]/u)[0]
+        ?.trim();
+      if (isPlainPackageName(packageName)) {
+        dependencyNames.push(packageName);
+      }
+    }
+
+    const unquotedLine = line.replaceAll(/["'][^"']*["']/gu, "");
+    if (unquotedLine.includes("]")) {
+      inDependencyList = false;
+    }
+  }
+
+  return uniqueStrings(dependencyNames);
+}
+
+/**
+ * Extracts one package name from Poetry dependency table entries.
+ */
+function extractPoetryDependencyName(
+  line: string,
+  currentSection: string,
+): string | null {
+  if (!isPoetryDependencySection(currentSection)) {
+    return null;
+  }
+
+  const dependencyMatch = line.match(/^([A-Za-z0-9_.-]+)\s*=\s*(.+)$/u);
+  const dependencyName = dependencyMatch?.[1];
+  const dependencySpec = dependencyMatch?.[2]?.trim();
+  if (
+    !dependencyName ||
+    dependencyName.toLowerCase() === "python" ||
+    isPythonDirectReference(dependencySpec)
+  ) {
+    return null;
+  }
+
+  return isPlainPackageName(dependencyName) ? dependencyName : null;
+}
+
+/**
+ * Identifies Poetry sections that contain runtime or grouped dependencies.
+ */
+function isPoetryDependencySection(currentSection: string): boolean {
+  return (
+    currentSection === "tool.poetry.dependencies" ||
+    currentSection === "tool.poetry.dev-dependencies" ||
+    /^tool\.poetry\.group\.[^.]+\.dependencies$/u.test(currentSection)
+  );
+}
+
+/**
+ * Identifies PEP 621 dependency arrays that should emit PyPI evidence.
+ */
+function isPyProjectDependencyListStart(
+  line: string,
+  currentSection: string,
+): boolean {
+  if (currentSection === "project") {
+    return /^dependencies\s*=\s*\[/u.test(line);
+  }
+
+  if (currentSection === "project.optional-dependencies") {
+    return /^[A-Za-z0-9_.-]+\s*=\s*\[/u.test(line);
+  }
+
+  return false;
+}
+
+function isPlainRequirementLine(line: string): boolean {
+  return (
+    line.length > 0 &&
+    !line.startsWith("#") &&
+    !line.startsWith("-") &&
+    !line.includes("://") &&
+    !/^(git\+|https?:|file:|ssh\+|\.\/|\.\.\/|\/)/iu.test(line)
+  );
+}
+
+function isPythonDirectReference(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+
+  return /\s+@\s+(?:[\\/]|\.\.?[\\/]|[a-z]:[\\/]|file:|path:|git\+|hg\+|ssh:\/\/|git:\/\/|https?:\/\/)/iu.test(
+    value,
+  );
+}
+
+function isPlainPackageName(value: string | undefined): value is string {
+  return Boolean(value && /^[a-z0-9_.-]+$/iu.test(value));
+}
+
+function enrichPythonDependencySignals(
+  matchedSignals: DemandSignalSet,
+  dependencyNames: string[],
+): void {
+  const normalizedNames = new Set(
+    dependencyNames.map((name) => name.toLowerCase()),
+  );
+
+  if (
+    hasAnyDependency(normalizedNames, [
+      "fastapi",
+      "django",
+      "flask",
+      "litestar",
+    ])
+  ) {
+    addSignals(matchedSignals.concerns, ["backend", "api-design"]);
+    addSignals(matchedSignals.frameworks, ["python-backend"]);
+  }
+
+  if (
+    hasAnyDependency(normalizedNames, ["pandas", "polars", "duckdb", "numpy"])
+  ) {
+    addSignals(matchedSignals.concerns, ["data", "analytics"]);
+  }
+
+  if (
+    hasAnyDependency(normalizedNames, [
+      "torch",
+      "tensorflow",
+      "scikit-learn",
+      "transformers",
+    ])
+  ) {
+    addSignals(matchedSignals.concerns, ["machine-learning", "ai"]);
+  }
+}
+
+function addPackageDependencySignals(
+  matchedSignals: DemandSignalSet,
+  registryKind: "npm" | "pypi",
+  dependencyNames: string[],
+): void {
+  const ignoredPrefixes = registryKind === "npm" ? ["@types/"] : [];
+  const normalizedNames = dependencyNames
+    .map((dependencyName) => dependencyName.trim())
+    .filter((dependencyName) => dependencyName.length > 0)
+    .filter(
+      (dependencyName) =>
+        !ignoredPrefixes.some((prefix) => dependencyName.startsWith(prefix)),
+    )
+    .slice(0, 50)
+    .map((dependencyName) => `${registryKind}:${dependencyName}`);
+
+  addSignals(matchedSignals.tooling, normalizedNames);
+}
+
+function hasAnyDependency(
+  dependencyNames: Set<string>,
+  candidates: string[],
+): boolean {
+  return candidates.some((candidate) => dependencyNames.has(candidate));
 }
 
 async function enrichActorJsonSignals(

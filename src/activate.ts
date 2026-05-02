@@ -25,6 +25,7 @@ import type {
   CopilotWorkspaceProfileManifest,
   InstallGenerationManifest,
   InstalledBundleManifest,
+  HostTarget,
   InstalledPackageManifest,
   RecommendationEntry,
   RecommendationReport,
@@ -32,6 +33,21 @@ import type {
 
 const ACTIVATION_MANIFEST_FILE = "activation-manifest.json";
 const ACTIVATION_PREVIOUS_MANIFEST_FILE = "activation-manifest.previous.json";
+type ActivationHost = "opencode" | "copilot-vscode" | "shared";
+const ACTIVATION_HOSTS = [
+  "opencode",
+  "copilot-vscode",
+  "shared",
+] as const satisfies readonly ActivationHost[];
+const HOST_TARGETS = [
+  "copilot-vscode",
+  "opencode",
+  "shared",
+  "cursor",
+  "zed",
+  "claude-code",
+  "pi",
+] as const satisfies readonly HostTarget[];
 
 export async function runActivate(
   args: string[],
@@ -70,14 +86,17 @@ async function activateHosts(
   args: string[] = [],
 ): Promise<void> {
   const sessionIntent = getOptionValue(args, "--intent") ?? "general";
-  const requestedHost = getOptionValue(args, "--host") as
-    | "opencode"
-    | "copilot-vscode"
-    | "shared"
-    | undefined;
-  const hosts: Array<"opencode" | "copilot-vscode" | "shared"> = requestedHost
+  const requestedRecommendationHost = parseHostTargetOption(
+    getOptionalOptionValue(args, "--recommendation-host"),
+    "--recommendation-host",
+  );
+  const requestedHost = parseActivationHostOption(
+    getOptionalOptionValue(args, "--host"),
+    "--host",
+  );
+  const hosts: ActivationHost[] = requestedHost
     ? [requestedHost]
-    : ["opencode", "copilot-vscode", "shared"];
+    : [...ACTIVATION_HOSTS];
 
   for (const host of hosts) {
     await activateHost(
@@ -85,6 +104,7 @@ async function activateHosts(
       host,
       getDefaultBundleIdsForHost(host),
       sessionIntent,
+      requestedRecommendationHost ?? host,
     );
   }
 
@@ -95,9 +115,10 @@ async function activateHosts(
 
 async function activateHost(
   projectRoot: string,
-  host: "opencode" | "copilot-vscode" | "shared",
+  host: ActivationHost,
   bundleIds: string[],
   sessionIntent: string,
+  recommendationHost: HostTarget = host,
 ): Promise<void> {
   const activeAssets = new Set<string>();
   const runtimeRoot = join(projectRoot, "activate", host);
@@ -107,13 +128,14 @@ async function activateHost(
     assertRecommendationReport,
   );
   const activationBudget =
-    recommendationReport?.hostSummaries[host]?.activationBudget ??
+    recommendationReport?.hostSummaries[recommendationHost]?.activationBudget ??
     getActivationBudget(host);
   const currentGeneration = await readJsonFileOrNull<InstallGenerationManifest>(
     join(projectRoot, "install", "generations", host, "current.json"),
     assertInstallGenerationManifest,
   );
-  const recommendationEntries = recommendationReport?.topByHost[host] ?? [];
+  const recommendationEntries =
+    recommendationReport?.topByHost[recommendationHost] ?? [];
   const preferredAssetOrder = new Map(
     recommendationEntries.map((entry, index) => [
       entry.assetId,
@@ -125,7 +147,7 @@ async function activateHost(
   );
   const activeBundleIds = filterBundleIdsForHost(
     bundleIds,
-    host,
+    recommendationHost,
     recommendationReport,
   );
   const candidates: Array<{
@@ -192,6 +214,7 @@ async function activateHost(
           ? "global-harness-overlay"
           : "shared-runtime-overlay",
     sessionIntent,
+    recommendationHost,
     concernBuckets: buildConcernBuckets(
       selectedCandidates.map((candidate) => candidate.packageManifest.assetId),
       recommendationEntryByAssetId,
@@ -249,6 +272,11 @@ async function activateHost(
       selectedPluginIds: selectedCandidates
         .filter((candidate) => candidate.packageManifest.assetKind === "plugin")
         .map((candidate) => candidate.packageManifest.assetId),
+      selectedExtensionIds: selectedCandidates
+        .filter(
+          (candidate) => candidate.packageManifest.assetKind === "extension",
+        )
+        .map((candidate) => candidate.packageManifest.assetId),
       selectedHookIds: selectedCandidates
         .filter((candidate) => candidate.packageManifest.assetKind === "hook")
         .map((candidate) => candidate.packageManifest.assetId),
@@ -301,7 +329,7 @@ async function activateHost(
 
 function filterBundleIdsForHost(
   bundleIds: string[],
-  host: "opencode" | "copilot-vscode" | "shared",
+  host: HostTarget,
   recommendationReport: RecommendationReport | null,
 ): string[] {
   const suggestedBundleIds = new Set(
@@ -326,12 +354,15 @@ function printActivateHelp(): void {
   diff      Compare current host activation to the previous activation view
   explain   Explain whether an asset is active for a host
   rollback  Point a host to a previous install generation
-  reset     Remove activation outputs`);
+  reset     Remove activation outputs
+
+Options:
+  --host <copilot-vscode|opencode|shared>
+  --recommendation-host <host-policy-id>
+  --intent <general|frontend|backend|security|docs|testing>`);
 }
 
-function getDefaultBundleIdsForHost(
-  host: "opencode" | "copilot-vscode" | "shared",
-): string[] {
+function getDefaultBundleIdsForHost(host: ActivationHost): string[] {
   if (host === "opencode") {
     return ["opencode-global", "community-stable"];
   }
@@ -355,9 +386,7 @@ function buildCopilotProfileId(assetIds: string[]): string {
     .slice(0, 96);
 }
 
-function getActivationBudget(
-  host: "opencode" | "copilot-vscode" | "shared",
-): number {
+function getActivationBudget(host: ActivationHost): number {
   if (host === "copilot-vscode") {
     return 60;
   }
@@ -543,11 +572,10 @@ async function rollbackActivation(
   projectRoot: string,
   args: string[],
 ): Promise<void> {
-  const host = getOptionValue(args, "--host") as
-    | "opencode"
-    | "copilot-vscode"
-    | "shared"
-    | undefined;
+  const host = parseActivationHostOption(
+    getOptionalOptionValue(args, "--host"),
+    "--host",
+  );
   const generationId = getOptionValue(args, "--generation");
 
   if (!host || !generationId) {
@@ -580,14 +608,11 @@ async function diffActivationState(
   projectRoot: string,
   args: string[],
 ): Promise<void> {
-  const requestedHost = getOptionValue(args, "--host") as
-    | "opencode"
-    | "copilot-vscode"
-    | "shared"
-    | undefined;
-  const hosts = requestedHost
-    ? [requestedHost]
-    : (["opencode", "copilot-vscode", "shared"] as const);
+  const requestedHost = parseActivationHostOption(
+    getOptionalOptionValue(args, "--host"),
+    "--host",
+  );
+  const hosts = requestedHost ? [requestedHost] : ACTIVATION_HOSTS;
 
   for (const host of hosts) {
     const runtimeRoot = join(projectRoot, "activate", host);
@@ -628,19 +653,16 @@ async function explainActivationState(
   args: string[],
 ): Promise<void> {
   const assetId = getOptionValue(args, "--asset") ?? args[0];
-  const requestedHost = getOptionValue(args, "--host") as
-    | "opencode"
-    | "copilot-vscode"
-    | "shared"
-    | undefined;
+  const requestedHost = parseActivationHostOption(
+    getOptionalOptionValue(args, "--host"),
+    "--host",
+  );
 
   if (!assetId) {
     throw new Error("explain requires --asset <assetId>");
   }
 
-  const hosts = requestedHost
-    ? [requestedHost]
-    : (["opencode", "copilot-vscode", "shared"] as const);
+  const hosts = requestedHost ? [requestedHost] : ACTIVATION_HOSTS;
   const lines: string[] = [];
 
   for (const host of hosts) {
@@ -699,7 +721,78 @@ function getOptionValue(
     return undefined;
   }
 
-  return args[optionIndex + 1];
+  const value = args[optionIndex + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`Missing value for ${optionName}.`);
+  }
+
+  return value;
+}
+
+/**
+ * Reads an optional CLI flag value and fails fast when the flag is present
+ * without a concrete value.
+ */
+function getOptionalOptionValue(
+  args: string[],
+  optionName: string,
+): string | undefined {
+  return getOptionValue(args, optionName);
+}
+
+/**
+ * Validates a raw CLI value against every registered recommendation host id.
+ */
+function parseHostTargetOption(
+  value: string | undefined,
+  optionName: string,
+): HostTarget | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (isHostTarget(value)) {
+    return value;
+  }
+
+  throw new Error(
+    `Invalid ${optionName} value: ${value}. Must be one of: ${HOST_TARGETS.join(", ")}`,
+  );
+}
+
+/**
+ * Returns whether a string is a supported recommendation host identifier.
+ */
+function isHostTarget(value: string): value is HostTarget {
+  return HOST_TARGETS.includes(value as HostTarget);
+}
+
+/**
+ * Validates a raw CLI value against activation-capable lifecycle host ids.
+ */
+function parseActivationHostOption(
+  value: string | undefined,
+  optionName: string,
+): ActivationHost | undefined {
+  const hostTarget = parseHostTargetOption(value, optionName);
+  if (hostTarget === undefined) {
+    return undefined;
+  }
+
+  if (isActivationHost(hostTarget)) {
+    return hostTarget;
+  }
+
+  throw new Error(
+    `Invalid ${optionName} value: ${hostTarget}. Must be one of: ${ACTIVATION_HOSTS.join(", ")}`,
+  );
+}
+
+/**
+ * Returns whether a host target can be directly materialized by activation.
+ */
+function isActivationHost(value: HostTarget): value is ActivationHost {
+  return ACTIVATION_HOSTS.includes(value as ActivationHost);
 }
 
 function diffStringSets(

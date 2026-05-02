@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0] - 2026-05-01
+
+### Added in 1.0.0
+
+- centralized runtime configuration with schema-style validation, automatic current-working-directory `.env` loading, documented `.env.example` defaults, and shared preflight diagnostics
+- cross-platform path handling for VS Code settings, home-relative display paths, generated local source seeds, and source endpoint resolution
+- modular discovery detector packs for docs, notebooks, datasets, media/design assets, CAD/hardware, research, game engines, mobile, and ML artifact repos
+- scan budgets, expanded ignore profiles, link lifecycle tests, scan benchmark budgets, and Windows/macOS/Linux CI coverage
+- source utilization reporting that separates configured sources from operationally harvested sources
+- dependency-evidence package registry harvesting for npm and PyPI plus docs, registry, and marketplace reference harvesters
+- host adapter registry with capability matrices, guided setup/doctor commands, adapter-specific CLI readiness diagnostics, native project-local auto-wiring for Cursor, Zed, Claude Code, and Pi, independent per-host recommendation policies, extension install planning, and shared MCP wire plan projection
+- policy coverage reporting that checks detector-emitted terms against recommendation policy maps, fails CI on unmapped terms, and emits human-reviewed draft policy suggestions
+
+### Changed in 1.0.0
+
+- bumped the package version to `1.0.0`
+- routed ad hoc environment access through the centralized config module
+- replaced checked-in workstation-specific local source paths with home-relative defaults
+- split new architecture, discovery, wire, host adapter, config, and preflight work into package-style seams, including host-native implementations under `src/host-adapters/`
+- consolidated workspace execution on `agent-harness workspace <host>`, removed legacy `agent-harness-vscode` and `agent-harness-opencode` package binaries, and added workspace scripts for all registered adapters
+- ignored local environment files and generated project-local native host wiring artifacts for Cursor, Zed, Claude Code, and Pi to prevent accidental commits from local smoke runs
+- extended Copilot workspace profiles and wire plans to distinguish plugins, extensions, native install actions, and shared MCP assets
+- expanded detection quality fixtures to cover roadmap archetypes and made recommendation policy tuning evidence-driven instead of ad hoc
+- refined host compatibility, activation host validation, native JSON merge safety, OpenCode shared MCP projection resilience, and Python dependency evidence extraction including Poetry `pyproject.toml` sections
+
 ## [0.2.0] - 2026-04-27
 
 ### Added in 0.2.0

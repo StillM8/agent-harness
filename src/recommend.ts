@@ -12,6 +12,7 @@ import {
   assertRecommendationPolicyBase,
   assertRecommendationReport,
 } from "./manifest-validation.js";
+import { isHostCompatibleWithRecommendationHost } from "./host-adapters/registry.js";
 import { buildRecommendationFixtures } from "./recommend-fixtures.js";
 import type {
   AssetCatalogEntry,
@@ -37,6 +38,7 @@ import type {
   RecommendationSuggestedBundle,
   RecommendationTargetAssetKindPreference,
   RecommendationTargetConcernPreference,
+  HostTarget,
 } from "./types.js";
 
 const LEGACY_POLICY_FILE_PATH = [
@@ -58,7 +60,15 @@ const EVALUATION_FILE_PATH = [
   "state",
   "recommendation-evaluation.json",
 ] as const;
-const RECOMMENDATION_HOSTS = ["opencode", "copilot-vscode", "shared"] as const;
+const RECOMMENDATION_HOSTS = [
+  "opencode",
+  "copilot-vscode",
+  "shared",
+  "cursor",
+  "zed",
+  "claude-code",
+  "pi",
+] as const satisfies readonly HostTarget[];
 const FOCUSED_BUCKET_LIMIT = 20;
 const GENERIC_CAPABILITY_TERMS = new Set([
   "agent",
@@ -213,15 +223,40 @@ function buildTopRecommendationsForHost(
   demandContext: DemandContext,
   policy: RecommendationPolicy,
 ): RecommendationEntry[] {
-  const candidates = entries
-    .filter((entry) => entry.hosts.includes(host))
+  const scoredCandidates = entries
+    .filter((entry) => isEntryCompatibleWithRecommendationHost(entry, host))
     .filter((entry) => entry.compatibilityMode !== "incompatible")
-    .map((entry) =>
-      buildCandidateRecommendation(entry, host, demandContext, policy),
-    )
+    .map((entry) => {
+      const candidate = buildCandidateRecommendation(
+        entry,
+        host,
+        demandContext,
+        policy,
+      );
+
+      return candidate
+        ? {
+            candidate,
+            preselectionScore: computeCandidatePreselectionScore(candidate),
+          }
+        : null;
+    })
     .filter(
-      (candidate): candidate is CandidateRecommendation => candidate !== null,
+      (
+        candidate,
+      ): candidate is {
+        candidate: CandidateRecommendation;
+        preselectionScore: number;
+      } => candidate !== null,
     )
+    .sort(compareScoredCandidates);
+  const candidates = preserveRequiredCoverageCandidates(
+    scoredCandidates,
+    host,
+    policy,
+    getHostPreselectionLimit(host, policy),
+  )
+    .map(({ candidate }) => candidate)
     .sort(
       (left, right) =>
         right.breakdown.total - left.breakdown.total ||
@@ -248,6 +283,112 @@ function buildTopRecommendationsForHost(
     matchedSignals: candidate.matchedSignals,
     scoreBreakdown: candidate.breakdown,
   }));
+}
+
+function compareScoredCandidates(
+  left: { candidate: CandidateRecommendation; preselectionScore: number },
+  right: { candidate: CandidateRecommendation; preselectionScore: number },
+): number {
+  return (
+    right.preselectionScore - left.preselectionScore ||
+    left.candidate.entry.id.localeCompare(right.candidate.entry.id)
+  );
+}
+
+function preserveRequiredCoverageCandidates(
+  scoredCandidates: Array<{
+    candidate: CandidateRecommendation;
+    preselectionScore: number;
+  }>,
+  host: RecommendationHost,
+  policy: RecommendationPolicy,
+  limit: number,
+): Array<{ candidate: CandidateRecommendation; preselectionScore: number }> {
+  const hostPolicy = policy.hosts[host];
+  const preserved = new Map<
+    string,
+    { candidate: CandidateRecommendation; preselectionScore: number }
+  >();
+
+  for (const target of hostPolicy.targetAssetKinds) {
+    if (target.minimum <= 0) {
+      continue;
+    }
+    const match = scoredCandidates.find(
+      (entry) => entry.candidate.entry.assetKind === target.assetKind,
+    );
+    if (match) {
+      preserved.set(match.candidate.entry.id, match);
+    }
+  }
+
+  for (const target of hostPolicy.targetConcerns) {
+    if (target.minimum <= 0) {
+      continue;
+    }
+    const match = scoredCandidates.find((entry) =>
+      entry.candidate.coverageTags.includes(target.concern),
+    );
+    if (match) {
+      preserved.set(match.candidate.entry.id, match);
+    }
+  }
+
+  const selected = [...preserved.values()];
+  for (const entry of scoredCandidates) {
+    if (selected.length >= limit) {
+      break;
+    }
+    if (!preserved.has(entry.candidate.entry.id)) {
+      selected.push(entry);
+    }
+  }
+
+  return selected.slice(0, limit).sort(compareScoredCandidates);
+}
+
+function computeCandidatePreselectionScore(
+  candidate: CandidateRecommendation,
+): number {
+  return (
+    computeEntryPreselectionScore(candidate.entry) +
+    candidate.breakdown.total +
+    candidate.coverageTags.length * 4 +
+    candidate.matchedSignals.reduce((total, match) => total + match.weight, 0)
+  );
+}
+
+function computeEntryPreselectionScore(entry: AssetCatalogEntry): number {
+  return (
+    entry.trust.score +
+    entry.source.sourcePriority +
+    entry.fit.portfolioFit * 100 +
+    entry.fit.hostFit * 60 -
+    entry.contextCost.estimatedPromptWeight -
+    (entry.risk.level === "high" ? 24 : entry.risk.level === "medium" ? 10 : 0)
+  );
+}
+
+function getHostPreselectionLimit(
+  host: RecommendationHost,
+  policy: RecommendationPolicy,
+): number {
+  return Math.max(250, policy.hosts[host].recommendationLimit * 3);
+}
+
+/**
+ * Delegates host compatibility checks to the adapter registry so lifecycle-host
+ * reuse and capability exclusions stay centralized.
+ */
+function isEntryCompatibleWithRecommendationHost(
+  entry: AssetCatalogEntry,
+  host: RecommendationHost,
+): boolean {
+  return isHostCompatibleWithRecommendationHost(
+    entry.hosts,
+    host,
+    entry.assetKind,
+  );
 }
 
 function selectCandidatesForHost(

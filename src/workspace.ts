@@ -3,10 +3,19 @@
 import { fileURLToPath } from "node:url";
 
 import { resolveProjectRoot } from "./files.js";
+import { resolveHostAdapter } from "./host-adapters/registry.js";
+import {
+  assertNoPreflightErrors,
+  formatPreflightDiagnostics,
+  runAdapterPreflight,
+  runHostPreflight,
+} from "./lib/preflight.js";
 import { runWorkspacePipeline } from "./pipeline.js";
-import { wireVsCode } from "./host-vscode.js";
-import { wireOpenCode } from "./host-opencode.js";
 
+/**
+ * Runs the end-to-end lifecycle for a registered adapter and then applies its
+ * host-specific workspace wire-in.
+ */
 export async function runWorkspace(
   args: string[],
   workingDirectory: string,
@@ -15,51 +24,62 @@ export async function runWorkspace(
   const [target = "help", ...rest] = args;
   const sessionIntent = getOptionValue(rest, "--intent") ?? "general";
 
-  switch (target) {
-    case "vscode":
-      await runWorkspacePipeline({
-        projectRoot,
-        workspaceRoot: workingDirectory,
-        targetHost: "copilot-vscode",
-        sessionIntent,
-      });
-      await wireVsCode({
-        projectRoot,
-        workspaceRoot: workingDirectory,
-        mode: "apply",
-      });
-      return 0;
-    case "opencode":
-      await runWorkspacePipeline({
-        projectRoot,
-        workspaceRoot: workingDirectory,
-        targetHost: "opencode",
-        sessionIntent,
-      });
-      await wireOpenCode({
-        projectRoot,
-        workspaceRoot: workingDirectory,
-        mode: "apply",
-      });
-      return 0;
-    case "help":
-      printWorkspaceHelp();
-      return 0;
-    default:
-      printWorkspaceHelp();
-      return 1;
+  if (target === "help") {
+    printWorkspaceHelp();
+    return 0;
   }
+
+  const hostAdapter = resolveHostAdapter(target);
+  if (!hostAdapter) {
+    printWorkspaceHelp();
+    return 1;
+  }
+
+  const requiresLifecycleHostPaths =
+    hostAdapter.requiresLifecycleHostPaths ?? hostAdapter.mutatesHostPaths;
+  const diagnostics = [
+    ...(await runHostPreflight(hostAdapter.lifecycleHost, {
+      requireHostPaths: requiresLifecycleHostPaths,
+    })),
+    ...(await runAdapterPreflight(hostAdapter.id)),
+  ];
+  if (diagnostics.length > 0) {
+    console.log(formatPreflightDiagnostics(diagnostics));
+  }
+  assertNoPreflightErrors(diagnostics);
+
+  await runWorkspacePipeline({
+    projectRoot,
+    workspaceRoot: workingDirectory,
+    targetHost: hostAdapter.lifecycleHost,
+    recommendationHost: hostAdapter.recommendationHost,
+    sessionIntent,
+    bundleIds: hostAdapter.defaultBundleIds,
+  });
+  await hostAdapter.wire({
+    projectRoot,
+    workspaceRoot: workingDirectory,
+    mode: "apply",
+  });
+  return 0;
 }
 
 function printWorkspaceHelp(): void {
   console.log(`workspace commands:
   vscode    Run the full agent-harness pipeline for a VS Code / Copilot workspace
   opencode  Run the full agent-harness pipeline for an OpenCode workspace
+  cursor       Run the Copilot-compatible pipeline and wire Cursor project files
+  zed          Run the OpenCode-compatible pipeline and wire Zed project files
+  claude-code  Run the OpenCode-compatible pipeline and wire Claude Code project files
+  pi           Run the OpenCode-compatible pipeline and wire Pi project files
 
 Options:
   --intent <general|frontend|backend|security|docs|testing>`);
 }
 
+/**
+ * Returns a CLI option value by flag name without interpreting absent options.
+ */
 function getOptionValue(
   args: string[],
   optionName: string,

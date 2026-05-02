@@ -3,120 +3,95 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Node >=22](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](./package.json)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](./package.json)
+[![Quality](https://github.com/ar27111994/agent-harness/actions/workflows/quality.yml/badge.svg)](https://github.com/ar27111994/agent-harness/actions/workflows/quality.yml)
 [![Latest Release](https://img.shields.io/github/v/release/ar27111994/agent-harness?display_name=tag)](https://github.com/ar27111994/agent-harness/releases)
 
-`agent-harness` is a dynamic, authority-aware asset supply chain for:
+`agent-harness` is a Node.js 22+ TypeScript CLI for discovering, curating, staging, activating, and wiring reusable AI-agent assets into developer workspaces.
 
-- OpenCode
-- GitHub Copilot in VS Code
+It is built around one generic command surface and a host-adapter model. The lifecycle stays consistent across hosts, while each adapter owns the host-specific files, settings, and reset behavior required by VS Code / GitHub Copilot, OpenCode, Cursor, Zed, Claude Code, and Pi.
 
-It keeps agent tooling curated, reproducible, and context-efficient by treating agent assets as a lifecycle instead of a one-step install.
+## Table of contents
 
-## At a glance
+- [What this project does](#what-this-project-does)
+- [Lifecycle model](#lifecycle-model)
+- [Supported hosts](#supported-hosts)
+- [Quick start](#quick-start)
+- [Usage examples](#usage-examples)
+- [Command reference](#command-reference)
+- [Host wire-in details](#host-wire-in-details)
+- [Discovery and recommendations](#discovery-and-recommendations)
+- [Environment variables](#environment-variables)
+- [Generated and managed files](#generated-and-managed-files)
+- [Repository structure](#repository-structure)
+- [Development and validation](#development-and-validation)
+- [Troubleshooting](#troubleshooting)
+- [FAQ](#faq)
+- [Current boundaries](#current-boundaries)
+- [Related documentation](#related-documentation)
+- [License](#license)
 
-- prefers official sources over stars and popularity
-- keeps discovery, mirroring, installation, and activation separate
-- narrows activation to stay within practical context budgets
-- supports local assets, official indexes, repo-backed skills, docs, and shared MCP assets
-- generates host-specific runtime views for OpenCode and GitHub Copilot
+## What this project does
 
-## Why this exists
+`agent-harness` automates the lifecycle of reusable agent assets:
 
-Modern agent ecosystems expose a large number of skills, plugins, MCP servers, instructions, workflows, and agent definitions. Blindly installing everything creates three persistent problems:
+1. Scans a target workspace to infer demand signals.
+2. Loads configured and generated discovery sources.
+3. Harvests candidate agent assets from local sources, source packs, documentation sources, package registries, and marketplace references.
+4. Mirrors selected assets into reproducible local artifacts.
+5. Installs mirrored assets into lifecycle-host package stores.
+6. Activates ranked assets into host runtime views.
+7. Wires the activated assets into a target workspace through a selected host adapter.
 
-- low-quality or duplicate sources pollute the runtime
-- global activation exhausts context windows
-- there is no deterministic path from discovery to active runtime state
-
-`agent-harness` solves this by treating agent assets like a supply chain.
+The goal is to make high-quality reusable agent context portable across tools without hardcoding one workstation, one operating system, or one AI host.
 
 ## Lifecycle model
 
-The project separates asset handling into four explicit phases:
+The project intentionally separates these stages:
 
-1. **Discover** — detect workspace signals, harvest metadata, classify assets, and select canonical candidates
-2. **Mirror** — create pinned, inert local artifacts and bundle locks
-3. **Install** — project mirrored artifacts into host-specific staged package stores
-4. **Activate** — materialize smaller runtime views from installed generations
+| Stage       | Purpose                                                                                             | Typical output                                      |
+| ----------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `discover`  | Build demand profiles, source indexes, catalogs, selections, and source-utilization reports.        | `discover/output/`, `discover/catalog.assets.jsonl` |
+| `mirror`    | Build mirror plans, bundle locks, raw artifact caches, quarantine data, and audit records.          | `mirror/`                                           |
+| `install`   | Stage mirrored packages into lifecycle-host package stores and reconcile generations.               | `install/`                                          |
+| `recommend` | Rank assets per recommendation host using policy, demand signals, trust, cost, diversity, and caps. | `state/recommendations.json`                        |
+| `activate`  | Materialize active runtime views for lifecycle hosts from installed packages and recommendations.   | `activate/`                                         |
+| `wire`      | Apply, preview, or reset host-specific workspace integration.                                       | host-specific files plus wire plans                 |
+| `workspace` | Run the end-to-end lifecycle for a selected host and then apply wire-in.                            | full pipeline output                                |
 
-## Core principles
+Two host concepts are important:
 
-- **Official sources outrank stars**
-- **Community sources remain catalog-only unless promoted**
-- **Discover, mirror, install, and activate stay separate**
-- **Mirror and install are deterministic and pinned**
-- **Activation should be narrower than installation**
-- **Recommendations should be evidence-driven, not brittle hardcoding**
+- **Lifecycle host**: the install/activation package layout used to materialize assets.
+- **Recommendation host**: the host-specific policy used for ranking and budgets.
 
-## Architecture
+Some adapters intentionally reuse another lifecycle host while keeping their own recommendation host. For example, Cursor reuses the Copilot-compatible lifecycle host but ranks through the `cursor` policy.
 
-### 1. Discover
+## Supported hosts
 
-Discovery finds candidate assets from:
+`agent-harness` currently supports six adapter targets.
 
-- current workspace signals
-- local generated sources
-- official remote repositories and docs
-- package registries such as npm and PyPI
-- trusted community sources
-- official skill indexes
+| CLI target                  | Aliases                | Lifecycle host   | Recommendation host | Default bundles                                     | Wire style                                                           |
+| --------------------------- | ---------------------- | ---------------- | ------------------- | --------------------------------------------------- | -------------------------------------------------------------------- |
+| `vscode` / `copilot-vscode` | `copilot`              | `copilot-vscode` | `copilot-vscode`    | `copilot-core`, `community-stable`, `shared-mcp`    | VS Code user settings plus workspace instructions                    |
+| `opencode`                  | `open-code`            | `opencode`       | `opencode`          | `opencode-global`, `community-stable`, `shared-mcp` | project-local `.opencode` overlay and managed links                  |
+| `cursor`                    | —                      | `copilot-vscode` | `cursor`            | `copilot-core`, `community-stable`, `shared-mcp`    | project-local Cursor rules and managed assets                        |
+| `zed`                       | —                      | `opencode`       | `zed`               | `opencode-global`, `community-stable`, `shared-mcp` | project-local `.rules`, `.zed/settings.json`, and managed assets     |
+| `claude-code`               | `claude`, `claudecode` | `opencode`       | `claude-code`       | `opencode-global`, `community-stable`, `shared-mcp` | project-local Claude context, rules, skills, and commands            |
+| `pi`                        | `pi-coding-agent`      | `opencode`       | `pi`                | `opencode-global`, `community-stable`               | project-local Pi agent/system context, skills, prompts, and settings |
 
-Discovery outputs include:
+Use `setup hosts` to print the registered adapters from the local build:
 
-- demand profile
-- source index
-- unified asset catalog
-- selected catalog
-- rejected catalog
-- selection report
-- recommendation report
-
-### 2. Mirror
-
-Mirror converts selected candidates into pinned, inert local references.
-
-Mirror outputs include:
-
-- mirror plan
-- bundle locks
-- raw mirrored artifacts
-- mirror index
-- mirror acquire state
-- quarantine routing for risky assets
-
-### 3. Install
-
-Install projects mirrored assets into staged, host-specific package stores.
-
-Install outputs include:
-
-- staged packages for OpenCode
-- staged packages for Copilot VS Code
-- shared MCP install state
-- bundle install manifests
-- install progress state
-- deterministic install generations
-
-### 4. Activate
-
-Activation materializes runtime views from installed generations.
-
-Activation outputs include:
-
-- OpenCode activation view
-- Copilot activation view
-- shared runtime activation view
-- overlay plans
-- generation-aware activation manifests
-- Copilot workspace profile manifests
+```bash
+agent-harness setup hosts
+```
 
 ## Quick start
 
 ### Requirements
 
-- Node.js 22+
+- Node.js `>=22`
 - npm
-- optional GitHub token for better GitHub API throughput:
+- Git
+- Optional GitHub token for higher GitHub API throughput:
   - `GITHUB_PERSONAL_ACCESS_TOKEN`
   - or `GITHUB_TOKEN`
 
@@ -126,66 +101,127 @@ Activation outputs include:
 npm install
 ```
 
-`npm install` also wires the Husky Git hooks for this checkout. Pre-commit runs
-`lint-staged`, which fixes staged TypeScript files with ESLint and Prettier and
-formats staged JSON, Markdown, YAML, and `.mjs` files.
-
 ### Build
 
 ```bash
 npm run build
-npm run validate
-npm run validate:recommendations
 ```
+
+### Optional local environment
+
+Runtime configuration is centralized in `src/config/runtime.ts`. `.env.example` documents supported variables. The CLI automatically loads a `.env` file from the current working directory before dispatching commands, without overriding variables that are already exported by your shell.
+
+```bash
+cp .env.example .env
+```
+
+Use `.env` for local machine values such as GitHub tokens, batch sizes, and scan budgets. Keep real secrets out of git.
+
+### Inspect host readiness
+
+```bash
+agent-harness setup hosts
+agent-harness setup doctor
+agent-harness setup doctor --host vscode
+agent-harness setup doctor --host opencode
+agent-harness setup doctor --host cursor
+agent-harness setup doctor --host zed
+agent-harness setup doctor --host claude-code
+agent-harness setup doctor --host pi
+```
+
+`setup doctor` prints each adapter’s lifecycle host, recommendation host, default bundles, advertised capabilities, lifecycle preflight diagnostics, and adapter-specific CLI readiness diagnostics. Missing optional host CLIs are reported as warnings unless the selected operation requires a writable host-native path.
 
 ### Run a full workspace pipeline
 
-From any target workspace:
-
-#### VS Code / GitHub Copilot
+From the target workspace directory, run one of:
 
 ```bash
-agent-harness-vscode --intent frontend
+agent-harness workspace vscode --intent frontend
+agent-harness workspace opencode --intent backend
+agent-harness workspace cursor --intent frontend
+agent-harness workspace zed --intent docs
+agent-harness workspace claude-code --intent backend
+agent-harness workspace pi --intent docs
 ```
 
-or from this repository:
+From this repository, equivalent npm scripts are available:
 
 ```bash
 npm run workspace:vscode -- --intent frontend
-```
-
-#### OpenCode
-
-```bash
-agent-harness-opencode --intent backend
-```
-
-or from this repository:
-
-```bash
 npm run workspace:opencode -- --intent backend
+npm run workspace:cursor -- --intent frontend
+npm run workspace:zed -- --intent docs
+npm run workspace:claude-code -- --intent backend
+npm run workspace:pi -- --intent docs
 ```
 
-#### Generic wrapper form
+The legacy package binaries `agent-harness-vscode` and `agent-harness-opencode` were removed. Use the single adapter-driven `agent-harness workspace <host>` command instead.
+
+## Usage examples
+
+### Preview before touching a workspace
+
+Use `wire --preview` when you want to inspect planned host targets without mutating workspace files:
 
 ```bash
-agent-harness workspace vscode --intent docs
-agent-harness workspace opencode --intent security
+agent-harness wire cursor --preview
+agent-harness wire zed --preview
+agent-harness wire claude-code --preview
 ```
 
-These wrappers currently execute the full pipeline for the target workspace:
+Preview output is written under `activate/<host>/` and can be reviewed before `--apply`.
 
-1. demand profile
-2. source index
-3. catalog generation
-4. canonical selection
-5. mirror plan
-6. mirror locks
-7. batched mirror acquisition
-8. batched install
-9. install reconcile
-10. activation
-11. host wire-in apply
+### Apply and reset one host
+
+```bash
+agent-harness wire cursor --apply
+agent-harness wire cursor --reset
+```
+
+Use this when activation outputs already exist and you only want to test the host adapter behavior.
+
+### Run the full pipeline for a documentation-heavy repo
+
+```bash
+agent-harness workspace zed --intent docs
+```
+
+This scans the current workspace, ranks assets with the `zed` recommendation policy, activates the OpenCode-compatible lifecycle view, and writes Zed project-local files.
+
+### Run the full pipeline for a frontend repo in Cursor
+
+```bash
+agent-harness workspace cursor --intent frontend
+```
+
+Cursor reuses the Copilot-compatible lifecycle host but applies Cursor-specific recommendation policy and project-local `.cursor` rules.
+
+### Inspect why an asset was recommended
+
+```bash
+node ./dist/cli.js recommend explain --host claude-code --asset <asset-id>
+```
+
+Use this to inspect scoring reasons, matched demand signals, coverage tags, and score breakdowns.
+
+### Print the effective policy for one host
+
+```bash
+node ./dist/cli.js recommend policy:print --host pi
+```
+
+This is useful when tuning host policy overrides or investigating why a host selected different assets than another host.
+
+### Rebuild from repository state
+
+```bash
+npm run rebuild:full
+npm run recommend:report
+npm run activate:host
+```
+
+Use this sequence after changing source definitions, recommendation policy, mirror bundles, or install behavior.
 
 ## Command reference
 
@@ -198,6 +234,11 @@ npm run lint
 npm run format
 npm run format:check
 npm run validate
+npm test
+npm run smoke:cli
+npm run benchmark:scan
+npm run quality:detection
+npm run quality:policy
 npm run validate:recommendations
 ```
 
@@ -209,46 +250,37 @@ npm run discover:sources
 npm run discover:catalog
 npm run discover:select
 npm run discover:stats
-npm run recommend:report
-npm run recommend:evaluate
 ```
 
-You can also inspect a specific recommendation decision directly:
+Equivalent direct CLI examples:
 
 ```bash
-node ./dist/cli.js recommend explain --host copilot-vscode --asset microsoft-skills-azure-identity-ts
+node ./dist/cli.js discover demand-profile
+node ./dist/cli.js discover sources
+node ./dist/cli.js discover catalog
+node ./dist/cli.js discover select
+node ./dist/cli.js discover stats
 ```
 
-You can also print the fully merged effective recommendation policy:
+### Recommend
+
+```bash
+npm run recommend:report
+npm run recommend:evaluate
+npm run recommend:update
+```
+
+Explain a specific recommendation:
+
+```bash
+node ./dist/cli.js recommend explain --host copilot-vscode --asset <asset-id>
+```
+
+Print the merged effective policy for a host:
 
 ```bash
 node ./dist/cli.js recommend policy:print --host shared
 ```
-
-The CI quality workflow runs both `npm run validate` and
-`npm run validate:recommendations` so fixture-backed recommendation behavior
-stays pinned as the policy evolves.
-
-### Recommendation policy layout
-
-Recommendation scoring policy is authored as smaller files instead of one large
-JSON blob:
-
-- `discover/recommendation-policy/base.json`
-- `discover/recommendation-policy/hosts/copilot-vscode.json`
-- `discover/recommendation-policy/hosts/opencode.json`
-- `discover/recommendation-policy/hosts/shared.json`
-- `discover/schema/recommendation-policy-base.schema.json`
-- `discover/schema/recommendation-host-policy-override.schema.json`
-
-`base.json` holds scoring, keyword maps, and optional shared host defaults.
-Each host file holds only the host-specific policy override. `base.json` can
-also define optional reusable presets for `targetConcerns` and
-`targetAssetKinds`, and host files can reference them through `presetRefs`
-before applying local override entries. At runtime the loader composes these
-files into the same `RecommendationPolicy` shape used by the scorer. The
-recommender still accepts the legacy `discover/recommendation-policy.json`
-path as a fallback if only the old file exists.
 
 ### Mirror
 
@@ -274,134 +306,7 @@ npm run activate:reset
 node ./dist/cli.js activate rollback --host opencode --generation <generation-id>
 ```
 
-### Rebuild / operations
-
-```bash
-npm run rebuild:clean
-npm run rebuild:full
-```
-
-## Host wire-in
-
-### VS Code / GitHub Copilot wire-in
-
-The project supports semi-automatic and automatic VS Code wire-in.
-
-Supported behavior:
-
-- updates **User-scoped** VS Code settings for protected AI path settings
-- writes workspace-local `.github/copilot-instructions.md`
-- materializes curated user-level runtime folders under `~/.copilot/agent-harness/`
-- preserves the VS Code security boundary by avoiding workspace-level mutation of user-only settings
-
-Commands:
-
-```bash
-agent-harness wire vscode --preview
-agent-harness wire vscode --apply
-agent-harness wire vscode --reset
-```
-
-Equivalent npm command:
-
-```bash
-npm run wire:vscode
-```
-
-Patched VS Code user settings can include:
-
-- `chat.pluginLocations`
-- `chat.agentSkillsLocations`
-- `chat.hookFilesLocations`
-- `chat.agentFilesLocations`
-- `chat.instructionsFilesLocations`
-
-For skills specifically, the wire-in uses the **parent curated skills folder**:
-
-- `~/.copilot/agent-harness/skills`: `true`
-
-and disables competing global skills roots such as:
-
-- `~/.copilot/skills`
-- `~/.agents/skills`
-- `~/.claude/skills`
-- `~/.config/opencode/skills`
-
-Curated user-level runtime folders include:
-
-- `~/.copilot/agent-harness/instructions`
-- `~/.copilot/agent-harness/agents`
-- `~/.copilot/agent-harness/skills`
-- `~/.copilot/agent-harness/hooks`
-- `~/.copilot/agent-harness/plugins`
-
-Workspace-local export:
-
-- `.github/copilot-instructions.md`
-
-### OpenCode wire-in
-
-The project supports semi-automatic project-local OpenCode wire-in.
-
-Supported behavior:
-
-- writes a project-local overlay under `.opencode/context/project-intelligence/agent-harness/`
-- creates managed directory links under `.opencode/<asset-kind>/`
-- does **not** overwrite the global OpenAgentsControl-managed install
-- uses filesystem links instead of text-only workspace instructions
-- uses Windows directory junctions when running on Windows for compatibility
-
-Commands:
-
-```bash
-agent-harness wire opencode --preview
-agent-harness wire opencode --apply
-agent-harness wire opencode --reset
-```
-
-Equivalent npm command:
-
-```bash
-npm run wire:opencode
-```
-
-### Automatic wire-in through workspace wrappers
-
-The OpenCode wrappers run wire-in automatically after activation:
-
-```bash
-agent-harness-opencode --intent backend
-```
-
-or:
-
-```bash
-agent-harness workspace opencode --intent security
-```
-
-## Common workflows
-
-### Standard full rebuild
-
-```bash
-npm run rebuild:full
-```
-
-This performs:
-
-1. clean transient state
-2. demand profile generation
-3. source index generation
-4. catalog generation
-5. canonical selection
-6. mirror planning
-7. mirror lock generation
-8. batched mirror acquisition
-9. batched install
-10. install reconcile
-11. activation
-
-### Session-intent-aware activation
+You can bias activation ordering with `--intent`:
 
 ```bash
 node ./dist/cli.js activate host --intent frontend
@@ -409,152 +314,482 @@ node ./dist/cli.js activate host --intent security
 node ./dist/cli.js activate host --intent docs
 ```
 
-This biases activation ordering toward assets whose ids and capabilities align with the requested session intent.
-
-The same intent can be used through the one-command wrappers:
+You can also activate one lifecycle host using another recommendation policy:
 
 ```bash
-agent-harness-vscode --intent frontend
-agent-harness-opencode --intent security
+node ./dist/cli.js activate host --host copilot-vscode --recommendation-host cursor
 ```
 
-### Clean reset only
+`--recommendation-host` is validated against the supported host set.
+
+### Wire
+
+Preview, apply, or reset any adapter:
+
+```bash
+agent-harness wire vscode --preview
+agent-harness wire vscode --apply
+agent-harness wire vscode --reset
+
+agent-harness wire opencode --preview
+agent-harness wire opencode --apply
+agent-harness wire opencode --reset
+
+agent-harness wire cursor --preview
+agent-harness wire cursor --apply
+agent-harness wire cursor --reset
+
+agent-harness wire zed --preview
+agent-harness wire zed --apply
+agent-harness wire zed --reset
+
+agent-harness wire claude-code --preview
+agent-harness wire claude-code --apply
+agent-harness wire claude-code --reset
+
+agent-harness wire pi --preview
+agent-harness wire pi --apply
+agent-harness wire pi --reset
+```
+
+Repository scripts apply the corresponding wire-in:
+
+```bash
+npm run wire:vscode
+npm run wire:opencode
+npm run wire:cursor
+npm run wire:zed
+npm run wire:claude-code
+npm run wire:pi
+```
+
+### Workspace
+
+Workspace commands run discover, mirror, install, activate, and wire-in for the selected adapter:
+
+```bash
+agent-harness workspace vscode --intent frontend
+agent-harness workspace opencode --intent backend
+agent-harness workspace cursor --intent frontend
+agent-harness workspace zed --intent docs
+agent-harness workspace claude-code --intent backend
+agent-harness workspace pi --intent docs
+```
+
+### Rebuild / operations
 
 ```bash
 npm run rebuild:clean
+npm run rebuild:full
 ```
 
-### Install state reset only
+`rebuild:full` runs the clean, discovery, mirror, install, reconcile, recommendation, and activation flow from repository state.
+
+## Host wire-in details
+
+All host-specific behavior lives behind `src/host-adapters/`. Generic orchestration lives in `src/workspace.ts`, `src/wire.ts`, `src/pipeline.ts`, `src/install.ts`, `src/activate.ts`, and related lifecycle modules.
+
+Preview, apply, and reset semantics are consistent across adapters:
+
+- **Preview** writes a wire preview manifest without applying workspace mutations.
+- **Apply** writes host-specific project files/settings and an effective wire plan.
+- **Reset** removes managed outputs created by the adapter.
+
+Most adapter previews use `activate/<host>/wire-preview-<host>.json`. VS Code uses its lifecycle root: `activate/copilot-vscode/wire-preview-vscode.json`.
+
+### VS Code / GitHub Copilot
+
+Adapter implementation:
+
+- `src/host-adapters/vscode.ts`
+- `src/host-adapters/vscode-settings.ts`
+
+This adapter is intentionally host-specific because VS Code and GitHub Copilot use protected user-scoped settings plus workspace-local instruction files.
+
+Supported behavior:
+
+- patches user-scoped VS Code JSONC settings
+- writes workspace-local `.github/copilot-instructions.md`
+- materializes curated runtime folders under `~/.copilot/agent-harness/`
+- writes extension metadata for valid VS Code extension identifiers
+- emits native install action guidance for extension assets when possible
+- projects shared MCP references into the effective wire plan
+- resets managed settings entries and generated files without wiping unrelated user settings
+
+Settings that can be patched:
+
+- `chat.pluginLocations`
+- `chat.agentSkillsLocations`
+- `chat.hookFilesLocations`
+- `chat.agentFilesLocations`
+- `chat.instructionsFilesLocations`
+- `github.copilot.chat.codeGeneration.instructions`
+
+Curated runtime folders:
+
+- `~/.copilot/agent-harness/instructions`
+- `~/.copilot/agent-harness/agents`
+- `~/.copilot/agent-harness/skills`
+- `~/.copilot/agent-harness/hooks`
+- `~/.copilot/agent-harness/plugins`
+- `~/.copilot/agent-harness/extensions`
+
+Workspace and activation outputs:
+
+- `.github/copilot-instructions.md`
+- `activate/copilot-vscode/wire-preview-vscode.json`
+- `activate/copilot-vscode/wire-plan.json`
+- `activate/copilot-vscode/workspace-profile-manifest.json`
+
+Current boundaries:
+
+- Applying VS Code wire-in requires the VS Code user settings directory to exist and be writable.
+- The adapter emits extension install guidance; it does not silently install marketplace extensions.
+
+### OpenCode
+
+Adapter implementation:
+
+- `src/host-adapters/opencode.ts`
+
+This adapter is intentionally host-specific because OpenCode consumes project-local overlays and asset-kind directory layouts.
+
+Supported behavior:
+
+- writes `.opencode/context/project-intelligence/agent-harness/`
+- creates managed links under `.opencode/<asset-kind>/`
+- writes an effective project-local wire plan under the `.opencode` overlay
+- projects shared MCP references into the wire plan when available
+- updates/removes managed `AGENTS.md` sections
+- uses Windows directory junctions on Windows
+- avoids global OpenAgentsControl install mutation
+- does not require a global OpenCode config directory for project-local apply/reset
+
+Managed project-local locations:
+
+- `.opencode/context/project-intelligence/agent-harness/`
+- `.opencode/agents/`
+- `.opencode/skills/`
+- `.opencode/instructions/`
+- `.opencode/workflows/`
+- `.opencode/hooks/`
+- `.opencode/plugins/`
+- `.opencode/mcp-servers/`
+- `.opencode/extensions/`
+- `.opencode/prompt-packs/`
+- `.opencode/reference-packs/`
+- `AGENTS.md`
+
+Wire-plan outputs:
+
+- `activate/opencode/wire-preview-opencode.json`
+- `.opencode/context/project-intelligence/agent-harness/wire-plan.json`
+
+Current boundaries:
+
+- The adapter links activated assets into the workspace overlay.
+- It does not install or modify global OpenCode packages.
+
+### Cursor
+
+Adapter implementation:
+
+- `src/host-adapters/native-wire.ts`
+- registered as `cursor` in `src/host-adapters/registry.ts`
+
+Cursor is a project-local native adapter. It reuses the VS Code / Copilot lifecycle host for install and activation but ranks assets through its own `cursor` recommendation policy.
+
+Supported behavior:
+
+- writes `.cursor/rules/agent-harness.mdc`
+- materializes selected assets under `.cursor/agent-harness/`
+- writes `activate/cursor/wire-preview-cursor.json`
+- writes `activate/cursor/wire-plan.json` on apply
+- avoids global Cursor profile mutation
+- avoids global VS Code profile mutation
+
+Current boundaries:
+
+- Cursor extension/native-install capability is not advertised until Cursor native wire-in can surface structured extension IDs and install actions.
+- Extension-like assets are treated as reference material in the project-local managed tree.
+
+### Zed
+
+Adapter implementation:
+
+- `src/host-adapters/native-wire.ts`
+- registered as `zed` in `src/host-adapters/registry.ts`
+
+Zed is a project-local native adapter. It reuses the OpenCode-compatible lifecycle host for install and activation but ranks assets through its own `zed` recommendation policy.
+
+Supported behavior:
+
+- updates the project `.rules` file with an agent-harness managed section
+- adds an `agent-harness` profile entry to `.zed/settings.json`
+- materializes selected assets under `.zed/agent-harness/`
+- writes `activate/zed/wire-preview-zed.json`
+- writes `activate/zed/wire-plan.json` on apply
+- avoids global Zed profile/settings mutation
+- avoids global OpenCode profile mutation
+
+Current boundaries:
+
+- The adapter writes project-local context and profile hints.
+- Host marketplace/plugin installation remains manual or future adapter-specific work.
+
+### Claude Code
+
+Adapter implementation:
+
+- `src/host-adapters/native-wire.ts`
+- registered as `claude-code` in `src/host-adapters/registry.ts`
+
+Claude Code is a project-local native adapter. It reuses the OpenCode-compatible lifecycle host for install and activation but ranks assets through its own `claude-code` recommendation policy.
+
+Supported behavior:
+
+- writes managed project context to `CLAUDE.md`
+- writes managed local Claude context to `.claude/CLAUDE.md`
+- writes `.claude/rules/agent-harness.md`
+- writes `.claude/skills/agent-harness/SKILL.md`
+- writes `.claude/commands/agent-harness.md`
+- materializes selected assets under `.claude/agent-harness/`
+- writes `activate/claude-code/wire-preview-claude-code.json`
+- writes `activate/claude-code/wire-plan.json` on apply
+- avoids global Claude Code profile mutation
+
+Current boundaries:
+
+- MCP and reference assets are staged as project-readable references.
+- The adapter does not synthesize full Claude Code MCP server config without structured server metadata.
+
+### Pi
+
+Adapter implementation:
+
+- `src/host-adapters/native-wire.ts`
+- registered as `pi` in `src/host-adapters/registry.ts`
+
+Pi is a project-local native adapter. It reuses the OpenCode-compatible lifecycle host for install and activation but ranks assets through its own `pi` recommendation policy.
+
+Supported behavior:
+
+- writes managed project agent context to `AGENTS.md`
+- writes managed project system context to `SYSTEM.md`
+- writes `.pi/skills/agent-harness/SKILL.md`
+- writes `.pi/prompts/agent-harness.md`
+- updates `.pi/settings.json` with skill and prompt resource entries
+- materializes selected assets under `.pi/agent-harness/`
+- writes `activate/pi/wire-preview-pi.json`
+- writes `activate/pi/wire-plan.json` on apply
+- avoids global Pi profile mutation
+
+Current boundaries:
+
+- Pi does not include `shared-mcp` in its default bundles.
+- MCP assets are staged as references unless your Pi installation includes a compatible MCP extension.
+
+### Native adapter wire-plan fields
+
+Native project-local adapters emit effective wire plans with materialized paths. Depending on selected assets, plans can include:
+
+- `instructionsFiles`
+- `agentFiles`
+- `skillDirs`
+- `pluginDirs`
+- `workflowFiles`
+- `referenceFiles`
+- `hookFiles`
+- `mcpServers`
+- `nativeInstallActions`
+
+## Discovery and recommendations
+
+### Discovery coverage
+
+Demand profiling uses scan budgets and detector packs for a broad range of repository archetypes:
+
+- software manifests
+- documentation-heavy repositories
+- notebooks
+- datasets
+- media/design assets
+- CAD/hardware artifacts
+- research and publishing content
+- game engines
+- mobile projects
+- ML model artifacts
+
+Generated outputs include:
+
+- `discover/output/demand-profile.json`
+- `discover/output/source-index.json`
+- `discover/output/source-utilization.json`
+- `discover/catalog.assets.jsonl`
+- selected/rejected JSONL outputs
+
+### Source utilization
+
+`discover/output/source-utilization.json` separates configured sources from operationally harvested sources so you can see whether broad source declarations are producing usable catalog entries.
+
+### Dependency-evidence package discovery
+
+Package registry discovery is driven by dependency evidence extracted from manifests such as:
+
+- `package.json`
+- `requirements.txt`
+- `pyproject.toml`
+
+The discovery pipeline emits package dependency signals like `npm:<package>` and `pypi:<package>` only from dependency evidence. It filters requirement directives, direct references, VCS URLs, local paths, and non-package strings before querying package registries.
+
+For `pyproject.toml`, dependency extraction is intentionally scoped to project dependency sections rather than build-system requirements. Supported sections include PEP 621 `[project].dependencies`, `[project.optional-dependencies]`, Poetry `[tool.poetry.dependencies]`, `[tool.poetry.dev-dependencies]`, and `[tool.poetry.group.<name>.dependencies]` sections.
+
+### Recommendation policy layout
+
+Recommendation policy is split across smaller JSON files:
+
+- `discover/recommendation-policy/base.json`
+- `discover/recommendation-policy/hosts/copilot-vscode.json`
+- `discover/recommendation-policy/hosts/opencode.json`
+- `discover/recommendation-policy/hosts/shared.json`
+- `discover/recommendation-policy/hosts/cursor.json`
+- `discover/recommendation-policy/hosts/zed.json`
+- `discover/recommendation-policy/hosts/claude-code.json`
+- `discover/recommendation-policy/hosts/pi.json`
+- `discover/schema/recommendation-policy-base.schema.json`
+- `discover/schema/recommendation-host-policy-override.schema.json`
+
+`base.json` holds global scoring, keyword maps, optional host defaults, and reusable presets. Each host file holds host-specific overrides. At runtime the loader composes these files into the effective recommendation policy.
+
+Recommendation scoring considers:
+
+- source authority
+- compatibility mode
+- trust score
+- source priority
+- workspace demand matches
+- host preferences
+- coverage/diversity
+- freshness
+- context cost
+- risk penalties
+- duplicate groups
+- per-host caps and budgets
+
+The legacy `discover/recommendation-policy.json` path is still accepted as a fallback when only the older monolithic policy file exists.
+
+### Quality and policy coverage
+
+The quality tooling includes:
 
 ```bash
-npm run install:reset
+npm run quality:detection
+npm run quality:policy
+npm run benchmark:scan
+npm run validate:recommendations
 ```
 
-### Activation reset only
-
-```bash
-npm run activate:reset
-```
+- `quality:detection` checks representative archetype fixtures and reports precision/recall-style metrics.
+- `quality:policy` verifies detector-emitted terms are represented in recommendation policy maps and writes draft suggestions for human review.
+- `benchmark:scan` enforces scan budget expectations.
+- `validate:recommendations` evaluates golden recommendation fixtures.
 
 ## Environment variables
 
+See `.env.example` for documented defaults. On startup, the CLI loads `.env` from the current working directory into `process.env` and preserves any variables already set by the parent shell or process manager.
+
 ### GitHub authentication
 
-The GitHub client supports:
-
-- `GITHUB_PERSONAL_ACCESS_TOKEN`
-- fallback: `GITHUB_TOKEN`
-
-Example PowerShell usage:
-
-```powershell
-$env:GITHUB_TOKEN = $env:GITHUB_PERSONAL_ACCESS_TOKEN
-$env:AGENT_HARNESS_REMOTE_BATCH_SIZE = '120'
-$env:AGENT_HARNESS_INSTALL_BATCH_SIZE = '250'
-npm.cmd run rebuild:full
-```
-
-### Batch controls
-
-- `AGENT_HARNESS_REMOTE_BATCH_SIZE`
-- `AGENT_HARNESS_INSTALL_BATCH_SIZE`
-
-These control checkpointed mirror acquisition and staged install throughput.
-
-## Source authority model
-
-The harness prefers sources in roughly this order:
-
-1. trusted local generated sources
-2. official first-party sources
-3. official marketplaces
-4. official-compatible sources
-5. trusted community sources
-6. unverified community sources
-
-The governing rule is:
-
-> If an official vendor source exists, it outranks a more popular unofficial source.
-
-## Dynamic recommendation model
-
-Recommendations are based on live evidence such as:
-
-- current workspace stack signals
-- weighted evidence counts from matched files
-- host compatibility
-- source authority
-- trust score
-- risk
-- context cost
-- portfolio fit
-
-Recommendation ranking is now policy-driven from the canonical base policy at
-[`discover/recommendation-policy/base.json`](./discover/recommendation-policy/base.json)
-with per-host overrides. The legacy single-file
-[`discover/recommendation-policy.json`](./discover/recommendation-policy.json)
-is supported as a fallback only.
-That policy controls:
-
-- scoring weights and penalties
-- per-host diversity caps
-- per-host source concentration controls
-- concern coverage targets
-- prompt-weight activation budgets
-- suppression rules for obviously irrelevant assets
-- host-level deprioritization rules for wrapper or reference assets that should stay available but rank below runnable integrations
-
-The engine persists a richer report in [`state/recommendations.json`](./state/recommendations.json),
-including:
-
-- per-asset score breakdowns
-- matched demand signals
-- source family and duplicate-group metadata
-- host summaries with concern and task-mode coverage
-- budget-aware suggested bundles
-
-Activation now consumes that report directly instead of applying a second
-asset-ID heuristic ranking layer.
-
-Golden fixture evaluation is available through:
+Optional GitHub tokens improve API throughput during discovery:
 
 ```bash
-npm run recommend:evaluate
+GITHUB_PERSONAL_ACCESS_TOKEN=
+# GITHUB_TOKEN=
 ```
 
-That writes [`state/recommendation-evaluation.json`](./state/recommendation-evaluation.json)
-and checks five archetypes returned by `buildRecommendationFixtures()`:
+PowerShell example:
 
-- backend integration
-- frontend UI
-- infrastructure and security
-- shared-executable-bias
-- shared-source-saturation
+```powershell
+$env:GITHUB_PERSONAL_ACCESS_TOKEN = '<token>'
+$env:GITHUB_TOKEN = $env:GITHUB_PERSONAL_ACCESS_TOKEN
+```
 
-Trust scoring currently incorporates:
+### GitHub API and retries
 
-- source authority tier
-- source kind and priority
-- publisher verification
-- install method
-- stars thresholds
-- maintenance cadence
-- readme/docs/frontmatter presence
-- dependency declarations
-- risk penalties
+```bash
+GITHUB_API_VERSION=2022-11-28
+AGENT_HARNESS_GITHUB_FETCH_RETRIES=3
+```
+
+### Batch sizes
+
+```bash
+AGENT_HARNESS_REMOTE_BATCH_SIZE=15
+AGENT_HARNESS_MIRROR_BATCH_SIZE=120
+AGENT_HARNESS_INSTALL_BATCH_SIZE=250
+```
+
+### Scan budgets
+
+```bash
+AGENT_HARNESS_SCAN_MAX_DEPTH=14
+AGENT_HARNESS_SCAN_MAX_FILES=20000
+AGENT_HARNESS_SCAN_MAX_BYTES=50000000
+```
+
+### Optional platform path overrides
+
+Most users should leave these unset:
+
+```bash
+# XDG_CONFIG_HOME=
+# APPDATA=
+```
+
+## Generated and managed files
+
+The following directories and files are generated by the lifecycle and are ignored by git:
+
+- `discover/output/`
+- `discover/catalog.assets.jsonl`
+- `mirror/audit/`
+- `mirror/bundles/`
+- `mirror/index.jsonl`
+- `mirror/quarantine/`
+- `mirror/raw/`
+- `install/`
+- `activate/`
+- `state/`
+- `.opencode/`
+- `.cursor/`
+- `.zed/`
+- `.claude/`
+- `.pi/`
+- `.github/copilot-instructions.md`
+- `.rules`
+- `AGENTS.md`
+- `CLAUDE.md`
+- `SYSTEM.md`
+
+Local environment files are ignored except `.env.example`:
+
+- `.env`
+- `.env.*`
+- `!.env.example`
 
 ## Repository structure
 
 ```text
 agent-harness/
+├── .github/
+│   └── workflows/
 ├── discover/
-│   ├── source-packs/
+│   ├── recommendation-policy/
 │   ├── schema/
+│   ├── source-packs/
 │   ├── output/
 │   ├── sources.json
-│   ├── selections.json
-│   ├── pipeline.json
-│   └── official-skills-indexes.json
+│   └── selections.json
 ├── mirror/
 │   ├── audit/
 │   ├── bundles/
@@ -562,36 +797,174 @@ agent-harness/
 │   ├── raw/
 │   ├── schema/
 │   └── policy.json
-├── install/
-├── activate/
-├── state/
 ├── src/
+│   ├── config/
+│   ├── domains/
+│   │   └── discovery/
+│   ├── host-adapters/
+│   │   ├── native-wire.ts
+│   │   ├── opencode.ts
+│   │   ├── registry.ts
+│   │   ├── vscode-settings.ts
+│   │   └── vscode.ts
+│   ├── lib/
+│   ├── tests/
+│   ├── activate.ts
+│   ├── cli.ts
+│   ├── discover.ts
+│   ├── install.ts
+│   ├── mirror.ts
+│   ├── pipeline.ts
+│   ├── recommend.ts
+│   ├── setup.ts
+│   ├── wire.ts
+│   └── workspace.ts
+├── CHANGELOG.md
+├── IMPLEMENTATION-PLAN.md
+├── Roadmap.md
 ├── package.json
-├── tsconfig.json
-└── IMPLEMENTATION-PLAN.md
+└── tsconfig.json
 ```
 
-## Contribution and project hygiene
+## Development and validation
 
-- start with [`CONTRIBUTING.md`](./CONTRIBUTING.md)
-- use the issue templates under [`.github/ISSUE_TEMPLATE/`](./.github/ISSUE_TEMPLATE/)
-- use the pull request template at [`.github/pull_request_template.md`](./.github/pull_request_template.md)
+Before pushing changes, run at least:
 
-## Current refinement boundaries
+```bash
+npm run validate
+npm run build
+npm test
+```
 
-The lifecycle is implemented end-to-end. The remaining work is refinement rather than missing architecture, for example:
+For release or adapter changes, also run:
 
-- broader upstream resolution for every official index item
-- richer session/workspace-intent-aware activation planning
-- more advanced quarantine routing and policy enforcement
+```bash
+npm run smoke:cli
+npm run quality:detection
+npm run quality:policy
+npm run benchmark:scan
+npm run validate:recommendations
+```
 
-## Documentation
+The CI quality workflow runs on Ubuntu, macOS, and Windows. It validates linting, formatting, types, tests, scan budgets, detection quality, policy coverage, CLI smoke checks, and recommendation fixtures.
 
-For current implementation details and roadmap, see:
+## Troubleshooting
 
-- [`IMPLEMENTATION-PLAN.md`](./IMPLEMENTATION-PLAN.md)
-- [`FUTURE-IMPROVEMENTS.md`](./FUTURE-IMPROVEMENTS.md)
+### `agent-harness` command is not found
+
+Build first and run through the local `dist` entrypoint, or use npm scripts from this repository:
+
+```bash
+npm run build
+node ./dist/cli.js setup hosts
+npm run workspace:vscode -- --intent frontend
+```
+
+The only package binary is now `agent-harness`; host-specific binaries such as `agent-harness-vscode` and `agent-harness-opencode` are intentionally removed.
+
+### Host readiness diagnostics fail
+
+Run:
+
+```bash
+agent-harness setup doctor --host <host>
+```
+
+VS Code apply needs a writable VS Code user settings directory. OpenCode, Cursor, Zed, Claude Code, and Pi use project-local wiring and should not require global host profile mutation. Missing host CLIs such as `cursor`, `zed`, `claude`, or `pi` are reported as readiness warnings so users know runtime validation is incomplete, but project-local preview/apply/reset can still proceed when no required path is missing.
+
+### VS Code settings cannot be patched
+
+The VS Code adapter reads JSONC settings. If parsing fails, fix `settings.json` syntax first, then retry:
+
+```bash
+agent-harness wire vscode --preview
+agent-harness wire vscode --apply
+```
+
+The adapter avoids overwriting unrelated user settings and removes only managed entries during reset.
+
+### Preview still appears applied
+
+Preview should remove stale wire plans where the adapter owns them. If workspace files were applied earlier, use reset:
+
+```bash
+agent-harness wire <host> --reset
+agent-harness wire <host> --preview
+```
+
+### GitHub discovery is slow or rate-limited
+
+Set a token before discovery or full workspace runs:
+
+```bash
+GITHUB_PERSONAL_ACCESS_TOKEN=<token>
+```
+
+Use a least-privileged token with public repository read access unless your sources require more.
+
+### A generated host file shows up in `git status`
+
+Generated host files are ignored for this repository. If you run the harness against another workspace, decide whether that workspace should commit project-local host config. For this repository, generated files such as `.cursor/`, `.zed/`, `.claude/`, `.pi/`, `.opencode/`, `AGENTS.md`, `CLAUDE.md`, and `SYSTEM.md` are intentionally ignored.
+
+### Windows link behavior differs from Unix
+
+OpenCode uses managed directory links. On Windows, directory links are created as junctions for compatibility. The link lifecycle tests cover create, replace, and reset behavior across supported operating systems.
+
+## FAQ
+
+### Why is there one `agent-harness workspace <host>` command instead of separate binaries?
+
+A single adapter-driven command keeps CLI behavior consistent across hosts. Host-specific behavior still exists, but it lives behind the adapter registry instead of separate wrapper entrypoints.
+
+### Why are there VS Code and OpenCode-specific files in `src/host-adapters/`?
+
+Those files are intentional adapter implementations. Generic orchestration belongs in lifecycle modules; host-specific settings, file layouts, and reset behavior belong in host adapters.
+
+### Can a new adapter have its own custom behavior?
+
+Yes. Add a new implementation under `src/host-adapters/`, register it in `src/host-adapters/registry.ts`, and keep generic lifecycle orchestration unchanged.
+
+### Does `agent-harness` install VS Code extensions automatically?
+
+No. VS Code extension assets can produce metadata and install guidance, but the harness does not silently install marketplace extensions.
+
+### Why do Cursor, Zed, Claude Code, and Pi reuse lifecycle hosts?
+
+They can reuse compatible install and activation package layouts while keeping independent recommendation policies and native project-local wire behavior.
+
+### Which generated files should I commit in my own project?
+
+That depends on your project policy. Project-local files such as `.cursor/rules/agent-harness.mdc`, `.rules`, `CLAUDE.md`, `AGENTS.md`, or `SYSTEM.md` can be useful to commit if your team wants shared host behavior. Review generated content before committing it.
+
+### Is OpenCode global configuration required?
+
+No. The OpenCode adapter writes a project-local `.opencode` overlay and does not require a global OpenCode config directory for apply/reset flows.
+
+### How do I know what was wired?
+
+Inspect the effective wire plan. Depending on host, it is written under `activate/<host>/wire-plan.json` or inside the host-local overlay, such as `.opencode/context/project-intelligence/agent-harness/wire-plan.json`.
+
+## Current boundaries
+
+The project intentionally favors explicit host semantics over pretending every host behaves the same.
+
+Known boundaries:
+
+- VS Code extension assets are represented with metadata and install guidance; the harness does not silently install marketplace extensions.
+- Cursor currently does not advertise extension/native-install capability because the native Cursor wire plan does not yet surface structured extension IDs or install actions.
+- OpenCode wire-in is project-local and does not mutate global OpenCode packages.
+- Claude Code and Pi MCP configuration is not synthesized without structured server metadata.
+- Pi stages MCP references only by default and does not include `shared-mcp` in its default bundles.
+- Large modules are improved but not fully decomposed; continued package extraction and file-size reduction are future work.
+
+## Related documentation
+
+- `CHANGELOG.md` — release notes
+- `Roadmap.md` — gap analysis and long-range direction
+- `IMPLEMENTATION-PLAN.md` — milestone-oriented execution plan
+- `FUTURE-IMPROVEMENTS.md` — follow-up ideas and architectural extensions
+- `CONTRIBUTING.md` — contribution workflow and hygiene
 
 ## License
 
-This project is licensed under the MIT License. See [`LICENSE`](./LICENSE).
+MIT

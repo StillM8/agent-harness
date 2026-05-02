@@ -1,26 +1,43 @@
 import { join } from "node:path";
 
+import { getRuntimeConfig } from "./config/runtime.js";
 import { readJsonFileOrNull } from "./files.js";
 import { runDiscover } from "./discover.js";
 import { runMirror } from "./mirror.js";
 import { runInstall } from "./install.js";
 import { runActivate } from "./activate.js";
-import type { InstallProgressState, MirrorAcquireState } from "./types.js";
+import type {
+  HostTarget,
+  InstallProgressState,
+  MirrorAcquireState,
+} from "./types.js";
 
 const MIRROR_ACQUIRE_STATE_PATH = ["state", "mirror", "acquire-state.json"];
 const INSTALL_PROGRESS_STATE_PATH = ["state", "install", "progress.json"];
 
+/**
+ * Runs discover, mirror, install, activation, and shared activation phases for
+ * a workspace before the selected adapter performs final wire-in.
+ */
 export async function runWorkspacePipeline(options: {
   projectRoot: string;
   workspaceRoot: string;
   targetHost: "copilot-vscode" | "opencode";
+  recommendationHost: HostTarget;
   sessionIntent: string;
+  bundleIds: string[];
 }): Promise<void> {
-  const { projectRoot, workspaceRoot, targetHost, sessionIntent } = options;
-  const mirrorBatchSize = process.env.AGENT_HARNESS_MIRROR_BATCH_SIZE ?? "120";
-  const installBatchSize =
-    process.env.AGENT_HARNESS_INSTALL_BATCH_SIZE ?? "250";
-  const bundleIds = getBundleIdsForHost(targetHost);
+  const {
+    projectRoot,
+    workspaceRoot,
+    targetHost,
+    recommendationHost,
+    sessionIntent,
+    bundleIds,
+  } = options;
+  const config = getRuntimeConfig();
+  const mirrorBatchSize = String(config.batches.mirrorAcquire);
+  const installBatchSize = String(config.batches.installBundle);
 
   await runDiscover(["demand-profile"], workspaceRoot, projectRoot);
   await runDiscover(["sources"], workspaceRoot, projectRoot);
@@ -37,7 +54,15 @@ export async function runWorkspacePipeline(options: {
   );
   await runInstall(["reconcile"], workspaceRoot, projectRoot);
   await runActivate(
-    ["host", "--host", targetHost, "--intent", sessionIntent],
+    [
+      "host",
+      "--host",
+      targetHost,
+      "--recommendation-host",
+      recommendationHost,
+      "--intent",
+      sessionIntent,
+    ],
     workspaceRoot,
     projectRoot,
   );
@@ -48,6 +73,10 @@ export async function runWorkspacePipeline(options: {
   );
 }
 
+/**
+ * Repeatedly acquires mirror artifacts until the checkpoint reports completion
+ * or the safety batch limit is reached.
+ */
 async function acquireAllMirrorBatches(
   projectRoot: string,
   workspaceRoot: string,
@@ -74,6 +103,10 @@ async function acquireAllMirrorBatches(
   );
 }
 
+/**
+ * Installs every requested bundle in batches until each bundle is fully staged
+ * or the safety batch limit is reached.
+ */
 async function installBundleBatches(
   projectRoot: string,
   workspaceRoot: string,
@@ -108,14 +141,4 @@ async function installBundleBatches(
       }
     }
   }
-}
-
-function getBundleIdsForHost(
-  targetHost: "copilot-vscode" | "opencode",
-): string[] {
-  if (targetHost === "copilot-vscode") {
-    return ["copilot-core", "community-stable", "shared-mcp"];
-  }
-
-  return ["opencode-global", "community-stable", "shared-mcp"];
 }

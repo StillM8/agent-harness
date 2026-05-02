@@ -62,7 +62,15 @@ const ASSET_KINDS: AssetKind[] = [
   "reference-pack",
 ];
 
-const HOST_TARGETS: HostTarget[] = ["copilot-vscode", "opencode", "shared"];
+const HOST_TARGETS: HostTarget[] = [
+  "copilot-vscode",
+  "opencode",
+  "shared",
+  "cursor",
+  "zed",
+  "claude-code",
+  "pi",
+];
 
 const COMPATIBILITY_MODES: CompatibilityMode[] = [
   "native",
@@ -89,9 +97,7 @@ const UPSTREAM_TYPES = [
   "local",
 ] as const;
 const WIRE_PLAN_HOSTS = [
-  "copilot-vscode",
-  "opencode",
-  "shared",
+  ...HOST_TARGETS,
   "vscode-user",
   "opencode-project",
 ] as const;
@@ -1057,6 +1063,12 @@ export function assertCopilotWorkspaceProfileManifest(
   assertString(record.workspaceRoot, `${context}.workspaceRoot`);
   assertStringArray(record.bundleIds, `${context}.bundleIds`);
   assertStringArray(record.selectedAssetIds, `${context}.selectedAssetIds`);
+  if (record.selectedExtensionIds !== undefined) {
+    assertStringArray(
+      record.selectedExtensionIds,
+      `${context}.selectedExtensionIds`,
+    );
+  }
   assertNumber(record.activationBudget, `${context}.activationBudget`);
 }
 
@@ -1084,6 +1096,24 @@ export function assertWirePlanManifest(
   }
   if (record.pluginDirs !== undefined) {
     assertStringArray(record.pluginDirs, `${context}.pluginDirs`);
+  }
+  if (record.workflowFiles !== undefined) {
+    assertStringArray(record.workflowFiles, `${context}.workflowFiles`);
+  }
+  if (record.referenceFiles !== undefined) {
+    assertStringArray(record.referenceFiles, `${context}.referenceFiles`);
+  }
+  if (record.extensionIds !== undefined) {
+    assertStringArray(record.extensionIds, `${context}.extensionIds`);
+  }
+  if (record.mcpServers !== undefined) {
+    assertStringArray(record.mcpServers, `${context}.mcpServers`);
+  }
+  if (record.nativeInstallActions !== undefined) {
+    assertStringArray(
+      record.nativeInstallActions,
+      `${context}.nativeInstallActions`,
+    );
   }
   if (record.hookFiles !== undefined) {
     assertStringArray(record.hookFiles, `${context}.hookFiles`);

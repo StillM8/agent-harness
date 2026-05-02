@@ -16,6 +16,19 @@ The plan is organized into prioritized milestones and assigns, for every roadmap
 
 This plan replaces the earlier high-level vision document with a delivery-oriented plan that stays directly traceable to the roadmap.
 
+## v1.0.0 Execution Status
+
+The `release/v1.0.0` implementation wave delivers the plan as an integrated first stable release. The work is traceable through commits and issue references covering:
+
+- `M0`: domain folders, centralized runtime config, shared preflight diagnostics, and host/service seams
+- `M1`: OS-aware path resolution, home-relative local source seeds, cross-platform CI, and link lifecycle tests
+- `M2` and `M4`: scan budgets, richer ignore profiles, detector modules, generic repo artifact detection, roadmap-archetype detector fixtures, policy coverage reporting, and benchmark coverage
+- `M3`: source utilization reporting, docs/registry/marketplace reference harvesting, and dependency-evidence npm/PyPI candidate generation
+- `M5` and `M6`: lifecycle terminology in wire plans, extension selection/install planning, shared MCP projection, setup/doctor guidance, host adapters, capability matrices, native project-local auto-wiring for Cursor, Zed, Claude Code, and Pi, and independent recommendation policies per registered host
+- `M7`: package-style seams for config, discovery, wire, host adapters, path utilities, preflight/runtime validation, and host-native implementation modules under `src/host-adapters/`
+
+Validation for this release includes typecheck, lint, format check, build, unit/link lifecycle tests, scan benchmark budget checks, detection quality reporting, detector-to-policy coverage reporting, CLI smoke checks, recommendation fixture evaluation, and a Windows/macOS/Linux CI matrix.
+
 ## Planning Conventions
 
 ### Priority Scale
@@ -51,16 +64,16 @@ This plan replaces the earlier high-level vision document with a delivery-orient
 
 ## Milestone Summary
 
-| Milestone  | Goal                                                            | Priority | Included roadmap items       | Exit gate                                                                                        |
-| ---------- | --------------------------------------------------------------- | -------- | ---------------------------- | ------------------------------------------------------------------------------------------------ |
-| `M0` / #48 | Establish modular architecture foundations                      | `P0`     | `A1`, `A4`, `A5`, `A7`       | Shared config, validation, service boundaries, and domain folders exist and are used by new work |
-| `M1` / #49 | Make the project genuinely cross-platform                       | `P1`     | `P1` to `P6`, `S6`           | Windows, macOS, and Linux paths, source seeds, and wire flows all work under CI                  |
-| `M2` / #50 | Separate generic repo understanding from agent-asset harvesting | `P1`     | `G1`, `G2`, `G3`, `G5`, `G6` | Discovery can form meaningful demand profiles for non-agent and non-code-heavy repos             |
-| `M3` / #51 | Turn configured source breadth into effective source breadth    | `P1`     | `G4`, `S1` to `S5`, `S7`     | Declared source kinds and registry inputs materially affect catalog output                       |
-| `M4` / #52 | Make detection measurable, scalable, and maintainable           | `P1`     | `D1` to `D6`                 | Scan cost, detection quality, and signature extensibility are all tested and budgeted            |
-| `M5` / #53 | Make wire-in truly host-aware and user-assistive                | `P1`     | `W1` to `W7`                 | Staging, native install boundaries, auth guidance, and runtime readiness checks are explicit     |
-| `M6` / #54 | Generalize host support beyond VS Code and OpenCode             | `P1`     | `H1` to `H7`                 | New hosts can be added through a bounded adapter model instead of core rewrites                  |
-| `M7` / #55 | Reduce file and function complexity and create package seams    | `P2`     | `A2`, `A3`, `A6`, `A8`       | Oversized files are split, shared types are localized, and future package extraction is low-risk |
+| Milestone  | Goal                                                            | Priority | Included roadmap items       | Exit gate                                                                                                  |
+| ---------- | --------------------------------------------------------------- | -------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `M0` / #48 | Establish modular architecture foundations                      | `P0`     | `A1`, `A4`, `A5`, `A7`       | Shared config, validation, service boundaries, and domain folders exist and are used by new work           |
+| `M1` / #49 | Make the project genuinely cross-platform                       | `P1`     | `P1` to `P6`, `S6`           | Windows, macOS, and Linux paths, source seeds, and wire flows all work under CI                            |
+| `M2` / #50 | Separate generic repo understanding from agent-asset harvesting | `P1`     | `G1`, `G2`, `G3`, `G5`, `G6` | Discovery can form meaningful demand profiles for non-agent and non-code-heavy repos                       |
+| `M3` / #51 | Turn configured source breadth into effective source breadth    | `P1`     | `G4`, `S1` to `S5`, `S7`     | Declared source kinds and registry inputs materially affect catalog output                                 |
+| `M4` / #52 | Make detection measurable, scalable, and maintainable           | `P1`     | `D1` to `D6`                 | Scan cost, detection quality, and signature extensibility are all tested and budgeted                      |
+| `M5` / #53 | Make wire-in truly host-aware and user-assistive                | `P1`     | `W1` to `W7`                 | Staging, native install boundaries, auth guidance, and runtime readiness checks are explicit               |
+| `M6` / #54 | Generalize host support beyond VS Code and OpenCode             | `P1`     | `H1` to `H7`                 | Additional non-default hosts can be integrated through adapter and config changes instead of core rewrites |
+| `M7` / #55 | Reduce file and function complexity and create package seams    | `P2`     | `A2`, `A3`, `A6`, `A8`       | Oversized files are split, shared types are localized, and future package extraction is low-risk           |
 
 ## Milestone M0 — Modular Architecture Foundations
 
@@ -130,15 +143,15 @@ This plan replaces the earlier high-level vision document with a delivery-orient
 
 ## Milestone M6 — Host Extensibility Beyond VS Code and OpenCode
 
-| ID         | From roadmap         | Implementation work                                                                                                                           | Priority | Effort | Suggested owner    | Dependencies                       | Definition of done                                                                                              |
-| ---------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ | ------------------ | ---------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `H1` / #37 | Gap Matrix 6 / Row 1 | Replace the closed `HostTarget` union with a host registry or adapter contract that supports registration of new hosts                        | `P1`     | `M`    | `Architecture`     | `A1`, `A5`                         | New hosts can be registered through a bounded adapter surface instead of core union edits                       |
-| `H2` / #38 | Gap Matrix 6 / Row 2 | Refactor `workspace` and `wire` orchestration to dispatch through registered host adapters rather than hardcoded host names                   | `P1`     | `M`    | `Host Integration` | `H1`                               | `workspace` and `wire` accept any registered host adapter                                                       |
-| `H3` / #39 | Gap Matrix 6 / Row 3 | Move host bundle defaults and policy choices into per-host configuration objects or manifests                                                 | `P1`     | `M`    | `Host Integration` | `H1`                               | New hosts can define default bundles without touching central switch logic                                      |
-| `H4` / #40 | Gap Matrix 6 / Row 4 | Replace bespoke host modules with a reusable adapter skeleton covering paths, projection, settings, and reset semantics                       | `P1`     | `L`    | `Host Integration` | `H1`, `H2`                         | Most new host integrations reuse a common adapter pattern rather than starting from scratch                     |
-| `H5` / #41 | Gap Matrix 6 / Row 5 | Add a formal capability matrix mapping asset kinds to host behaviors such as stage, wire, native install, auth assist, and runtime validation | `P1`     | `M`    | `Architecture`     | `H1`                               | Host support and asset compatibility can be reasoned about from a single model                                  |
-| `H6` / #42 | Gap Matrix 6 / Row 6 | Generalize recommendation, activation, and profile emission flows so each host can emit its own selected-assets manifest shape                | `P2`     | `M`    | `Host Integration` | `H3`, `H5`                         | New host support includes recommendation, activation, and wire-plan generation end to end                       |
-| `H7` / #43 | Gap Matrix 6 / Row 7 | Prove the adapter model by integrating at least two additional non-default hosts such as Cursor, Zed, Claude Code, Codex, or Droid            | `P2`     | `L`    | `Architecture`     | `H1`, `H2`, `H3`, `H4`, `H5`, `H6` | The second and third new host integrations land mostly through adapter and config work instead of core rewrites |
+| ID         | From roadmap         | Implementation work                                                                                                                                                                              | Priority | Effort | Suggested owner    | Dependencies                       | Definition of done                                                                                            |
+| ---------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ------ | ------------------ | ---------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `H1` / #37 | Gap Matrix 6 / Row 1 | Replace the closed `HostTarget` union with a host registry or adapter contract that supports registration of new hosts                                                                           | `P1`     | `M`    | `Architecture`     | `A1`, `A5`                         | New hosts can be registered through a bounded adapter surface instead of core union edits                     |
+| `H2` / #38 | Gap Matrix 6 / Row 2 | Refactor `workspace` and `wire` orchestration to dispatch through registered host adapters rather than hardcoded host names                                                                      | `P1`     | `M`    | `Host Integration` | `H1`                               | `workspace` and `wire` accept any registered host adapter                                                     |
+| `H3` / #39 | Gap Matrix 6 / Row 3 | Move host bundle defaults and policy choices into per-host configuration objects or manifests                                                                                                    | `P1`     | `M`    | `Host Integration` | `H1`                               | New hosts can define default bundles without touching central switch logic                                    |
+| `H4` / #40 | Gap Matrix 6 / Row 4 | Replace bespoke host modules with a reusable adapter skeleton covering paths, projection, settings, and reset semantics                                                                          | `P1`     | `L`    | `Host Integration` | `H1`, `H2`                         | Most new host integrations reuse a common adapter pattern rather than starting from scratch                   |
+| `H5` / #41 | Gap Matrix 6 / Row 5 | Add a formal capability matrix mapping asset kinds to host behaviors such as stage, wire, native install, auth assist, and runtime validation                                                    | `P1`     | `M`    | `Architecture`     | `H1`                               | Host support and asset compatibility can be reasoned about from a single model                                |
+| `H6` / #42 | Gap Matrix 6 / Row 6 | Generalize recommendation, activation, and profile emission flows so each host can emit its own selected-assets manifest shape                                                                   | `P2`     | `M`    | `Host Integration` | `H3`, `H5`                         | New host support includes recommendation, activation, and wire-plan generation end to end                     |
+| `H7` / #43 | Gap Matrix 6 / Row 7 | Prove the adapter model by integrating additional non-default hosts such as Cursor, Zed, Claude Code, Pi, Codex, or Droid primarily through adapter and config changes rather than core rewrites | `P2`     | `L`    | `Architecture`     | `H1`, `H2`, `H3`, `H4`, `H5`, `H6` | Additional non-default host integrations land mostly through adapter and config work instead of core rewrites |
 
 ## Milestone M7 — Complexity Reduction and Future Package Seams
 
@@ -195,7 +208,7 @@ Start execution in milestone tracking issues #48 and #49. Treat wave `0A` as the
 | `M3`      | Configured source breadth translates into measurable harvested breadth and reportable utilization                     |
 | `M4`      | Detection quality and performance are budgeted, benchmarked, and regression-tested                                    |
 | `M5`      | Wire-in and setup flows distinguish staged vs installed assets and guide users through auth and runtime prerequisites |
-| `M6`      | At least two additional hosts are supported through the adapter model with minimal core rewrites                      |
+| `M6`      | Additional non-default host integrations prove the adapter model with minimal core rewrites                           |
 | `M7`      | Oversized files are reduced, shared types are localized, and package extraction becomes low-risk                      |
 
 ## Tracking Recommendation

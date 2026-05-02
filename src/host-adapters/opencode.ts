@@ -13,8 +13,9 @@ import {
   toPosixPath,
   writeJsonFile,
   writeTextFile,
-} from "./files.js";
-import { assertWirePlanManifest } from "./manifest-validation.js";
+} from "../files.js";
+import { assertWirePlanManifest } from "../manifest-validation.js";
+import { readSharedMcpAssetIds } from "../lib/shared-mcp.js";
 import type {
   ActivationManifest,
   AssetKind,
@@ -22,7 +23,7 @@ import type {
   InstalledPackageManifest,
   WirePlanManifest,
   WirePreviewManifest,
-} from "./types.js";
+} from "../types.js";
 
 const OPENCODE_DIRECTORY_BY_ASSET_KIND: Record<AssetKind, string> = {
   agent: "agents",
@@ -51,10 +52,6 @@ export async function wireOpenCode(options: {
 }): Promise<void> {
   const { projectRoot, workspaceRoot, mode } = options;
   const activationRoot = join(projectRoot, "activate", "opencode");
-  const activationManifest = await readJsonFileOrNull<ActivationManifest>(
-    join(activationRoot, "activation-manifest.json"),
-  );
-
   const localOverlayRoot = join(workspaceRoot, ".opencode");
   const localContextRoot = join(
     localOverlayRoot,
@@ -106,6 +103,11 @@ export async function wireOpenCode(options: {
   await removeManagedLinks(previousWirePlan?.linkedPaths ?? []);
   await ensureDirectory(localContextRoot);
 
+  const activationManifest = await readJsonFileOrNull<ActivationManifest>(
+    join(activationRoot, "activation-manifest.json"),
+  );
+  const sharedMcpAssetIds = await readSharedMcpAssetIdsBestEffort(projectRoot);
+
   await writeJsonFile(
     join(localContextRoot, "activation-manifest.json"),
     activationManifest ?? {
@@ -144,10 +146,12 @@ export async function wireOpenCode(options: {
     workspaceRoot: toPosixPath(workspaceRoot),
     runtimeRoot: toPosixPath(localOverlayRoot),
     linkedPaths: createdLinkPaths.map(toPosixPath),
+    mcpServers: sharedMcpAssetIds,
     notes: [
       "Project-local OpenCode overlay written under .opencode/context/project-intelligence/agent-harness.",
       "Selected assets are linked into project-local .opencode installation directories by asset kind.",
       "On Windows, managed directory links are created as junctions for compatibility.",
+      "Shared MCP assets are surfaced in the effective OpenCode wire plan when available.",
     ],
   };
 
@@ -226,6 +230,23 @@ async function resolveOpenCodeLinkedAssets(options: {
   return linkedAssets.sort((left, right) =>
     left.linkPath.localeCompare(right.linkPath),
   );
+}
+
+/**
+ * Projects shared MCP references into OpenCode wire plans without failing the
+ * project-local apply when shared activation state is stale or malformed.
+ */
+async function readSharedMcpAssetIdsBestEffort(
+  projectRoot: string,
+): Promise<string[]> {
+  try {
+    return await readSharedMcpAssetIds(projectRoot);
+  } catch (error) {
+    console.warn(
+      `Failed to project shared MCP assets into OpenCode wire plan: ${toLoggableErrorMessage(error)}`,
+    );
+    return [];
+  }
 }
 
 async function removeManagedAgentsSection(
