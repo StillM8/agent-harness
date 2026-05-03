@@ -11,6 +11,9 @@ import {
   writeJsonFile,
   writeJsonFileWithSnapshot,
 } from "./files.js";
+import { listHostAdapters } from "./host-adapters/registry.js";
+import { getOptionValue } from "./lib/cli-options.js";
+import { isPathWithinRoot, sanitizeAssetId } from "./lib/safe-paths.js";
 import {
   assertActivationManifest,
   assertCopilotWorkspaceProfileManifest,
@@ -39,15 +42,7 @@ const ACTIVATION_HOSTS = [
   "copilot-vscode",
   "shared",
 ] as const satisfies readonly ActivationHost[];
-const HOST_TARGETS = [
-  "copilot-vscode",
-  "opencode",
-  "shared",
-  "cursor",
-  "zed",
-  "claude-code",
-  "pi",
-] as const satisfies readonly HostTarget[];
+const SHARED_HOST_TARGET = "shared" as const satisfies HostTarget;
 
 export async function runActivate(
   args: string[],
@@ -173,14 +168,35 @@ async function activateHost(
     );
 
     for (const pkg of bundleManifest.packages) {
+      if (
+        !isPathWithinRoot(join(projectRoot, "install", host), pkg.manifestPath)
+      ) {
+        throw new Error(
+          `Refusing to activate package manifest outside install root: ${pkg.manifestPath}`,
+        );
+      }
+
       const packageManifest = await readJsonFile<InstalledPackageManifest>(
         pkg.manifestPath,
         assertInstalledPackageManifest,
       );
       if (
+        !isPathWithinRoot(
+          join(projectRoot, "install", host, "packages"),
+          packageManifest.filesRoot,
+        )
+      ) {
+        throw new Error(
+          `Refusing to activate files outside package root: ${packageManifest.filesRoot}`,
+        );
+      }
+      if (
         currentGeneration &&
         !currentGeneration.packageManifestPaths.includes(pkg.manifestPath)
       ) {
+        continue;
+      }
+      if (!packageManifest.activationEligible) {
         continue;
       }
       const destinationRoot = join(
@@ -372,10 +388,6 @@ function getDefaultBundleIdsForHost(host: ActivationHost): string[] {
   }
 
   return ["shared-mcp"];
-}
-
-function sanitizeAssetId(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_-]+/gu, "-");
 }
 
 function buildCopilotProfileId(assetIds: string[]): string {
@@ -711,24 +723,6 @@ async function resetActivationState(projectRoot: string): Promise<void> {
   );
 }
 
-function getOptionValue(
-  args: string[],
-  optionName: string,
-): string | undefined {
-  const optionIndex = args.indexOf(optionName);
-
-  if (optionIndex === -1) {
-    return undefined;
-  }
-
-  const value = args[optionIndex + 1];
-  if (!value || value.startsWith("--")) {
-    throw new Error(`Missing value for ${optionName}.`);
-  }
-
-  return value;
-}
-
 /**
  * Reads an optional CLI flag value and fails fast when the flag is present
  * without a concrete value.
@@ -751,20 +745,23 @@ function parseHostTargetOption(
     return undefined;
   }
 
-  if (isHostTarget(value)) {
+  const targets = getHostTargets();
+  if (targets.includes(value as HostTarget)) {
     return value;
   }
 
   throw new Error(
-    `Invalid ${optionName} value: ${value}. Must be one of: ${HOST_TARGETS.join(", ")}`,
+    `Invalid ${optionName} value: ${value}. Must be one of: ${targets.join(", ")}`,
   );
 }
 
-/**
- * Returns whether a string is a supported recommendation host identifier.
- */
-function isHostTarget(value: string): value is HostTarget {
-  return HOST_TARGETS.includes(value as HostTarget);
+function getHostTargets(): HostTarget[] {
+  return [
+    ...new Set([
+      SHARED_HOST_TARGET,
+      ...listHostAdapters().map((adapter) => adapter.recommendationHost),
+    ]),
+  ];
 }
 
 /**

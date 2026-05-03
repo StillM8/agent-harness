@@ -21,10 +21,21 @@ export const DEFAULT_IGNORED_DIRECTORY_NAMES = new Set([
   ".next",
   ".nuxt",
   ".tmp",
+  ".agent-harness",
+  ".claude",
+  ".cursor",
+  ".opencode",
+  ".pi",
+  ".zed",
+  "activate",
   "build",
   "coverage",
   "dist",
+  "discover/output",
+  "install",
+  "mirror",
   "node_modules",
+  "state",
   "vendor",
   ".cache",
   ".gradle",
@@ -360,6 +371,15 @@ export interface ScanBudgetOptions {
   maxBytes?: number;
 }
 
+interface IgnorePattern {
+  raw: string;
+  normalized: string;
+  directoryOnly: boolean;
+  basenameOnly: boolean;
+  negated: boolean;
+  regex: RegExp;
+}
+
 export interface ScanBudgetTelemetry {
   visitedFiles: number;
   visitedBytes: number;
@@ -390,9 +410,12 @@ export async function listFilesRecursiveWithTelemetry(
     visitedBytes: 0,
     truncated: false,
   };
+  const ignorePatterns = await loadIgnorePatterns(rootPath);
   const files = await collectFilesFromDirectory(
     rootPath,
+    rootPath,
     ignoredDirectoryNames,
+    ignorePatterns,
     {
       maxDepth: budgetOptions.maxDepth ?? runtimeBudget.maxDepth,
       maxFiles: budgetOptions.maxFiles ?? runtimeBudget.maxFiles,
@@ -408,8 +431,10 @@ export async function listFilesRecursiveWithTelemetry(
 }
 
 async function collectFilesFromDirectory(
+  rootPath: string,
   directoryPath: string,
   ignoredDirectoryNames: ReadonlySet<string>,
+  ignorePatterns: IgnorePattern[],
   budgetOptions: Required<ScanBudgetOptions>,
   telemetry: ScanBudgetTelemetry,
   depth: number,
@@ -433,9 +458,17 @@ async function collectFilesFromDirectory(
     }
 
     const entryPath = `${directoryPath}${sep}${entry.name}`;
+    const relativeEntryPath = toRelativePosixPath(rootPath, entryPath);
 
     if (entry.isDirectory()) {
-      if (ignoredDirectoryNames.has(entry.name)) {
+      if (
+        ignoredDirectoryNames.has(entry.name) ||
+        shouldSkipIgnoredDirectory(
+          relativeEntryPath,
+          entry.name,
+          ignorePatterns,
+        )
+      ) {
         continue;
       }
 
@@ -445,8 +478,10 @@ async function collectFilesFromDirectory(
       }
 
       const nestedFiles = await collectFilesFromDirectory(
+        rootPath,
         entryPath,
         ignoredDirectoryNames,
+        ignorePatterns,
         budgetOptions,
         telemetry,
         depth + 1,
@@ -456,6 +491,12 @@ async function collectFilesFromDirectory(
     }
 
     if (entry.isFile()) {
+      if (
+        isIgnoredByPattern(relativeEntryPath, entry.name, false, ignorePatterns)
+      ) {
+        continue;
+      }
+
       let fileSize: number;
       try {
         fileSize = (await lstat(entryPath)).size;
@@ -483,4 +524,152 @@ async function collectFilesFromDirectory(
   }
 
   return collectedFiles;
+}
+
+async function loadIgnorePatterns(rootPath: string): Promise<IgnorePattern[]> {
+  const ignoreFileNames = [".agent-harnessignore", ".gitignore", ".ignore"];
+  const patterns: IgnorePattern[] = [];
+
+  for (const ignoreFileName of ignoreFileNames) {
+    const content = await readTextFileOrNull(
+      `${rootPath}${sep}${ignoreFileName}`,
+    );
+    if (!content) {
+      continue;
+    }
+
+    patterns.push(...parseIgnorePatterns(content));
+  }
+
+  return patterns;
+}
+
+function parseIgnorePatterns(content: string): IgnorePattern[] {
+  return content
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"))
+    .map((line) => {
+      const negated = line.startsWith("!");
+      const patternText = negated ? line.slice(1) : line;
+      const directoryOnly = patternText.endsWith("/");
+      const normalized = patternText
+        .replace(/^\/+|\/+$/gu, "")
+        .replace(/\\/gu, "/");
+      return {
+        raw: line,
+        normalized,
+        directoryOnly,
+        basenameOnly: !normalized.includes("/"),
+        negated,
+        regex: globPatternToRegExp(normalized),
+      };
+    })
+    .filter((pattern) => pattern.normalized.length > 0);
+}
+
+function isIgnoredByPattern(
+  relativePath: string,
+  basenameValue: string,
+  isDirectory: boolean,
+  patterns: IgnorePattern[],
+): boolean {
+  let ignored = false;
+
+  for (const pattern of patterns) {
+    if (
+      !matchesIgnorePattern(relativePath, basenameValue, isDirectory, pattern)
+    ) {
+      continue;
+    }
+
+    ignored = !pattern.negated;
+  }
+
+  return ignored;
+}
+
+function shouldSkipIgnoredDirectory(
+  relativePath: string,
+  basenameValue: string,
+  patterns: IgnorePattern[],
+): boolean {
+  return (
+    isIgnoredByPattern(relativePath, basenameValue, true, patterns) &&
+    !patterns.some(
+      (pattern) =>
+        pattern.negated &&
+        !pattern.basenameOnly &&
+        patternMayMatchDescendant(pattern, relativePath),
+    )
+  );
+}
+
+function matchesIgnorePattern(
+  relativePath: string,
+  basenameValue: string,
+  isDirectory: boolean,
+  pattern: IgnorePattern,
+): boolean {
+  if (pattern.directoryOnly && !isDirectory) {
+    return false;
+  }
+
+  if (pattern.basenameOnly) {
+    return pattern.regex.test(basenameValue);
+  }
+
+  if (pattern.regex.test(relativePath)) {
+    return true;
+  }
+
+  if (pattern.normalized.endsWith("/**")) {
+    return relativePath === pattern.normalized.slice(0, -3);
+  }
+
+  return false;
+}
+
+function patternMayMatchDescendant(
+  pattern: IgnorePattern,
+  relativeDirectoryPath: string,
+): boolean {
+  const literalPrefix = pattern.normalized
+    .split(/[?*]/u)[0]
+    .replace(/\/+$/u, "");
+  return (
+    pattern.normalized === relativeDirectoryPath ||
+    pattern.normalized.startsWith(`${relativeDirectoryPath}/`) ||
+    literalPrefix === relativeDirectoryPath ||
+    literalPrefix.startsWith(`${relativeDirectoryPath}/`)
+  );
+}
+
+function globPatternToRegExp(pattern: string): RegExp {
+  let expression = "^";
+
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index];
+    const nextCharacter = pattern[index + 1];
+
+    if (character === "*" && nextCharacter === "*") {
+      expression += ".*";
+      index += 1;
+      continue;
+    }
+
+    if (character === "*") {
+      expression += "[^/]*";
+      continue;
+    }
+
+    if (character === "?") {
+      expression += "[^/]";
+      continue;
+    }
+
+    expression += escapeRegExp(character);
+  }
+
+  return new RegExp(`${expression}$`, "u");
 }

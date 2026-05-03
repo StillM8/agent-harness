@@ -3,7 +3,12 @@
 import { fileURLToPath } from "node:url";
 
 import { resolveProjectRoot } from "./files.js";
-import { resolveHostAdapter } from "./host-adapters/registry.js";
+import { getOptionValue } from "./lib/cli-options.js";
+import {
+  listHostAdapters,
+  resolveHostAdapter,
+} from "./host-adapters/registry.js";
+import { collectActivatedAssetPrerequisiteDiagnostics } from "./lib/asset-prerequisites.js";
 import {
   assertNoPreflightErrors,
   formatPreflightDiagnostics,
@@ -41,7 +46,7 @@ export async function runWorkspace(
     ...(await runHostPreflight(hostAdapter.lifecycleHost, {
       requireHostPaths: requiresLifecycleHostPaths,
     })),
-    ...(await runAdapterPreflight(hostAdapter.id)),
+    ...(await runAdapterPreflight(hostAdapter)),
   ];
   if (diagnostics.length > 0) {
     console.log(formatPreflightDiagnostics(diagnostics));
@@ -56,6 +61,18 @@ export async function runWorkspace(
     sessionIntent,
     bundleIds: hostAdapter.defaultBundleIds,
   });
+
+  const prerequisiteDiagnostics =
+    await collectActivatedAssetPrerequisiteDiagnostics(
+      projectRoot,
+      hostAdapter,
+      { missingEnvSeverity: "error" },
+    );
+  if (prerequisiteDiagnostics.length > 0) {
+    console.log(formatPreflightDiagnostics(prerequisiteDiagnostics));
+  }
+  assertNoPreflightErrors(prerequisiteDiagnostics);
+
   await hostAdapter.wire({
     projectRoot,
     workspaceRoot: workingDirectory,
@@ -65,32 +82,21 @@ export async function runWorkspace(
 }
 
 function printWorkspaceHelp(): void {
+  const commands = listHostAdapters()
+    .map(
+      (adapter) =>
+        `  ${getPreferredHostCommand(adapter.id).padEnd(12)} Run the full pipeline and wire ${adapter.displayName}`,
+    )
+    .join("\n");
   console.log(`workspace commands:
-  vscode    Run the full agent-harness pipeline for a VS Code / Copilot workspace
-  opencode  Run the full agent-harness pipeline for an OpenCode workspace
-  cursor       Run the Copilot-compatible pipeline and wire Cursor project files
-  zed          Run the OpenCode-compatible pipeline and wire Zed project files
-  claude-code  Run the OpenCode-compatible pipeline and wire Claude Code project files
-  pi           Run the OpenCode-compatible pipeline and wire Pi project files
+${commands}
 
 Options:
   --intent <general|frontend|backend|security|docs|testing>`);
 }
 
-/**
- * Returns a CLI option value by flag name without interpreting absent options.
- */
-function getOptionValue(
-  args: string[],
-  optionName: string,
-): string | undefined {
-  const optionIndex = args.indexOf(optionName);
-
-  if (optionIndex === -1) {
-    return undefined;
-  }
-
-  return args[optionIndex + 1];
+function getPreferredHostCommand(adapterId: string): string {
+  return adapterId === "copilot-vscode" ? "vscode" : adapterId;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

@@ -1,32 +1,24 @@
 import { join } from "node:path";
 
-import { getRuntimeConfig } from "./config/runtime.js";
 import { readJsonFileOrNull, readTextFileOrNull } from "./files.js";
+import { sanitizeAssetId } from "./lib/safe-paths.js";
 import { fetchOfficialIndexPageContent } from "./official-index.js";
 import type { AssetCatalogEntry } from "./types.js";
 
 export async function resolveAssetContent(options: {
-  projectRoot: string;
   activationRoot: string;
   assetId: string;
 }): Promise<{ asset: AssetCatalogEntry; content: string } | null> {
+  const sanitizedId = sanitizeAssetId(options.assetId);
   const asset = await readJsonFileOrNull<AssetCatalogEntry>(
-    join(
-      options.activationRoot,
-      sanitizeAssetId(options.assetId),
-      "asset.json",
-    ),
+    join(options.activationRoot, sanitizedId, "asset.json"),
   );
   if (!asset) {
     return null;
   }
 
   const mirroredContent = await readTextFileOrNull(
-    join(
-      options.activationRoot,
-      sanitizeAssetId(options.assetId),
-      "content.txt",
-    ),
+    join(options.activationRoot, sanitizedId, "content.txt"),
   );
 
   if (shouldUseMirroredContent(asset, mirroredContent)) {
@@ -36,21 +28,9 @@ export async function resolveAssetContent(options: {
     };
   }
 
-  const githubContent = await resolveGitHubAssetContent(asset);
-  if (githubContent) {
-    return { asset, content: githubContent };
-  }
-
   const officialSkillPageContent = await resolveOfficialSkillPageContent(asset);
   if (officialSkillPageContent) {
     return { asset, content: officialSkillPageContent };
-  }
-
-  if (mirroredContent) {
-    return {
-      asset,
-      content: buildMetadataFallback(asset, mirroredContent),
-    };
   }
 
   return {
@@ -60,77 +40,34 @@ export async function resolveAssetContent(options: {
 }
 
 function shouldUseMirroredContent(
-  asset: AssetCatalogEntry,
+  _asset: AssetCatalogEntry,
   mirroredContent: string | null,
 ): boolean {
-  if (!mirroredContent) {
-    return false;
-  }
-
-  if (asset.install.method === "official-index-entry") {
-    return true;
-  }
-
-  if (asset.install.method === "local-file") {
-    return true;
-  }
-
-  if (
-    asset.source.sourceKind === "local-directory" ||
-    asset.source.sourceKind === "local-manifest"
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-async function resolveGitHubAssetContent(
-  asset: AssetCatalogEntry,
-): Promise<string | null> {
-  const repoInfo = parseGitHubRepoInfo(asset);
-  if (!repoInfo || !asset.evidence.filePath) {
-    return null;
-  }
-
-  const rawUrlCandidates = buildGitHubRawUrlCandidates(
-    repoInfo.owner,
-    repoInfo.repo,
-    asset.evidence.filePath,
-  );
-
-  for (const rawUrl of rawUrlCandidates) {
-    try {
-      const response = await fetch(rawUrl, {
-        headers: buildGitHubHeaders(),
-      });
-      if (!response.ok) {
-        continue;
-      }
-
-      return await response.text();
-    } catch {
-      continue;
-    }
-  }
-
-  return null;
+  return Boolean(mirroredContent);
 }
 
 async function resolveOfficialSkillPageContent(
   asset: AssetCatalogEntry,
 ): Promise<string | null> {
-  if (!asset.source.originUrl.includes("officialskills.sh/")) {
+  let originUrl: URL;
+  try {
+    originUrl = new URL(asset.source.originUrl);
+  } catch {
+    return null;
+  }
+
+  const hostname = originUrl.hostname.toLowerCase();
+  if (
+    hostname !== "officialskills.sh" &&
+    !hostname.endsWith(".officialskills.sh")
+  ) {
     return null;
   }
 
   return fetchOfficialIndexPageContent(asset.source.originUrl);
 }
 
-function buildMetadataFallback(
-  asset: AssetCatalogEntry,
-  mirroredContent?: string,
-): string {
+function buildMetadataFallback(asset: AssetCatalogEntry): string {
   const lines = [
     `# ${asset.displayName}`,
     "",
@@ -144,65 +81,5 @@ function buildMetadataFallback(
     ...asset.capabilities.map((capability) => `- ${capability}`),
   ];
 
-  if (mirroredContent) {
-    lines.push(
-      "",
-      "## Mirrored content snapshot",
-      "",
-      "```json",
-      mirroredContent,
-      "```",
-    );
-  }
-
   return `${lines.join("\n").trim()}\n`;
-}
-
-function parseGitHubRepoInfo(
-  asset: AssetCatalogEntry,
-): { owner: string; repo: string } | null {
-  const urlsToCheck = [asset.source.originUrl, asset.evidence.rootPath].filter(
-    (value): value is string => typeof value === "string",
-  );
-
-  for (const url of urlsToCheck) {
-    const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)/iu.exec(url);
-    if (match) {
-      return {
-        owner: match[1],
-        repo: match[2].replace(/\.git$/u, ""),
-      };
-    }
-  }
-
-  return null;
-}
-
-function buildGitHubRawUrlCandidates(
-  owner: string,
-  repo: string,
-  filePath: string,
-): string[] {
-  const possibleBranches = ["main", "master"];
-  return possibleBranches.map(
-    (branch) =>
-      `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`,
-  );
-}
-
-function sanitizeAssetId(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_-]+/gu, "-");
-}
-
-function buildGitHubHeaders(): HeadersInit {
-  const headers: Record<string, string> = {
-    "User-Agent": "agent-harness",
-  };
-
-  const githubToken = getRuntimeConfig().github.token;
-  if (githubToken) {
-    headers.Authorization = `Bearer ${githubToken}`;
-  }
-
-  return headers;
 }

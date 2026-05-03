@@ -6,7 +6,7 @@
 [![Quality](https://github.com/ar27111994/agent-harness/actions/workflows/quality.yml/badge.svg)](https://github.com/ar27111994/agent-harness/actions/workflows/quality.yml)
 [![Latest Release](https://img.shields.io/github/v/release/ar27111994/agent-harness?display_name=tag)](https://github.com/ar27111994/agent-harness/releases)
 
-`agent-harness` is a Node.js 22+ TypeScript CLI for discovering, curating, staging, activating, and wiring reusable AI-agent assets into developer workspaces.
+`agent-harness` is a Node.js 22+ TypeScript CLI, published as `@ar27111994/agent-harness`, for discovering, curating, staging, activating, and wiring reusable AI-agent assets into developer workspaces.
 
 It is built around one generic command surface and a host-adapter model. The lifecycle stays consistent across hosts, while each adapter owns the host-specific files, settings, and reset behavior required by VS Code / GitHub Copilot, OpenCode, Cursor, Zed, Claude Code, and Pi.
 
@@ -39,8 +39,10 @@ It is built around one generic command surface and a host-adapter model. The lif
 3. Harvests candidate agent assets from local sources, source packs, documentation sources, package registries, and marketplace references.
 4. Mirrors selected assets into reproducible local artifacts.
 5. Installs mirrored assets into lifecycle-host package stores.
-6. Activates ranked assets into host runtime views.
-7. Wires the activated assets into a target workspace through a selected host adapter.
+6. Executes explicit host-native install/verify/remove operations where an adapter supports them.
+7. Recomputes ranked recommendations from selected catalog entries.
+8. Activates ranked assets into host runtime views.
+9. Wires the activated assets into a target workspace through a selected host adapter.
 
 The goal is to make high-quality reusable agent context portable across tools without hardcoding one workstation, one operating system, or one AI host.
 
@@ -48,15 +50,15 @@ The goal is to make high-quality reusable agent context portable across tools wi
 
 The project intentionally separates these stages:
 
-| Stage       | Purpose                                                                                             | Typical output                                      |
-| ----------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `discover`  | Build demand profiles, source indexes, catalogs, selections, and source-utilization reports.        | `discover/output/`, `discover/catalog.assets.jsonl` |
-| `mirror`    | Build mirror plans, bundle locks, raw artifact caches, quarantine data, and audit records.          | `mirror/`                                           |
-| `install`   | Stage mirrored packages into lifecycle-host package stores and reconcile generations.               | `install/`                                          |
-| `recommend` | Rank assets per recommendation host using policy, demand signals, trust, cost, diversity, and caps. | `state/recommendations.json`                        |
-| `activate`  | Materialize active runtime views for lifecycle hosts from installed packages and recommendations.   | `activate/`                                         |
-| `wire`      | Apply, preview, or reset host-specific workspace integration.                                       | host-specific files plus wire plans                 |
-| `workspace` | Run the end-to-end lifecycle for a selected host and then apply wire-in.                            | full pipeline output                                |
+| Stage       | Purpose                                                                                              | Typical output                                      |
+| ----------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `discover`  | Build demand profiles, source indexes, catalogs, selections, and source-utilization reports.         | `discover/output/`, `discover/catalog.assets.jsonl` |
+| `mirror`    | Build mirror plans, bundle locks, raw artifact caches, quarantine data, and audit records.           | `mirror/`                                           |
+| `install`   | Stage mirrored packages, reconcile generations, and explicitly run supported host-native installers. | `install/`, `state/install/`                        |
+| `recommend` | Rank assets per recommendation host using policy, demand signals, trust, cost, diversity, and caps.  | `state/recommendations.json`                        |
+| `activate`  | Materialize active runtime views for lifecycle hosts from installed packages and recommendations.    | `activate/`                                         |
+| `wire`      | Preview by default, or explicitly apply/reset host-specific workspace integration.                   | host-specific files plus wire plans                 |
+| `workspace` | Run the end-to-end lifecycle for a selected host and then apply wire-in.                             | full pipeline output                                |
 
 Two host concepts are important:
 
@@ -64,6 +66,8 @@ Two host concepts are important:
 - **Recommendation host**: the host-specific policy used for ranking and budgets.
 
 Some adapters intentionally reuse another lifecycle host while keeping their own recommendation host. For example, Cursor reuses the Copilot-compatible lifecycle host but ranks through the `cursor` policy.
+
+`wire <host>` is intentionally non-mutating unless you pass `--apply` or `--reset`; use the default preview mode to inspect target paths and planned writes before changing host files.
 
 ## Supported hosts
 
@@ -95,7 +99,13 @@ agent-harness setup hosts
   - `GITHUB_PERSONAL_ACCESS_TOKEN`
   - or `GITHUB_TOKEN`
 
-### Install dependencies
+### Install the CLI package
+
+```bash
+npm install -g @ar27111994/agent-harness
+```
+
+For local development from this repository, install dependencies instead:
 
 ```bash
 npm install
@@ -109,13 +119,13 @@ npm run build
 
 ### Optional local environment
 
-Runtime configuration is centralized in `src/config/runtime.ts`. `.env.example` documents supported variables. The CLI automatically loads a `.env` file from the current working directory before dispatching commands, without overriding variables that are already exported by your shell.
+Runtime configuration is centralized in `src/config/runtime.ts`. `.env.example` documents supported variables. The CLI automatically loads a `.env` file from the current working directory before dispatching commands, without overriding variables that are already exported by your shell. Use `--no-dotenv` for hermetic CI/smoke runs.
 
 ```bash
 cp .env.example .env
 ```
 
-Use `.env` for local machine values such as GitHub tokens, batch sizes, and scan budgets. Keep real secrets out of git.
+Use `.env` for local machine values such as GitHub tokens, batch sizes, scan budgets, and optional state-root overrides. Keep real secrets out of git.
 
 ### Inspect host readiness
 
@@ -130,7 +140,7 @@ agent-harness setup doctor --host claude-code
 agent-harness setup doctor --host pi
 ```
 
-`setup doctor` prints each adapter’s lifecycle host, recommendation host, default bundles, advertised capabilities, lifecycle preflight diagnostics, and adapter-specific CLI readiness diagnostics. Missing optional host CLIs are reported as warnings unless the selected operation requires a writable host-native path.
+`setup doctor` prints each adapter’s lifecycle host, recommendation host, default bundles, runtime executable, advertised capabilities, lifecycle preflight diagnostics, adapter-specific CLI readiness diagnostics, and activated asset prerequisite guidance. Missing optional host CLIs are reported as warnings unless the selected operation requires a writable host-native path or native installer runtime.
 
 ### Run a full workspace pipeline
 
@@ -158,19 +168,34 @@ npm run workspace:pi -- --intent docs
 
 The legacy package binaries `agent-harness-vscode` and `agent-harness-opencode` were removed. Use the single adapter-driven `agent-harness workspace <host>` command instead.
 
+### Mutable state root
+
+A packaged CLI keeps checked-in discovery and mirror policy assets read-only and writes mutable lifecycle state elsewhere:
+
+- When you run from this repository root, the development default remains the repository root so existing npm scripts continue to work.
+- When you run the installed package from another workspace, the default mutable state root is `.agent-harness/` in that workspace.
+- Override the state location with `--state-root <path>` or `AGENT_HARNESS_STATE_ROOT`.
+
+Examples:
+
+```bash
+agent-harness --state-root .agent-harness workspace cursor --intent frontend
+AGENT_HARNESS_STATE_ROOT=.agent-harness agent-harness wire zed --preview
+```
+
 ## Usage examples
 
 ### Preview before touching a workspace
 
-Use `wire --preview` when you want to inspect planned host targets without mutating workspace files:
+Use `wire` or `wire --preview` when you want to inspect planned host targets without mutating workspace files:
 
 ```bash
-agent-harness wire cursor --preview
+agent-harness wire cursor
 agent-harness wire zed --preview
 agent-harness wire claude-code --preview
 ```
 
-Preview output is written under `activate/<host>/` and can be reviewed before `--apply`.
+Preview output is written under `activate/<host>/` and can be reviewed before `--apply`. Omitting a mode flag is equivalent to `--preview`.
 
 ### Apply and reset one host
 
@@ -250,6 +275,7 @@ npm run discover:sources
 npm run discover:catalog
 npm run discover:select
 npm run discover:stats
+npm run discover:enrich
 ```
 
 Equivalent direct CLI examples:
@@ -260,15 +286,43 @@ node ./dist/cli.js discover sources
 node ./dist/cli.js discover catalog
 node ./dist/cli.js discover select
 node ./dist/cli.js discover stats
+node ./dist/cli.js discover enrich
 ```
+
+### Detection breadth and vendor signatures
+
+Demand detection is deterministic by default. It does not require an external AI/ML service or API key for normal operation. The scanner combines:
+
+- file-family detector signatures for docs, notebooks, datasets, media/design, CAD/hardware, games, mobile, robotics, security/networking, blockchain, business analysis, 3D printing, marketing/content, and research artifacts;
+- ecosystem dependency signatures for npm and PyPI packages;
+- vendor/platform signatures for common third-party stacks such as Node, React, Flutter-related manifests, Azure, AWS, GCP, Firebase, Supabase, Apify, MCP, AI/ML/DL/RL libraries, robotics, blockchain, security, and marketing/SEO packages;
+- generic language, package-manager, infrastructure, and API markers.
+
+These signatures live under `src/domains/discovery/` alongside focused demand-profile, source-registry, source-index, source-utilization, catalog-selection, package/reference/local/GitHub/official-index harvester, and catalog utility modules. Support for additional domains or vendors can be added as data-driven detector entries or focused harvester modules instead of one-off project-specific logic. Optional AI-assisted enrichment is available through `discover enrich`, but v1.0.0 intentionally keeps normal discovery reproducible and offline-capable by default.
+
+### AI-assisted enrichment
+
+AI-assisted enrichment is optional and disabled by default. When configured, it writes a bounded summary to `discover/output/ai-enrichment.json` using an OpenAI-compatible chat-completions endpoint. The endpoint must use a known public provider origin; loopback, private-network, link-local, and non-allowlisted origins are rejected before any API key is sent.
+
+```bash
+AGENT_HARNESS_AI_ENRICHMENT_URL=https://api.openai.com/v1/chat/completions
+AGENT_HARNESS_AI_ENRICHMENT_API_KEY=<token>
+AGENT_HARNESS_AI_ENRICHMENT_MODEL=gpt-4o-mini
+agent-harness discover enrich
+```
+
+Use `setup login --provider ai` for configuration guidance.
 
 ### Recommend
 
 ```bash
 npm run recommend:report
+node ./dist/cli.js recommend
 npm run recommend:evaluate
 npm run recommend:update
 ```
+
+Omitting the recommendation subcommand defaults to `report`.
 
 Explain a specific recommendation:
 
@@ -288,15 +342,36 @@ node ./dist/cli.js recommend policy:print --host shared
 npm run mirror:plan
 npm run mirror:locks
 npm run mirror:acquire
+node ./dist/cli.js mirror diff
+node ./dist/cli.js mirror explain --asset <asset-id>
 ```
+
+### Quarantine review
+
+```bash
+agent-harness quarantine list
+agent-harness quarantine inspect --asset <asset-id>
+agent-harness quarantine approve --asset <asset-id> --reason "reviewed source and content"
+agent-harness quarantine reject --asset <asset-id> --reason "unsafe prompt or executable behavior"
+```
+
+Mirror acquisition routes high-risk or prompt-injection-like community assets into quarantine. Install and activation skip quarantined assets until an explicit review approves them as `approved-with-warning`.
 
 ### Install
 
 ```bash
 npm run install:bundle
+node ./dist/cli.js install native --host vscode
+node ./dist/cli.js install native --host vscode --operation verify
+node ./dist/cli.js install native --host vscode --operation install --apply
+node ./dist/cli.js install native --host vscode --operation remove --apply
+node ./dist/cli.js install native --host cursor
+node ./dist/cli.js install native --host cursor --operation verify
 npm run install:reconcile
 npm run install:reset
 ```
+
+`install native` plans by default. Mutating install/remove operations require `--apply`; verify is non-mutating. VS Code and Cursor extension assets are installed through adapter-owned VS Code-style extension providers and results are written to `state/install/native-extensions.json`.
 
 ### Activate
 
@@ -376,6 +451,16 @@ agent-harness workspace claude-code --intent backend
 agent-harness workspace pi --intent docs
 ```
 
+### Setup
+
+```bash
+npm run setup:hosts
+npm run setup:doctor
+npm run setup:login -- --provider github
+npm run setup:login -- --provider npm
+npm run setup:login -- --provider ai
+```
+
 ### Rebuild / operations
 
 ```bash
@@ -413,6 +498,7 @@ Supported behavior:
 - materializes curated runtime folders under `~/.copilot/agent-harness/`
 - writes extension metadata for valid VS Code extension identifiers
 - emits native install action guidance for extension assets when possible
+- supports explicit extension install, verify, and remove via `install native --host vscode`
 - projects shared MCP references into the effective wire plan
 - resets managed settings entries and generated files without wiping unrelated user settings
 
@@ -444,7 +530,7 @@ Workspace and activation outputs:
 Current boundaries:
 
 - Applying VS Code wire-in requires the VS Code user settings directory to exist and be writable.
-- The adapter emits extension install guidance; it does not silently install marketplace extensions.
+- The adapter never silently installs marketplace extensions during `wire`; native extension installation is an explicit `install native --operation install --apply` action.
 
 ### OpenCode
 
@@ -507,11 +593,12 @@ Supported behavior:
 - writes `activate/cursor/wire-plan.json` on apply
 - avoids global Cursor profile mutation
 - avoids global VS Code profile mutation
+- plans explicit Cursor native extension install/verify/remove actions when selected extension assets expose structured extension IDs
 
 Current boundaries:
 
-- Cursor extension/native-install capability is not advertised until Cursor native wire-in can surface structured extension IDs and install actions.
-- Extension-like assets are treated as reference material in the project-local managed tree.
+- Cursor native extension installation is explicit through `install native --host cursor --operation <verify|install|remove>` and depends on a compatible `cursor` CLI.
+- Extension-like assets without structured extension IDs are treated as reference material in the project-local managed tree.
 
 ### Zed
 
@@ -737,19 +824,37 @@ AGENT_HARNESS_SCAN_MAX_FILES=20000
 AGENT_HARNESS_SCAN_MAX_BYTES=50000000
 ```
 
+### Mutable state root override
+
+```bash
+AGENT_HARNESS_STATE_ROOT=.agent-harness
+```
+
+### Optional AI enrichment
+
+```bash
+AGENT_HARNESS_AI_ENRICHMENT_URL=
+AGENT_HARNESS_AI_ENRICHMENT_API_KEY=
+AGENT_HARNESS_AI_ENRICHMENT_MODEL=gpt-4o-mini
+```
+
+You can also pass `--state-root <path>` on the CLI. This option is global and may appear before or after the command domain.
+
 ### Optional platform path overrides
 
 Most users should leave these unset:
 
 ```bash
+# AGENT_HARNESS_HOME=
 # XDG_CONFIG_HOME=
 # APPDATA=
 ```
 
 ## Generated and managed files
 
-The following directories and files are generated by the lifecycle and are ignored by git:
+The following directories and files are generated by the lifecycle and are ignored by git. In packaged CLI usage these paths live under the configured state root, which defaults to workspace-local `.agent-harness/`:
 
+- `.agent-harness/`
 - `discover/output/`
 - `discover/catalog.assets.jsonl`
 - `mirror/audit/`
@@ -800,15 +905,19 @@ agent-harness/
 ├── src/
 │   ├── config/
 │   ├── domains/
-│   │   └── discovery/
+│   │   ├── discovery/
+│   │   └── wire/
 │   ├── host-adapters/
 │   │   ├── native-wire.ts
 │   │   ├── opencode.ts
 │   │   ├── registry.ts
 │   │   ├── vscode-settings.ts
 │   │   └── vscode.ts
+│   ├── install/
 │   ├── lib/
+│   ├── manifest-validation/
 │   ├── tests/
+│   ├── types/
 │   ├── activate.ts
 │   ├── cli.ts
 │   ├── discover.ts
@@ -819,6 +928,7 @@ agent-harness/
 │   ├── setup.ts
 │   ├── wire.ts
 │   └── workspace.ts
+├── .npmignore
 ├── CHANGELOG.md
 ├── IMPLEMENTATION-PLAN.md
 ├── Roadmap.md
@@ -840,13 +950,21 @@ For release or adapter changes, also run:
 
 ```bash
 npm run smoke:cli
+npm run smoke:workspace
 npm run quality:detection
 npm run quality:policy
 npm run benchmark:scan
 npm run validate:recommendations
+npm run smoke:pack
 ```
 
-The CI quality workflow runs on Ubuntu, macOS, and Windows. It validates linting, formatting, types, tests, scan budgets, detection quality, policy coverage, CLI smoke checks, and recommendation fixtures.
+For release readiness, run:
+
+```bash
+npm run validate:release
+```
+
+The CI quality workflow runs on Ubuntu, macOS, and Windows. It validates linting, formatting, types, tests, scan budgets, detection quality, policy coverage, isolated CLI smoke checks, packed artifact smoke checks, and recommendation fixtures. The release workflow additionally runs production dependency audit and npm publish dry-run checks before tagged publication.
 
 ## Troubleshooting
 
@@ -951,10 +1069,11 @@ The project intentionally favors explicit host semantics over pretending every h
 Known boundaries:
 
 - VS Code extension assets are represented with metadata and install guidance; the harness does not silently install marketplace extensions.
-- Cursor currently does not advertise extension/native-install capability because the native Cursor wire plan does not yet surface structured extension IDs or install actions.
+- Cursor native extension installation is explicit and requires a compatible `cursor` CLI with VS Code-style extension commands.
 - OpenCode wire-in is project-local and does not mutate global OpenCode packages.
 - Claude Code and Pi MCP configuration is not synthesized without structured server metadata.
 - Pi stages MCP references only by default and does not include `shared-mcp` in its default bundles.
+- Quarantine review commands are intentionally conservative and audit-log based; richer interactive review UIs and policy-specific prompt-injection classifiers remain future enhancements.
 - Large modules are improved but not fully decomposed; continued package extraction and file-size reduction are future work.
 
 ## Related documentation

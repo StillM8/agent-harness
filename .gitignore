@@ -7,7 +7,10 @@ dist/
 
 activate/
 install/
+!src/install/
+!src/install/**
 state/
+.agent-harness/
 
 .tmp/
 
@@ -17,6 +20,7 @@ discover/catalog.assets.jsonl
 mirror/audit/
 mirror/bundles/
 mirror/index.jsonl
+mirror/index.previous.jsonl
 mirror/quarantine/
 mirror/raw/
 
@@ -25,6 +29,8 @@ mirror/raw/
 .zed/
 .claude/
 .pi/
+.unipi/
+.vscode/
 .husky/_/
 .github/copilot-instructions.md
 .rules
@@ -33,3 +39,4 @@ CLAUDE.md
 SYSTEM.md
 
 *.log
+*.tgz

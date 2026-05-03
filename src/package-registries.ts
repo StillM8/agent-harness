@@ -1,3 +1,10 @@
+import { fetchJsonWithGuards } from "./lib/http.js";
+
+const NPM_REGISTRY_ORIGINS = ["https://registry.npmjs.org"] as const;
+const PYPI_REGISTRY_ORIGINS = ["https://pypi.org"] as const;
+const REGISTRY_METADATA_MAX_BYTES = 2_000_000;
+const REGISTRY_FETCH_TIMEOUT_MS = 5_000;
+
 export interface NpmPackageMetadata {
   name: string;
   description?: string;
@@ -11,6 +18,7 @@ export interface NpmPackageMetadata {
   distTags?: Record<string, string>;
   keywords?: string[];
   versions?: Record<string, unknown>;
+  lastUpdated?: string;
 }
 
 export interface PypiPackageMetadata {
@@ -23,58 +31,27 @@ export interface PypiPackageMetadata {
     keywords?: string;
     package_url?: string;
   };
-}
-
-function fetchWithTimeout(
-  url: string,
-  options: RequestInit,
-  ms: number,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  return fetch(url, { ...options, signal: controller.signal }).finally(() =>
-    clearTimeout(timer),
-  );
+  lastUpdated?: string;
 }
 
 export async function fetchNpmPackageMetadata(
   packageName: string,
 ): Promise<NpmPackageMetadata | null> {
   try {
-    const response = await fetchWithTimeout(
+    const data = await fetchJsonWithGuards(
       `https://registry.npmjs.org/${encodeURIComponent(packageName)}`,
-      {},
-      5000,
+      {
+        allowedOrigins: NPM_REGISTRY_ORIGINS,
+        headers: { Accept: "application/vnd.npm.install-v1+json" },
+        maxBytes: REGISTRY_METADATA_MAX_BYTES,
+        timeoutMs: REGISTRY_FETCH_TIMEOUT_MS,
+      },
     );
-    if (!response.ok) {
+    if (!isRecord(data)) {
       return null;
     }
 
-    const data = (await response.json()) as Record<string, unknown>;
-    return {
-      name: typeof data.name === "string" ? data.name : packageName,
-      description:
-        typeof data.description === "string" ? data.description : undefined,
-      homepage: typeof data.homepage === "string" ? data.homepage : undefined,
-      repository:
-        typeof data.repository === "string" ||
-        typeof data.repository === "object"
-          ? (data.repository as NpmPackageMetadata["repository"])
-          : undefined,
-      distTags:
-        typeof data["dist-tags"] === "object" && data["dist-tags"] !== null
-          ? (data["dist-tags"] as Record<string, string>)
-          : undefined,
-      keywords: Array.isArray(data.keywords)
-        ? data.keywords.filter(
-            (value): value is string => typeof value === "string",
-          )
-        : undefined,
-      versions:
-        typeof data.versions === "object" && data.versions !== null
-          ? (data.versions as Record<string, unknown>)
-          : undefined,
-    };
+    return normalizeNpmPackageMetadata(data, packageName);
   } catch {
     return null;
   }
@@ -84,19 +61,170 @@ export async function fetchPypiPackageMetadata(
   packageName: string,
 ): Promise<PypiPackageMetadata | null> {
   try {
-    const response = await fetchWithTimeout(
+    const data = await fetchJsonWithGuards(
       `https://pypi.org/pypi/${encodeURIComponent(packageName)}/json`,
-      {},
-      5000,
+      {
+        allowedOrigins: PYPI_REGISTRY_ORIGINS,
+        maxBytes: REGISTRY_METADATA_MAX_BYTES,
+        timeoutMs: REGISTRY_FETCH_TIMEOUT_MS,
+      },
     );
-    if (!response.ok) {
-      return null;
-    }
-
-    return (await response.json()) as PypiPackageMetadata;
+    return normalizePypiPackageMetadata(data, packageName);
   } catch {
     return null;
   }
+}
+
+function normalizeNpmPackageMetadata(
+  data: Record<string, unknown>,
+  packageName: string,
+): NpmPackageMetadata {
+  return {
+    name: typeof data.name === "string" ? data.name : packageName,
+    description:
+      typeof data.description === "string" ? data.description : undefined,
+    homepage: normalizeHttpUrl(data.homepage),
+    repository: normalizeNpmRepository(data.repository),
+    distTags: normalizeStringRecord(data["dist-tags"]),
+    keywords: Array.isArray(data.keywords)
+      ? data.keywords.filter(
+          (value): value is string => typeof value === "string",
+        )
+      : undefined,
+    versions: isRecord(data.versions) ? data.versions : undefined,
+    lastUpdated: normalizeStringRecord(data.time)?.modified,
+  };
+}
+
+function normalizeNpmRepository(
+  value: unknown,
+): NpmPackageMetadata["repository"] {
+  if (typeof value === "string") {
+    return normalizeRepositoryHttpUrl(value);
+  }
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const normalizedUrl = normalizeRepositoryHttpUrl(value.url);
+  return normalizedUrl
+    ? {
+        type: typeof value.type === "string" ? value.type : undefined,
+        url: normalizedUrl,
+      }
+    : undefined;
+}
+
+function normalizePypiPackageMetadata(
+  data: unknown,
+  packageName: string,
+): PypiPackageMetadata | null {
+  if (!isRecord(data) || !isRecord(data.info)) {
+    return null;
+  }
+
+  return {
+    info: {
+      name: typeof data.info.name === "string" ? data.info.name : packageName,
+      summary:
+        typeof data.info.summary === "string" ? data.info.summary : undefined,
+      home_page: normalizeHttpUrl(data.info.home_page),
+      project_urls: normalizeUrlRecord(data.info.project_urls),
+      version:
+        typeof data.info.version === "string" ? data.info.version : undefined,
+      keywords:
+        typeof data.info.keywords === "string" ? data.info.keywords : undefined,
+      package_url: normalizeHttpUrl(data.info.package_url),
+    },
+    lastUpdated: normalizePypiLastUpdated(data.releases),
+  };
+}
+
+function normalizePypiLastUpdated(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const timestamps = Object.values(value).flatMap((releaseFiles) => {
+    if (!Array.isArray(releaseFiles)) {
+      return [];
+    }
+
+    return releaseFiles.flatMap((releaseFile) => {
+      if (!isRecord(releaseFile)) {
+        return [];
+      }
+
+      const timestamp =
+        typeof releaseFile.upload_time_iso_8601 === "string"
+          ? releaseFile.upload_time_iso_8601
+          : typeof releaseFile.upload_time === "string"
+            ? releaseFile.upload_time
+            : undefined;
+      return timestamp ? [timestamp] : [];
+    });
+  });
+
+  return timestamps.sort((left, right) => right.localeCompare(left))[0];
+}
+
+function normalizeUrlRecord(
+  value: unknown,
+): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const entries = Object.entries(value).flatMap(([key, rawValue]) => {
+    const normalizedUrl = normalizeHttpUrl(rawValue);
+    return normalizedUrl
+      ? ([[key, normalizedUrl]] as Array<[string, string]>)
+      : [];
+  });
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function normalizeRepositoryHttpUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  return normalizeHttpUrl(sanitizeRepositoryUrl(value));
+}
+
+function normalizeHttpUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  try {
+    const parsedUrl = new URL(value);
+    return (parsedUrl.protocol === "http:" ||
+      parsedUrl.protocol === "https:") &&
+      parsedUrl.hostname.length > 0
+      ? parsedUrl.toString()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeStringRecord(
+  value: unknown,
+): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const entries = Object.entries(value).filter(
+    (entry): entry is [string, string] => typeof entry[1] === "string",
+  );
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function extractRepositoryUrlFromNpmMetadata(
@@ -128,8 +256,20 @@ export function extractRepositoryUrlFromPypiMetadata(
     (value): value is string => typeof value === "string" && value.length > 0,
   );
 
-  const githubUrl = possibleUrls.find((value) => value.includes("github.com/"));
+  const githubUrl = possibleUrls.find(isGitHubRepositoryUrl);
   return githubUrl ? sanitizeRepositoryUrl(githubUrl) : undefined;
+}
+
+function isGitHubRepositoryUrl(value: string): boolean {
+  try {
+    const parsedUrl = new URL(value);
+    return (
+      parsedUrl.hostname.toLowerCase() === "github.com" &&
+      parsedUrl.pathname.split("/").filter(Boolean).length >= 2
+    );
+  } catch {
+    return false;
+  }
 }
 
 function sanitizeRepositoryUrl(value: string): string {

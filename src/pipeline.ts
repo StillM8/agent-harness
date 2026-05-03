@@ -5,6 +5,7 @@ import { readJsonFileOrNull } from "./files.js";
 import { runDiscover } from "./discover.js";
 import { runMirror } from "./mirror.js";
 import { runInstall } from "./install.js";
+import { runRecommend } from "./recommend.js";
 import { runActivate } from "./activate.js";
 import type {
   HostTarget,
@@ -43,6 +44,7 @@ export async function runWorkspacePipeline(options: {
   await runDiscover(["sources"], workspaceRoot, projectRoot);
   await runDiscover(["catalog"], workspaceRoot, projectRoot);
   await runDiscover(["select"], workspaceRoot, projectRoot);
+  await runRecommend(["report"], workspaceRoot, projectRoot);
   await runMirror(["plan"], workspaceRoot, projectRoot);
   await runMirror(["locks"], workspaceRoot, projectRoot);
   await acquireAllMirrorBatches(projectRoot, workspaceRoot, mirrorBatchSize);
@@ -129,8 +131,20 @@ async function installBundleBatches(
       const progressState = await readJsonFileOrNull<InstallProgressState>(
         join(projectRoot, ...INSTALL_PROGRESS_STATE_PATH),
       );
-      const bundleState = progressState?.bundles[bundleId];
-      if (!bundleState || bundleState.remainingAssets <= 0) {
+      if (!progressState) {
+        throw new Error(
+          `install bundle did not produce progress state for bundle '${bundleId}'`,
+        );
+      }
+
+      const bundleState = progressState.bundles[bundleId];
+      if (!bundleState) {
+        throw new Error(
+          `install bundle did not produce progress for bundle '${bundleId}'`,
+        );
+      }
+
+      if (bundleState.remainingAssets <= 0) {
         break;
       }
 

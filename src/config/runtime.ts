@@ -1,8 +1,27 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+const DEFAULT_AI_ENRICHMENT_MODEL = "gpt-4o-mini";
+const DEFAULT_AI_ENRICHMENT_ALLOWED_ORIGINS = [
+  "https://api.openai.com",
+  "https://openrouter.ai",
+  "https://api.groq.com",
+  "https://api.mistral.ai",
+  "https://api.deepseek.com",
+  "https://api.x.ai",
+  "https://api.perplexity.ai",
+  "https://api.fireworks.ai",
+  "https://api.together.xyz",
+] as const;
+
 export interface RuntimeConfig {
   env: NodeJS.ProcessEnv;
+  aiEnrichment: {
+    url?: string;
+    apiKey?: string;
+    model: string;
+    allowedOrigins: readonly string[];
+  };
   github: {
     token?: string;
     apiVersion: string;
@@ -33,11 +52,23 @@ export function getRuntimeConfig(): RuntimeConfig {
 }
 
 export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
-  const homeDirectory = homedir();
+  const homeDirectory =
+    nonEmptyString(env.AGENT_HARNESS_HOME) ??
+    nonEmptyString(env.HOME) ??
+    nonEmptyString(env.USERPROFILE) ??
+    homedir();
   const githubToken = env.GITHUB_PERSONAL_ACCESS_TOKEN || env.GITHUB_TOKEN;
 
   return {
     env,
+    aiEnrichment: {
+      url: nonEmptyString(env.AGENT_HARNESS_AI_ENRICHMENT_URL),
+      apiKey: nonEmptyString(env.AGENT_HARNESS_AI_ENRICHMENT_API_KEY),
+      model:
+        nonEmptyString(env.AGENT_HARNESS_AI_ENRICHMENT_MODEL) ??
+        DEFAULT_AI_ENRICHMENT_MODEL,
+      allowedOrigins: DEFAULT_AI_ENRICHMENT_ALLOWED_ORIGINS,
+    },
     github: {
       token: githubToken || undefined,
       apiVersion: nonEmptyString(env.GITHUB_API_VERSION) ?? "2022-11-28",

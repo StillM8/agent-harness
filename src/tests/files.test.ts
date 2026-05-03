@@ -12,7 +12,7 @@ import {
   replaceDirectoryLink,
 } from "../files.js";
 
-test("recursive scan stops at explicit file budgets", async () => {
+void test("recursive scan stops at explicit file budgets", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-scan-"));
   try {
     await writeFile(join(root, "one.txt"), "one", "utf8");
@@ -32,7 +32,59 @@ test("recursive scan stops at explicit file budgets", async () => {
   }
 });
 
-test("managed directory links can be created, replaced, and removed", async () => {
+void test("recursive scan skips agent-harness generated directories by default", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-ignore-"));
+  try {
+    await writeFile(join(root, "source.md"), "source", "utf8");
+    await mkdir(join(root, "activate"));
+    await mkdir(join(root, ".cursor"));
+    await writeFile(
+      join(root, "activate", "generated.md"),
+      "generated",
+      "utf8",
+    );
+    await writeFile(join(root, ".cursor", "rule.mdc"), "generated", "utf8");
+
+    const result = await listFilesRecursiveWithTelemetry(root);
+    assert.deepEqual(
+      result.files.map((filePath) => filePath.slice(root.length + 1)),
+      ["source.md"],
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+void test("recursive scan honors project ignore files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-gitignore-"));
+  try {
+    await mkdir(join(root, "generated"));
+    await mkdir(join(root, "ignored-dir"));
+    await writeFile(
+      join(root, ".gitignore"),
+      "ignored-dir/\nignored.md\n*.log\ngenerated/**\n!generated/keep.md\n",
+      "utf8",
+    );
+    await writeFile(join(root, "included.md"), "included", "utf8");
+    await writeFile(join(root, "ignored.md"), "ignored", "utf8");
+    await writeFile(join(root, "trace.log"), "ignored", "utf8");
+    await writeFile(join(root, "generated", "drop.md"), "ignored", "utf8");
+    await writeFile(join(root, "generated", "keep.md"), "included", "utf8");
+    await writeFile(join(root, "ignored-dir", "nested.md"), "ignored", "utf8");
+
+    const result = await listFilesRecursiveWithTelemetry(root, new Set());
+    assert.deepEqual(
+      result.files
+        .map((filePath) => filePath.slice(root.length + 1).replace(/\\/gu, "/"))
+        .sort(),
+      [".gitignore", "generated/keep.md", "included.md"],
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+void test("managed directory links can be created, replaced, and removed", async () => {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-link-"));
   try {
     const firstTarget = join(root, "target-one");

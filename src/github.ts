@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import { getRuntimeConfig } from "./config/runtime.js";
 import { readJsonFileOrNull, writeJsonFile } from "./files.js";
+import { readResponseTextWithLimit } from "./lib/http.js";
 import { assertGitHubRepoSnapshot } from "./manifest-validation.js";
 import type { SourceDefinition } from "./types.js";
 
@@ -197,6 +198,7 @@ export interface GitHubRepoSnapshot {
 
 const GITHUB_API_BASE_URL = "https://api.github.com";
 const GITHUB_FETCH_TIMEOUT_MS = 10000;
+const GITHUB_JSON_MAX_BYTES = 2_000_000;
 const GITHUB_HEALTH_STATE_PATH = [
   "state",
   "remote-cache",
@@ -213,6 +215,15 @@ const GITHUB_REPO_URL_PATTERN =
   /^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/iu;
 let githubRateLimitResetAt: number | null = null;
 let githubHealthUpdateLock: Promise<void> = Promise.resolve();
+
+/**
+ * Clears process-local GitHub throttling and health-update state between CLI
+ * invocations that run in the same Node.js process.
+ */
+export function clearGitHubState(): void {
+  githubRateLimitResetAt = null;
+  githubHealthUpdateLock = Promise.resolve();
+}
 
 export function isGitHubRepoSource(source: SourceDefinition): boolean {
   const repoUrl = source.endpoints.repo;
@@ -447,7 +458,7 @@ async function fetchGitHubJson<T>(path: string): Promise<T> {
     );
   }
 
-  return (await response.json()) as T;
+  return parseGitHubJsonResponse<T>(response, path);
 }
 
 async function fetchGitHubJsonOptional<T>(path: string): Promise<T | null> {
@@ -464,7 +475,23 @@ async function fetchGitHubJsonOptional<T>(path: string): Promise<T | null> {
     );
   }
 
-  return (await response.json()) as T;
+  return parseGitHubJsonResponse<T>(response, path);
+}
+
+async function parseGitHubJsonResponse<T>(
+  response: Response,
+  path: string,
+): Promise<T> {
+  try {
+    return JSON.parse(
+      await readResponseTextWithLimit(response, GITHUB_JSON_MAX_BYTES),
+    ) as T;
+  } catch (error) {
+    throw new Error(
+      `GitHub API response could not be parsed for ${path}: ${getErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 async function fetchGitHubResponse(path: string): Promise<Response> {
@@ -503,16 +530,7 @@ async function fetchGitHubResponse(path: string): Promise<Response> {
     } catch (error) {
       clearTimeout(timeout);
 
-      if (error instanceof Error && error.name === "AbortError") {
-        lastError = new Error(
-          `Request timed out after ${GITHUB_FETCH_TIMEOUT_MS}ms`,
-        );
-      } else if (
-        typeof error === "object" &&
-        error !== null &&
-        "name" in error &&
-        error.name === "AbortError"
-      ) {
+      if (isAbortError(error)) {
         lastError = new Error(
           `Request timed out after ${GITHUB_FETCH_TIMEOUT_MS}ms`,
         );
@@ -713,6 +731,15 @@ function buildRateLimitMessage(): string {
   }
 
   return `GitHub API rate limit active until ${new Date(githubRateLimitResetAt).toISOString()}`;
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "AbortError"
+  );
 }
 
 function getErrorMessage(error: unknown): string {
