@@ -1,6 +1,6 @@
 {
   "name": "@ar27111994/agent-harness",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0-rc.3",
   "description": "Node.js TypeScript CLI for discovering, staging, activating, and wiring reusable AI-agent assets across supported developer hosts.",
   "license": "MIT",
   "author": "ar27111994",
