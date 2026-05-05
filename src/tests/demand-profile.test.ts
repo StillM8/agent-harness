@@ -412,6 +412,49 @@ const repoFixtures: DemandProfileRepoFixture[] = [
     expectedMatchedFilesMin: 4,
   },
   {
+    archetype: "dockerfile-comment-no-embedded",
+    files: [
+      {
+        path: "Dockerfile",
+        content: [
+          "FROM ubuntu:22.04",
+          "# Create an embedded entrypoint script",
+          "RUN echo ready",
+        ].join("\n"),
+      },
+    ],
+    expectedSignals: {
+      concerns: ["containerization", "infrastructure"],
+      tooling: ["docker"],
+    },
+    unexpectedSignals: {
+      concerns: ["embedded", "firmware", "rtos", "hardware", "iot"],
+    },
+    expectedMatchedFilesMin: 1,
+  },
+  {
+    archetype: "dockerfile-run-text-signals",
+    files: [
+      {
+        path: "Dockerfile",
+        content: [
+          "FROM node:20",
+          "RUN npm install -g apify",
+          "RUN echo webhook >> /tmp/features.txt",
+        ].join("\n"),
+      },
+    ],
+    expectedSignals: {
+      frameworks: ["apify"],
+      concerns: ["automation", "web-scraping", "containerization", "webhook"],
+      tooling: ["actor", "crawler", "docker", "webhook"],
+    },
+    unexpectedSignals: {
+      concerns: ["embedded", "firmware", "rtos", "hardware", "iot"],
+    },
+    expectedMatchedFilesMin: 1,
+  },
+  {
     archetype: "mlops-rag-creative-media",
     files: [
       {

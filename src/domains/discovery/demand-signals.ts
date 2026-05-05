@@ -174,7 +174,10 @@ export async function collectDemandSignalsForFile(
   }
 
   if (shouldReadTextForTechnologySignals(fileName)) {
-    enrichGenericTextSignals(fileContent, matchedSignals);
+    enrichGenericTextSignals(
+      getTechnologySignalTextContent(fileName, fileContent),
+      matchedSignals,
+    );
   }
 
   return matchedSignals;
@@ -850,13 +853,15 @@ function shouldReadTextForTechnologySignals(fileName: string): boolean {
     return false;
   }
 
+  if (isDockerfileName(fileName)) {
+    return true;
+  }
+
   return (
     /\.(json|ya?ml|toml|xml|gradle|csproj|props|targets|md|mdx|txt|ini|cfg|conf)$/iu.test(
       fileName,
     ) ||
-    isDockerfileName(fileName) ||
     [
-      "Containerfile",
       "Gemfile",
       "Package.swift",
       "Podfile",
@@ -870,6 +875,24 @@ function shouldReadTextForTechnologySignals(fileName: string): boolean {
       "project.godot",
     ].includes(fileName)
   );
+}
+
+function getTechnologySignalTextContent(
+  fileName: string,
+  content: string | null,
+): string | null {
+  if (!content) {
+    return null;
+  }
+
+  if (!isDockerfileName(fileName)) {
+    return content;
+  }
+
+  return content
+    .split(/\r?\n/u)
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join("\n");
 }
 
 function enrichActorJsonSignals(

@@ -13,6 +13,69 @@ interface RelevanceFilterResult {
   rejectedEntries: AssetCatalogEntry[];
 }
 
+interface DemandRelevanceTerms {
+  exactHighSignalTerms: Set<string>;
+  highSignalPhrases: string[][];
+  lowSignalTerms: Set<string>;
+}
+
+interface CatalogTermData {
+  documentFrequency: Map<string, number>;
+  entryTermsByEntry: Map<AssetCatalogEntry, Set<string>>;
+}
+
+const LOW_SIGNAL_TERMS = new Set([
+  "api",
+  "automation",
+  "backend",
+  "bun",
+  "bundler",
+  "cargo",
+  "cd",
+  "ci",
+  "cloud",
+  "composer",
+  "data",
+  "database",
+  "debugging",
+  "devops",
+  "docker",
+  "documentation",
+  "express",
+  "frontend",
+  "fullstack",
+  "go",
+  "gradle",
+  "infrastructure",
+  "integration",
+  "javascript",
+  "knowledge",
+  "logging",
+  "maven",
+  "mobile",
+  "node",
+  "npm",
+  "nuget",
+  "pip",
+  "pnpm",
+  "pub",
+  "python",
+  "react",
+  "swift",
+  "testing",
+  "tooling",
+  "typescript",
+  "yarn",
+]);
+
+const PACKAGE_REGISTRY_PREFIX_RE =
+  /^(?:cargo|cocoapods|gem|go|gradle|maven|npm|nuget|packagist|pub|pypi|swift):/iu;
+const IGNORED_CONCERN_TERMS = new Set(["base", "detector"]);
+const LOW_SIGNAL_CONCERN_MATCH_THRESHOLD = 4;
+const HIGH_SIGNAL_PHRASE_MATCH_THRESHOLD = 2;
+const COMMON_HIGH_SIGNAL_CATALOG_SHARE_THRESHOLD = 0.2;
+const MIN_CATALOG_SIZE_FOR_COMMON_HIGH_SIGNAL_FILTER = 200;
+
 /**
  * Filters catalog entries to assets that overlap with workspace demand signals.
  */
@@ -20,9 +83,18 @@ export function filterCatalogEntriesByDemandRelevance(
   catalogEntries: AssetCatalogEntry[],
   demandProfile: DemandProfile | null,
 ): RelevanceFilterResult {
-  const demandTerms = buildDemandTermSet(demandProfile);
+  const catalogTermData = buildCatalogTermData(catalogEntries);
+  const demandTerms = buildDemandTermSet(
+    demandProfile,
+    catalogTermData.documentFrequency,
+    catalogEntries.length,
+  );
 
-  if (demandTerms.size === 0) {
+  if (
+    demandTerms.exactHighSignalTerms.size === 0 &&
+    demandTerms.highSignalPhrases.length === 0 &&
+    demandTerms.lowSignalTerms.size === 0
+  ) {
     return { selectedEntries: catalogEntries, rejectedEntries: [] };
   }
 
@@ -30,7 +102,9 @@ export function filterCatalogEntriesByDemandRelevance(
   const rejectedEntries: AssetCatalogEntry[] = [];
 
   for (const entry of catalogEntries) {
-    if (isEntryRelevantToDemand(entry, demandTerms)) {
+    const entryTerms =
+      catalogTermData.entryTermsByEntry.get(entry) ?? new Set();
+    if (isEntryRelevantToDemand(entry, entryTerms, demandTerms)) {
       selectedEntries.push(entry);
     } else {
       rejectedEntries.push(entry);
@@ -164,55 +238,259 @@ export function buildSelectionReason(
   return "Selected by compatibility, portfolio fit, risk, and context-cost ordering.";
 }
 
-function buildDemandTermSet(demandProfile: DemandProfile | null): Set<string> {
+function buildDemandTermSet(
+  demandProfile: DemandProfile | null,
+  catalogTermDocumentFrequency: Map<string, number>,
+  catalogEntryCount: number,
+): DemandRelevanceTerms {
   if (!demandProfile) {
-    return new Set();
+    return {
+      exactHighSignalTerms: new Set(),
+      highSignalPhrases: [],
+      lowSignalTerms: new Set(),
+    };
   }
 
-  return new Set(
-    [
-      ...demandProfile.signals.languages,
-      ...demandProfile.signals.frameworks,
-      ...demandProfile.signals.concerns,
-      ...demandProfile.signals.tooling,
-    ].flatMap((value) => splitIntoKeywords(stripPackageEvidencePrefix(value))),
+  const exactHighSignalTerms = new Set<string>();
+  const highSignalPhrases: string[][] = [];
+  const lowSignalTerms = new Set<string>();
+
+  for (const language of demandProfile.signals.languages) {
+    addDemandSignal(
+      language,
+      exactHighSignalTerms,
+      highSignalPhrases,
+      lowSignalTerms,
+      catalogTermDocumentFrequency,
+      catalogEntryCount,
+    );
+  }
+
+  for (const framework of demandProfile.signals.frameworks) {
+    addDemandSignal(
+      framework,
+      exactHighSignalTerms,
+      highSignalPhrases,
+      lowSignalTerms,
+      catalogTermDocumentFrequency,
+      catalogEntryCount,
+    );
+  }
+
+  for (const packageManager of demandProfile.signals.packageManagers) {
+    addDemandSignal(
+      packageManager,
+      exactHighSignalTerms,
+      highSignalPhrases,
+      lowSignalTerms,
+      catalogTermDocumentFrequency,
+      catalogEntryCount,
+    );
+  }
+
+  for (const concern of demandProfile.signals.concerns) {
+    addDemandSignal(
+      concern,
+      exactHighSignalTerms,
+      highSignalPhrases,
+      lowSignalTerms,
+      catalogTermDocumentFrequency,
+      catalogEntryCount,
+    );
+  }
+
+  for (const tooling of demandProfile.signals.tooling) {
+    addDemandSignal(
+      tooling,
+      exactHighSignalTerms,
+      highSignalPhrases,
+      lowSignalTerms,
+      catalogTermDocumentFrequency,
+      catalogEntryCount,
+    );
+  }
+
+  return {
+    exactHighSignalTerms,
+    highSignalPhrases,
+    lowSignalTerms,
+  };
+}
+
+function addDemandSignal(
+  value: string,
+  exactHighSignalTerms: Set<string>,
+  highSignalPhrases: string[][],
+  lowSignalTerms: Set<string>,
+  catalogTermDocumentFrequency: Map<string, number>,
+  catalogEntryCount: number,
+): void {
+  const keywords = normalizeDemandSignalKeywords(value);
+  if (keywords.length === 0) {
+    return;
+  }
+
+  if (keywords.length === 1) {
+    addDemandKeyword(
+      keywords[0],
+      exactHighSignalTerms,
+      lowSignalTerms,
+      catalogTermDocumentFrequency,
+      catalogEntryCount,
+    );
+    return;
+  }
+
+  const uncommonKeywords = keywords.filter(
+    (keyword) =>
+      !LOW_SIGNAL_TERMS.has(keyword) &&
+      !isCatalogCommonHighSignal(
+        keyword,
+        catalogTermDocumentFrequency,
+        catalogEntryCount,
+      ),
   );
+
+  if (uncommonKeywords.length >= HIGH_SIGNAL_PHRASE_MATCH_THRESHOLD) {
+    highSignalPhrases.push(uncommonKeywords);
+    return;
+  }
+
+  if (
+    uncommonKeywords.length > 0 &&
+    keywords.length >= HIGH_SIGNAL_PHRASE_MATCH_THRESHOLD
+  ) {
+    highSignalPhrases.push(keywords);
+    return;
+  }
+
+  for (const keyword of keywords) {
+    lowSignalTerms.add(keyword);
+  }
+}
+
+function addDemandKeyword(
+  keyword: string,
+  exactHighSignalTerms: Set<string>,
+  lowSignalTerms: Set<string>,
+  catalogTermDocumentFrequency: Map<string, number>,
+  catalogEntryCount: number,
+): void {
+  if (
+    LOW_SIGNAL_TERMS.has(keyword) ||
+    isCatalogCommonHighSignal(
+      keyword,
+      catalogTermDocumentFrequency,
+      catalogEntryCount,
+    )
+  ) {
+    lowSignalTerms.add(keyword);
+    return;
+  }
+
+  exactHighSignalTerms.add(keyword);
+}
+
+function normalizeDemandSignalKeywords(value: string): string[] {
+  return Array.from(
+    new Set(
+      splitIntoKeywords(stripPackageEvidencePrefix(value)).filter(
+        (keyword) => !IGNORED_CONCERN_TERMS.has(keyword),
+      ),
+    ),
+  );
+}
+
+function isCatalogCommonHighSignal(
+  keyword: string,
+  catalogTermDocumentFrequency: Map<string, number>,
+  catalogEntryCount: number,
+): boolean {
+  if (catalogEntryCount < MIN_CATALOG_SIZE_FOR_COMMON_HIGH_SIGNAL_FILTER) {
+    return false;
+  }
+
+  return (
+    (catalogTermDocumentFrequency.get(keyword) ?? 0) / catalogEntryCount >=
+    COMMON_HIGH_SIGNAL_CATALOG_SHARE_THRESHOLD
+  );
+}
+
+function buildCatalogTermData(
+  catalogEntries: AssetCatalogEntry[],
+): CatalogTermData {
+  const documentFrequency = new Map<string, number>();
+  const entryTermsByEntry = new Map<AssetCatalogEntry, Set<string>>();
+
+  for (const entry of catalogEntries) {
+    const entryTerms = buildEntryTermSet(entry);
+    entryTermsByEntry.set(entry, entryTerms);
+
+    for (const term of entryTerms) {
+      documentFrequency.set(term, (documentFrequency.get(term) ?? 0) + 1);
+    }
+  }
+
+  return {
+    documentFrequency,
+    entryTermsByEntry,
+  };
 }
 
 function stripPackageEvidencePrefix(value: string): string {
-  return value.replace(
-    /^(?:cargo|cocoapods|gem|go|gradle|maven|npm|nuget|packagist|pub|pypi|swift):/iu,
-    "",
-  );
+  return value.replace(PACKAGE_REGISTRY_PREFIX_RE, "");
 }
 
-function isEntryRelevantToDemand(
-  entry: AssetCatalogEntry,
-  demandTerms: Set<string>,
-): boolean {
-  if (isExecutableMcpServerEntry(entry)) {
-    return true;
-  }
-
-  if (entry.fit.portfolioFit > 0) {
-    return true;
-  }
-
-  const entryTerms = new Set(
+function buildEntryTermSet(entry: AssetCatalogEntry): Set<string> {
+  return new Set(
     [
-      entry.id,
-      entry.displayName,
-      entry.source.sourceId,
-      entry.source.publisher,
       ...entry.capabilities,
       entry.install.relativePath ?? "",
       entry.install.manifestEntry ?? "",
       entry.evidence.filePath ?? "",
     ].flatMap((value) => splitIntoKeywords(value)),
   );
+}
 
-  for (const demandTerm of demandTerms) {
+function isEntryRelevantToDemand(
+  entry: AssetCatalogEntry,
+  entryTerms: Set<string>,
+  demandTerms: DemandRelevanceTerms,
+): boolean {
+  if (isExecutableMcpServerEntry(entry)) {
+    return true;
+  }
+
+  for (const demandTerm of demandTerms.exactHighSignalTerms) {
     if (entryTerms.has(demandTerm)) {
+      return true;
+    }
+  }
+
+  for (const demandPhrase of demandTerms.highSignalPhrases) {
+    let phraseMatchCount = 0;
+    for (const demandTerm of demandPhrase) {
+      if (entryTerms.has(demandTerm)) {
+        phraseMatchCount += 1;
+      }
+    }
+
+    if (
+      phraseMatchCount >=
+      Math.min(HIGH_SIGNAL_PHRASE_MATCH_THRESHOLD, demandPhrase.length)
+    ) {
+      return true;
+    }
+  }
+
+  let lowSignalOverlapCount = 0;
+  for (const demandTerm of demandTerms.lowSignalTerms) {
+    if (!entryTerms.has(demandTerm)) {
+      continue;
+    }
+
+    lowSignalOverlapCount += 1;
+    if (lowSignalOverlapCount >= LOW_SIGNAL_CONCERN_MATCH_THRESHOLD) {
       return true;
     }
   }
