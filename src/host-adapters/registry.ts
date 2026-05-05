@@ -96,16 +96,49 @@ const opencodeCapabilities: HostCapability[] = [
   { assetKind: "plugin", behaviors: ["stage", "wire"] },
   { assetKind: "hook", behaviors: ["stage", "wire"] },
   { assetKind: "workflow", behaviors: ["stage", "wire"] },
+  { assetKind: "prompt-pack", behaviors: ["stage", "wire"] },
   { assetKind: "reference-pack", behaviors: ["stage", "wire"] },
+  { assetKind: "extension", behaviors: ["stage", "wire"] },
   { assetKind: "mcp-server", behaviors: ["stage", "wire", "auth-assist"] },
 ];
 
-const cursorCapabilities: HostCapability[] = vscodeCapabilities;
+const cursorCapabilities: HostCapability[] = [
+  { assetKind: "instruction", behaviors: ["stage", "wire"] },
+  { assetKind: "agent", behaviors: ["stage", "wire"] },
+  { assetKind: "skill", behaviors: ["stage", "wire"] },
+  { assetKind: "workflow", behaviors: ["stage", "wire"] },
+  { assetKind: "prompt-pack", behaviors: ["stage", "wire"] },
+  { assetKind: "plugin", behaviors: ["stage", "wire"] },
+  { assetKind: "hook", behaviors: ["stage", "wire"] },
+  { assetKind: "reference-pack", behaviors: ["stage", "wire"] },
+  {
+    assetKind: "extension",
+    behaviors: ["stage", "wire", "native-install", "runtime-validation"],
+  },
+  { assetKind: "mcp-server", behaviors: ["stage", "wire", "auth-assist"] },
+];
 
-const piCapabilities: HostCapability[] = opencodeCapabilities.map(
+const nativeReferenceCapabilities: HostCapability[] = [
+  { assetKind: "instruction", behaviors: ["stage", "wire"] },
+  { assetKind: "agent", behaviors: ["stage", "wire"] },
+  { assetKind: "skill", behaviors: ["stage", "wire"] },
+  { assetKind: "workflow", behaviors: ["stage", "wire"] },
+  { assetKind: "prompt-pack", behaviors: ["stage", "wire"] },
+  { assetKind: "plugin", behaviors: ["stage", "wire"] },
+  { assetKind: "hook", behaviors: ["stage", "wire"] },
+  { assetKind: "reference-pack", behaviors: ["stage", "wire"] },
+  { assetKind: "extension", behaviors: ["stage", "wire"] },
+  { assetKind: "mcp-server", behaviors: ["stage", "wire", "auth-assist"] },
+];
+
+const zedCapabilities: HostCapability[] = nativeReferenceCapabilities;
+
+const claudeCodeCapabilities: HostCapability[] = nativeReferenceCapabilities;
+
+const piCapabilities: HostCapability[] = nativeReferenceCapabilities.map(
   (capability) =>
     capability.assetKind === "mcp-server"
-      ? { assetKind: capability.assetKind, behaviors: ["stage"] }
+      ? { assetKind: capability.assetKind, behaviors: ["stage", "wire"] }
       : capability,
 );
 
@@ -205,7 +238,7 @@ const DEFAULT_HOST_ADAPTERS: HostAdapter[] = [
       guidance:
         "Install the Zed CLI if you want runtime validation beyond project-local file wiring.",
     },
-    capabilities: opencodeCapabilities,
+    capabilities: zedCapabilities,
     wire: (options) => wireNativeHost("zed", options),
   },
   {
@@ -223,7 +256,7 @@ const DEFAULT_HOST_ADAPTERS: HostAdapter[] = [
       guidance:
         "Install the Claude Code CLI if you want runtime validation beyond project-local file wiring.",
     },
-    capabilities: opencodeCapabilities,
+    capabilities: claudeCodeCapabilities,
     wire: (options) => wireNativeHost("claude-code", options),
   },
   {

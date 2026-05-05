@@ -224,7 +224,7 @@ This scans the current workspace, ranks assets with the `zed` recommendation pol
 agent-harness workspace cursor --intent frontend
 ```
 
-Cursor reuses the Copilot-compatible lifecycle host but applies Cursor-specific recommendation policy and project-local `.cursor` rules.
+Cursor reuses the Copilot-compatible lifecycle host but applies Cursor-specific recommendation policy, project-local `.cursor` rules, prompt-pack command coverage, MCP references, and managed Cursor plugin-compatible assets.
 
 ### Inspect why an asset was recommended
 
@@ -293,13 +293,21 @@ node ./dist/cli.js discover stats
 node ./dist/cli.js discover enrich
 ```
 
+Every command group accepts `--help` or `-h` and exits before preparing lifecycle state. Examples:
+
+```bash
+agent-harness discover --help
+agent-harness wire vscode --help
+agent-harness recommend explain --help
+```
+
 ### Detection breadth and vendor signatures
 
 Demand detection is deterministic by default. It does not require an external AI/ML service or API key for normal operation. The scanner combines:
 
-- file-family detector signatures for docs, notebooks, datasets, media/design, CAD/hardware, games, mobile, robotics, security/networking, blockchain, business analysis, 3D printing, marketing/content, and research artifacts;
-- ecosystem dependency signatures for npm and PyPI packages;
-- vendor/platform signatures for common third-party stacks such as Node, React, Flutter-related manifests, Azure, AWS, GCP, Firebase, Supabase, Apify, MCP, AI/ML/DL/RL libraries, robotics, blockchain, security, and marketing/SEO packages;
+- file-family detector signatures for docs, notebooks, datasets, BI dashboards, finance/trading, media/design, audio/music/video/VFX, CAD/hardware, embedded/firmware, games, mobile, robotics/simulation, DevOps/platform, security/networking, blockchain/smart contracts, business analysis, 3D printing/slicer profiles, marketing/content/CMS/SEO, and research artifacts;
+- ecosystem dependency signatures for npm, PyPI, Dart `pubspec.yaml`, Cargo, Go modules, Maven/Gradle, NuGet, RubyGems, Packagist, SwiftPM, CocoaPods, and related native mobile manifests;
+- vendor/platform signatures for common third-party stacks such as Node, React, Flutter/Dart, Swift, Objective-C, Kotlin, Java Android, C#/.NET MAUI/Xamarin, Java/.NET/Go/Rust/Ruby/PHP backends, Azure, AWS, GCP, Firebase, Supabase, Apify, MCP, AI/ML/DL/RL/MLOps/RAG/vector-search libraries, robotics/simulation, blockchain/security, DevOps/Kubernetes/Helm/Ansible/Pulumi, network automation, finance/trading, BI/reporting, CAD/embedded/3D printing, creative media, and marketing/SEO/content packages;
 - generic language, package-manager, infrastructure, and API markers.
 
 These signatures live under `src/domains/discovery/` alongside focused demand-profile, source-registry, source-index, source-utilization, catalog-selection, package/reference/local/GitHub/official-index harvester, and catalog utility modules. Support for additional domains or vendors can be added as data-driven detector entries or focused harvester modules instead of one-off project-specific logic. Optional AI-assisted enrichment is available through `discover enrich`, but v1.0.0 intentionally keeps normal discovery reproducible and offline-capable by default.
@@ -547,7 +555,7 @@ This adapter is intentionally host-specific because OpenCode consumes project-lo
 Supported behavior:
 
 - writes `.opencode/context/project-intelligence/agent-harness/`
-- creates managed links under `.opencode/<asset-kind>/`
+- creates managed links under `.opencode/<asset-kind>/`, mapping workflow and prompt-pack assets to OpenCode `commands/`
 - writes an effective project-local wire plan under the `.opencode` overlay
 - projects shared MCP references into the wire plan when available
 - updates/removes managed `AGENTS.md` sections
@@ -561,12 +569,11 @@ Managed project-local locations:
 - `.opencode/agents/`
 - `.opencode/skills/`
 - `.opencode/instructions/`
-- `.opencode/workflows/`
+- `.opencode/commands/`
 - `.opencode/hooks/`
 - `.opencode/plugins/`
 - `.opencode/mcp-servers/`
 - `.opencode/extensions/`
-- `.opencode/prompt-packs/`
 - `.opencode/reference-packs/`
 - `AGENTS.md`
 
@@ -593,6 +600,9 @@ Supported behavior:
 
 - writes `.cursor/rules/agent-harness.mdc`
 - materializes selected assets under `.cursor/agent-harness/`
+- stages a Cursor plugin-compatible component tree at `.cursor/agent-harness/cursor-plugin/` with a `.cursor-plugin/plugin.json` manifest
+- maps selected Cursor command-like assets from `workflow` and `prompt-pack` recommendations into staged plugin `commands/`
+- stages plugin-compatible `agents/`, `skills/`, `rules/`, and reference files for hosts that register project plugin paths
 - writes `activate/cursor/wire-preview-cursor.json`
 - writes `activate/cursor/wire-plan.json` on apply
 - avoids global Cursor profile mutation
@@ -602,6 +612,8 @@ Supported behavior:
 Current boundaries:
 
 - Cursor native extension installation is explicit through `install native --host cursor --operation <verify|install|remove>` and depends on a compatible `cursor` CLI.
+- Cursor plugin assets are staged project-locally; registering plugin paths remains host/user-managed.
+- MCP assets are surfaced as references unless structured server configuration is available from the selected asset.
 - Extension-like assets without structured extension IDs are treated as reference material in the project-local managed tree.
 
 ### Zed
@@ -617,7 +629,8 @@ Supported behavior:
 
 - updates the project `.rules` file with an agent-harness managed section
 - adds an `agent-harness` profile entry to `.zed/settings.json`
-- materializes selected assets under `.zed/agent-harness/`
+- materializes selected assets of every supported asset kind under `.zed/agent-harness/`
+- surfaces agents, skills, workflows, prompt packs, plugins, hooks, extensions, reference packs, and MCP assets as project-readable references in managed Zed context
 - writes `activate/zed/wire-preview-zed.json`
 - writes `activate/zed/wire-plan.json` on apply
 - avoids global Zed profile/settings mutation
@@ -626,7 +639,7 @@ Supported behavior:
 Current boundaries:
 
 - The adapter writes project-local context and profile hints.
-- Host marketplace/plugin installation remains manual or future adapter-specific work.
+- Zed extension installation remains manual through Zed's Extension Gallery or `auto_install_extensions`; extension assets are wired as managed project references rather than installed automatically.
 
 ### Claude Code
 
@@ -642,9 +655,13 @@ Supported behavior:
 - writes managed project context to `CLAUDE.md`
 - writes managed local Claude context to `.claude/CLAUDE.md`
 - writes `.claude/rules/agent-harness.md`
+- writes `.claude/agents/agent-harness.md`
 - writes `.claude/skills/agent-harness/SKILL.md`
 - writes `.claude/commands/agent-harness.md`
-- materializes selected assets under `.claude/agent-harness/`
+- maps selected Claude Code command-like assets from `workflow` and `prompt-pack` recommendations into the managed command context
+- includes selected instruction, agent, skill, workflow, and prompt-pack content in the matching managed Claude files
+- materializes selected assets of every supported asset kind under `.claude/agent-harness/`
+- surfaces plugins, hooks, extensions, reference packs, and MCP assets as managed project-readable references
 - writes `activate/claude-code/wire-preview-claude-code.json`
 - writes `activate/claude-code/wire-plan.json` on apply
 - avoids global Claude Code profile mutation
@@ -652,7 +669,7 @@ Supported behavior:
 Current boundaries:
 
 - MCP and reference assets are staged as project-readable references.
-- The adapter does not synthesize full Claude Code MCP server config without structured server metadata.
+- The adapter does not synthesize full Claude Code MCP server config or executable hook/plugin settings without structured server or executable configuration metadata.
 
 ### Pi
 
@@ -670,7 +687,9 @@ Supported behavior:
 - writes `.pi/skills/agent-harness/SKILL.md`
 - writes `.pi/prompts/agent-harness.md`
 - updates `.pi/settings.json` with skill and prompt resource entries
-- materializes selected assets under `.pi/agent-harness/`
+- includes selected instruction, agent, skill, workflow, and prompt-pack content in the matching managed Pi files
+- materializes selected assets of every supported asset kind under `.pi/agent-harness/`
+- surfaces plugins, hooks, extensions, reference packs, and MCP assets as managed project-readable references
 - writes `activate/pi/wire-preview-pi.json`
 - writes `activate/pi/wire-plan.json` on apply
 - avoids global Pi profile mutation
@@ -678,7 +697,7 @@ Supported behavior:
 Current boundaries:
 
 - Pi does not include `shared-mcp` in its default bundles.
-- MCP assets are staged as references unless your Pi installation includes a compatible MCP extension.
+- MCP, extension, hook, and plugin assets are wired as managed references unless your Pi installation includes compatible executable support.
 
 ### Native adapter wire-plan fields
 
@@ -690,6 +709,7 @@ Native project-local adapters emit effective wire plans with materialized paths.
 - `pluginDirs`
 - `workflowFiles`
 - `referenceFiles`
+- `extensionIds`
 - `hookFiles`
 - `mcpServers`
 - `nativeInstallActions`
@@ -723,6 +743,8 @@ Generated outputs include:
 
 `discover/output/source-utilization.json` separates configured sources from operationally harvested sources so you can see whether broad source declarations are producing usable catalog entries.
 
+Generated local source seeds include host config roots for OpenCode, Claude Code, and Cursor. Claude Code harvesting recognizes `CLAUDE.md`, `.claude`-style `agents/`, `commands/`, `skills/`, hook settings, plugin manifests, and `.mcp.json`. Cursor harvesting recognizes rules, agents, commands, skills, hooks, plugin manifests, marketplace manifests, and `mcp.json` from the default Cursor config root. Claude Code and Cursor generated local config sources are catalog-only by default so local settings, hooks, and MCP files are not mirrored into project state unless a user-authored source explicitly opts in.
+
 ### Dependency-evidence package discovery
 
 Package registry discovery is driven by dependency evidence extracted from manifests such as:
@@ -730,10 +752,15 @@ Package registry discovery is driven by dependency evidence extracted from manif
 - `package.json`
 - `requirements.txt`
 - `pyproject.toml`
+- `pubspec.yaml`
 
-The discovery pipeline emits package dependency signals like `npm:<package>` and `pypi:<package>` only from dependency evidence. It filters requirement directives, direct references, VCS URLs, local paths, and non-package strings before querying package registries.
+The discovery pipeline emits package dependency signals like `npm:<package>`, `pypi:<package>`, and `pub:<package>` only from dependency evidence. It filters requirement directives, direct references, VCS URLs, local paths, and non-package strings before querying package registries.
 
-For `pyproject.toml`, dependency extraction is intentionally scoped to project dependency sections rather than build-system requirements. Supported sections include PEP 621 `[project].dependencies`, `[project.optional-dependencies]`, Poetry `[tool.poetry.dependencies]`, `[tool.poetry.dev-dependencies]`, and `[tool.poetry.group.<name>.dependencies]` sections.
+For `pyproject.toml`, dependency extraction is intentionally scoped to project dependency sections rather than build-system requirements. Supported sections include PEP 621 `[project].dependencies`, `[project.optional-dependencies]`, Poetry `[tool.poetry.dependencies]`, `[tool.poetry.dev-dependencies]`, and `[tool.poetry.group.<name>.dependencies]` sections. Requirements detection covers `requirements*.txt`, `constraints*.txt`, and files under `requirements/` without treating that folder name as business-analysis evidence.
+
+Non-Python/JavaScript dependency parsing also feeds technology signatures for Cargo workspace dependencies, Go modules, Maven/Gradle coordinates, NuGet `PackageReference`/`PackageVersion`/`packages.config`, Ruby gems, Packagist packages, and SwiftPM packages. Lockfiles are used for package-manager evidence but are not scanned as generic prose, which avoids transitive package names such as `debug` or `mock` creating false demand signals.
+
+For MCP recommendations, npm registry discovery builds demand-derived npm search queries such as `<detected-term> mcp server` and `keywords:mcp-server`, then filters search results to executable-server package patterns. This avoids a checked-in package allowlist while still surfacing relevant MCP servers for detected stacks. GitHub tree harvesting treats Markdown MCP documentation as reference material instead of executable MCP server assets.
 
 ### Recommendation policy layout
 
@@ -751,6 +778,8 @@ Recommendation policy is split across smaller JSON files:
 - `discover/schema/recommendation-host-policy-override.schema.json`
 
 `base.json` holds global scoring, keyword maps, optional host defaults, and reusable presets. Each host file holds host-specific overrides. At runtime the loader composes these files into the effective recommendation policy.
+
+`discover select` first applies workspace-demand relevance filtering, then canonical duplicate selection. Entries with no language, framework, concern, tooling, or executable MCP overlap are rejected before recommendation so unrelated source packs do not dominate real-world reports.
 
 Recommendation scoring considers:
 
@@ -1013,6 +1042,20 @@ Preview should remove stale wire plans where the adapter owns them. If workspace
 agent-harness wire <host> --reset
 agent-harness wire <host> --preview
 ```
+
+### Recommendations are slow or irrelevant on a real workspace
+
+Run the pipeline from the target workspace so `discover demand-profile` can see the real manifests, then inspect selection counts before recommendation:
+
+```bash
+agent-harness discover demand-profile
+agent-harness discover catalog
+agent-harness discover select
+agent-harness discover stats
+agent-harness recommend report
+```
+
+`discover select` should reject entries that do not overlap with detected workspace signals. If relevant entries are missing, inspect `discover/output/demand-profile.json` and confirm the workspace manifests are not excluded by `.gitignore`, `.ignore`, or `.agent-harnessignore`.
 
 ### GitHub discovery is slow or rate-limited
 

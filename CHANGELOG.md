@@ -12,7 +12,7 @@ All notable changes to this project will be documented in this file.
 - scan budgets, expanded ignore profiles, link lifecycle tests, scan benchmark budgets, and Windows/macOS/Linux CI coverage
 - source utilization reporting that separates configured sources from operationally harvested sources
 - dependency-evidence package registry harvesting for npm and PyPI plus docs, registry, and marketplace reference harvesters
-- host adapter registry with capability matrices, guided setup/doctor commands, adapter-specific CLI readiness diagnostics, native project-local auto-wiring for Cursor, Zed, Claude Code, and Pi, independent per-host recommendation policies, extension install planning, and shared MCP wire plan projection
+- host adapter registry with capability matrices, guided setup/doctor commands, adapter-specific CLI readiness diagnostics, native project-local auto-wiring for Cursor, Zed, Claude Code, and Pi, independent per-host recommendation policies, extension install planning, prompt-template/command coverage, and shared MCP wire plan projection
 - policy coverage reporting that checks detector-emitted terms against recommendation policy maps, fails CI on unmapped terms, and emits human-reviewed draft policy suggestions
 - regression tests for dotenv duplicate/multiline parsing, CLI option missing-value handling, VS Code settings patching, safe mirror artifact paths, and PyPI metadata normalization
 - guarded HTTP helpers with origin allowlists, timeouts, and response byte limits for external content reads
@@ -27,6 +27,7 @@ All notable changes to this project will be documented in this file.
 - `mirror diff` and `mirror explain` commands for phase-level inspection
 - explicit `.npmignore` release-artifact controls that keep source, tests, source maps, CI metadata, runtime state, local tarballs, and planning-only docs out of packed artifacts
 - registry-driven recommendation-host enumeration, extensible host-target validation, package entry points, TypeScript declaration output, and release checks across Ubuntu, macOS, and Windows
+- regression coverage for real-world TypeScript/Apify, Flutter/Firebase, native mobile, finance/trading, BI, DevOps/networking, MLOps/RAG, embedded/robotics/blockchain, data-mining/SEO, demand relevance selection, command help side effects, executable MCP package search, and human-readable generic asset names
 
 ### Changed in 1.0.0
 
@@ -48,6 +49,9 @@ All notable changes to this project will be documented in this file.
 - split mirror planning, bundle locking, acquisition/materialization, inspection, constants, and path handling into `src/mirror/` modules behind the stable `src/mirror.ts` facade
 - tightened ESLint with type-aware no-floating-promise and unsafe-access rules plus scoped console-output enforcement for CLI boundary modules
 - reduced `src/discover.ts`, `src/install.ts`, `src/manifest-validation.ts`, and `src/types.ts` to stable entrypoints backed by focused domain modules
+- made catalog selection demand-aware before duplicate selection so irrelevant source-pack entries are rejected before recommendation
+- aligned OpenCode, Zed, Pi, Cursor, and Claude Code capability matrices with documented host-specific assets including OpenCode commands, Zed MCP/reference support, Pi prompt templates, Cursor prompt/plugin assets, and Claude Code prompt/MCP assets
+- made CLI `--help` and `-h` flags route to command-group usage before lifecycle state is prepared
 
 ### Fixed in 1.0.0
 
@@ -73,6 +77,17 @@ All notable changes to this project will be documented in this file.
 - native and VS Code wire-in now preserve applied preview state, reuse activation asset path sanitization, and avoid clobbering user-owned global skill-location preferences
 - rebuild, scanning, discovery, activation, and install flows now use workspace roots consistently, skip generated discovery output, reuse demand-signal file reads, atomically stage activation runtime views before swapping, merge bundle membership, mirror audit-only assets, reject truncated GitHub snapshots, and validate all Copilot workspace profile selection arrays
 - public exported declarations now include API docstrings with a regression test that fails when exported source declarations lack JSDoc coverage
+- demand profiling now uses delimited technology text-marker matching to avoid substring false positives such as `ros` inside common TypeScript words
+- demand profiling now covers broader repo archetypes including finance/trading, BI/reporting, DevOps/platform engineering, network automation, advanced security, MLOps/RAG/vector search, creative media, embedded/firmware, robotics simulation, extended blockchain, data mining, slicer/3D-printing, and CMS/SEO/content workflows
+- dependency parsing now feeds technology signatures for Cargo, Go, Maven/Gradle, NuGet, RubyGems, Packagist, and SwiftPM manifests, handles Poetry inline table dependencies, requirements variants, Cargo workspace dependencies, Gradle two-part coordinates, NuGet central package management, and avoids prose-scanning lockfiles
+- demand profiling now detects Dart/Flutter `pubspec.yaml`, Firebase `pub` dependencies, Kotlin/Java Android, Swift, Objective-C, CocoaPods, SwiftPM, C#/.NET MAUI, and Xamarin mobile projects
+- package-registry discovery now uses demand-derived npm search queries for executable MCP servers instead of checked-in package-name allowlists, and registry MCP classification recognizes executable server package patterns
+- GitHub tree harvesting no longer treats Markdown files that mention MCP as executable MCP servers
+- generic catalog filenames such as `SKILL.md` and `README.md` now fall back to human-readable parent directory names
+- Claude Code and Cursor local config harvesting now recognizes host-native agents, commands/prompt packs, skills, hooks, plugin manifests, MCP config files, and rule/context files while keeping generated local config sources catalog-only by default
+- Cursor wire-in now stages a plugin-compatible component tree under `.cursor/agent-harness/cursor-plugin`, and Claude Code wire-in now writes a managed `.claude/agents/agent-harness.md` project agent
+- native host wire-in now exposes every selected asset kind through host managed references and wire-plan buckets for Cursor, Zed, Claude Code, and Pi
+- recommendation redundancy scoring now uses maintained selection indexes instead of scanning every selected candidate for each score
 
 ## [0.2.0] - 2026-04-27
 

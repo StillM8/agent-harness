@@ -67,7 +67,7 @@
         "verified": true,
         "owner": "microsoft"
       },
-      "hosts": ["copilot-vscode"],
+      "hosts": ["copilot-vscode", "cursor"],
       "assetKinds": ["extension", "plugin", "mcp-server"],
       "discoveryMode": "catalog",
       "priority": 95,
@@ -93,7 +93,17 @@
         "owner": "anthropic"
       },
       "hosts": ["copilot-vscode", "opencode", "claude-code"],
-      "assetKinds": ["skill", "plugin", "hook", "agent", "workflow"],
+      "assetKinds": [
+        "instruction",
+        "skill",
+        "plugin",
+        "hook",
+        "agent",
+        "workflow",
+        "prompt-pack",
+        "mcp-server",
+        "reference-pack"
+      ],
       "discoveryMode": "catalog",
       "priority": 90,
       "enabled": true,
@@ -117,7 +127,17 @@
         "owner": "cursor"
       },
       "hosts": ["copilot-vscode", "cursor"],
-      "assetKinds": ["instruction", "agent", "workflow", "reference-pack"],
+      "assetKinds": [
+        "instruction",
+        "skill",
+        "plugin",
+        "hook",
+        "agent",
+        "workflow",
+        "prompt-pack",
+        "mcp-server",
+        "reference-pack"
+      ],
       "discoveryMode": "catalog",
       "priority": 92,
       "enabled": true,
@@ -152,6 +172,30 @@
         "officialPreferred": true,
         "allowMirror": true,
         "allowInstall": true
+      }
+    },
+    {
+      "id": "zed-extension-registry",
+      "name": "Zed Extension Gallery",
+      "kind": "registry",
+      "authorityTier": "official-marketplace",
+      "publisher": {
+        "name": "Zed",
+        "verified": true,
+        "owner": "zed-industries"
+      },
+      "hosts": ["zed"],
+      "assetKinds": ["extension", "mcp-server", "reference-pack"],
+      "discoveryMode": "catalog",
+      "priority": 90,
+      "enabled": true,
+      "endpoints": {
+        "baseUrl": "https://zed.dev/extensions"
+      },
+      "rules": {
+        "officialPreferred": true,
+        "allowMirror": true,
+        "allowInstall": false
       }
     },
     {

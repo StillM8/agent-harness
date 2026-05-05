@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
+import { shouldInspectFile } from "../domains/discovery/demand-signals.js";
 import { buildDemandProfile } from "../discover.js";
 import type { DemandSignalSet } from "../types.js";
 
@@ -11,8 +12,20 @@ interface DemandProfileRepoFixture {
   archetype: string;
   files: Array<{ path: string; content: string }>;
   expectedSignals: Partial<DemandSignalSet>;
+  unexpectedSignals?: Partial<DemandSignalSet>;
   expectedMatchedFilesMin: number;
 }
+
+void test("mobile project marker files are inspectable", () => {
+  for (const fileName of [
+    "Podfile",
+    "AndroidManifest.xml",
+    "Info.plist",
+    "project.pbxproj",
+  ]) {
+    assert.equal(shouldInspectFile(fileName, `mobile/${fileName}`), true);
+  }
+});
 
 const repoFixtures: DemandProfileRepoFixture[] = [
   {
@@ -85,6 +98,135 @@ const repoFixtures: DemandProfileRepoFixture[] = [
       tooling: ["cad", "godot", "asset-pipeline"],
     },
     expectedMatchedFilesMin: 3,
+  },
+  {
+    archetype: "typescript-apify-webhook",
+    files: [
+      {
+        path: "package.json",
+        content: JSON.stringify({
+          name: "webhook-debugger-logger",
+          description: "Apify actor for webhook debugging and logging",
+          dependencies: {
+            "@apify/client": "latest",
+            apify: "latest",
+            express: "latest",
+            typescript: "latest",
+          },
+          devDependencies: { vitest: "latest" },
+        }),
+      },
+      {
+        path: "tsconfig.json",
+        content: JSON.stringify({ compilerOptions: { target: "ES2022" } }),
+      },
+    ],
+    expectedSignals: {
+      languages: ["javascript", "typescript"],
+      frameworks: ["apify", "express"],
+      concerns: [
+        "automation",
+        "web-scraping",
+        "backend",
+        "api-design",
+        "webhook",
+        "logging",
+        "debugging",
+      ],
+      tooling: ["actor", "crawler", "npm:@apify/client", "webhook"],
+    },
+    unexpectedSignals: {
+      languages: ["rust"],
+      concerns: [
+        "robotics",
+        "systems-engineering",
+        "pentesting",
+        "game-development",
+        "3d-printing",
+      ],
+    },
+    expectedMatchedFilesMin: 2,
+  },
+  {
+    archetype: "flutter-firebase-mobile",
+    files: [
+      {
+        path: "pubspec.yaml",
+        content:
+          "name: interact_note\ndependencies:\n    flutter:\n      sdk: flutter\n    firebase_core: ^3.0.0\n    firebase_auth: ^5.0.0\n    cloud_firestore: ^5.0.0\ndev_dependencies:\n  flutter_test:\n    sdk: flutter\ntest_dependencies:\n    integration_test:\n      sdk: flutter\n",
+      },
+      {
+        path: "android/app/build.gradle.kts",
+        content:
+          'plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }\nandroid { namespace = "app.interactnote" }\n',
+      },
+    ],
+    expectedSignals: {
+      languages: ["dart", "kotlin"],
+      packageManagers: ["pub", "maven-gradle"],
+      frameworks: ["flutter", "firebase"],
+      concerns: [
+        "mobile",
+        "frontend",
+        "backend",
+        "database",
+        "authentication",
+        "android",
+      ],
+      tooling: [
+        "flutter",
+        "pub:flutter",
+        "pub:firebase_core",
+        "pub:integration_test",
+        "android-gradle",
+      ],
+    },
+    unexpectedSignals: {
+      frameworks: ["apify"],
+      concerns: ["robotics", "game-development", "pentesting", "web-scraping"],
+      tooling: ["pub:sdk"],
+    },
+    expectedMatchedFilesMin: 2,
+  },
+  {
+    archetype: "native-mobile-polyglot",
+    files: [
+      {
+        path: "ios/AppDelegate.swift",
+        content:
+          "import UIKit\nclass AppDelegate: UIResponder, UIApplicationDelegate {}\n",
+      },
+      {
+        path: "ios/LegacyViewController.m",
+        content:
+          "#import <UIKit/UIKit.h>\n@implementation LegacyViewController\n@end\n",
+      },
+      {
+        path: "ios/Podfile",
+        content: "platform :ios, '17.0'\ntarget 'Example' do\nend\n",
+      },
+      {
+        path: "android/app/src/main/java/com/example/MainActivity.java",
+        content: "package com.example; public class MainActivity {}\n",
+      },
+      {
+        path: "android/app/src/main/kotlin/com/example/MainActivity.kt",
+        content: "package com.example\nclass MainActivity\n",
+      },
+      {
+        path: "MobileApp.csproj",
+        content:
+          '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFrameworks>net8.0-ios;net8.0-android</TargetFrameworks><UseMaui>true</UseMaui></PropertyGroup><ItemGroup><PackageReference Include="Microsoft.Maui.Controls" /></ItemGroup></Project>',
+      },
+    ],
+    expectedSignals: {
+      languages: ["swift", "objective-c", "java", "kotlin", "csharp"],
+      packageManagers: ["cocoapods", "nuget"],
+      frameworks: ["maui"],
+      concerns: ["mobile", "ios", "android"],
+      tooling: ["ios", "android", "cocoapods", "dotnet-maui"],
+    },
+    expectedMatchedFilesMin: 6,
   },
   {
     archetype: "cloud-automation-blockchain",
@@ -214,6 +356,236 @@ const repoFixtures: DemandProfileRepoFixture[] = [
     },
     expectedMatchedFilesMin: 2,
   },
+  {
+    archetype: "trading-bi-market-analysis",
+    files: [
+      {
+        path: "requirements-dev.txt",
+        content: "ccxt\nyfinance\nbacktrader\nstreamlit\n",
+      },
+      {
+        path: "trading/strategies/breakout.pine",
+        content: "strategy('breakout')",
+      },
+      { path: "dashboards/sales.pbix", content: "fixture" },
+    ],
+    expectedSignals: {
+      languages: ["python"],
+      concerns: [
+        "trading",
+        "market-analysis",
+        "quant-finance",
+        "financial-data",
+        "backtesting",
+        "business-intelligence",
+        "dashboarding",
+        "reporting",
+      ],
+      tooling: ["pypi:ccxt", "backtesting", "power-bi"],
+    },
+    expectedMatchedFilesMin: 3,
+  },
+  {
+    archetype: "devops-network-platform",
+    files: [
+      { path: ".github/workflows/ci.yml", content: "name: ci\n" },
+      { path: "charts/app/Chart.yaml", content: "apiVersion: v2\nname: app\n" },
+      { path: "ansible/playbook.yml", content: "- hosts: all\n" },
+      { path: "requirements/ops.txt", content: "ansible\nnapalm\nnetmiko\n" },
+    ],
+    expectedSignals: {
+      languages: ["python"],
+      concerns: [
+        "devops",
+        "ci-cd",
+        "infrastructure",
+        "platform-engineering",
+        "networking",
+        "netops",
+        "network-automation",
+      ],
+      tooling: ["kubernetes", "helm", "ansible", "pypi:netmiko"],
+    },
+    unexpectedSignals: {
+      concerns: ["business-analysis"],
+    },
+    expectedMatchedFilesMin: 4,
+  },
+  {
+    archetype: "mlops-rag-creative-media",
+    files: [
+      {
+        path: "requirements.txt",
+        content: "mlflow\nchromadb\nsentence-transformers\npydub\n",
+      },
+      { path: "models/assistant.gguf", content: "fixture" },
+      { path: "audio/theme.rpp", content: "fixture" },
+    ],
+    expectedSignals: {
+      concerns: [
+        "machine-learning",
+        "deep-learning",
+        "mlops",
+        "rag",
+        "vector-search",
+        "model-artifacts",
+        "audio-production",
+        "music",
+      ],
+      tooling: ["pypi:mlflow", "pypi:chromadb"],
+    },
+    expectedMatchedFilesMin: 3,
+  },
+  {
+    archetype: "embedded-robotics-blockchain",
+    files: [
+      {
+        path: "Cargo.toml",
+        content:
+          '[workspace.dependencies]\nembedded-hal = "1"\nanchor-lang = "0.30"\n',
+      },
+      {
+        path: "firmware/platformio.ini",
+        content: "[env:esp32]\nplatform = espressif32\n",
+      },
+      {
+        path: "robotics/nav2/nav.launch.py",
+        content: "from launch import LaunchDescription\n",
+      },
+    ],
+    expectedSignals: {
+      languages: ["rust"],
+      concerns: [
+        "embedded",
+        "firmware",
+        "hardware",
+        "iot",
+        "blockchain",
+        "smart-contracts",
+        "robotics",
+        "motion-planning",
+        "autonomy",
+      ],
+      tooling: ["cargo:embedded-hal", "cargo:anchor-lang"],
+    },
+    expectedMatchedFilesMin: 3,
+  },
+  {
+    archetype: "data-mining-seo-content",
+    files: [
+      { path: "dbt_project.yml", content: "name: analytics\n" },
+      { path: "dvc.yaml", content: "stages: {}\n" },
+      {
+        path: "scrapers/requirements.txt",
+        content: "scrapy\nbeautifulsoup4\n",
+      },
+      {
+        path: "content-marketing/cms/sitemap.xml",
+        content: "<urlset></urlset>",
+      },
+      {
+        path: "campaigns/landing-pages/robots.txt",
+        content: "User-agent: *\nAllow: /\n",
+      },
+      { path: "public/robots.txt", content: "User-agent: *\nAllow: /\n" },
+    ],
+    expectedSignals: {
+      languages: ["python"],
+      concerns: [
+        "data-engineering",
+        "data-mining",
+        "etl",
+        "analytics-engineering",
+        "marketing",
+        "seo",
+        "content-marketing",
+        "cms",
+        "campaigns",
+      ],
+      tooling: ["pypi:scrapy"],
+    },
+    unexpectedSignals: {
+      concerns: ["business-analysis"],
+    },
+    expectedMatchedFilesMin: 6,
+  },
+  {
+    archetype: "php-cms-frameworks",
+    files: [
+      {
+        path: "composer.json",
+        content: JSON.stringify({
+          require: {
+            "laravel/framework": "*",
+            "codeigniter4/framework": "*",
+            "laminas/laminas-mvc": "*",
+            "roots/wordpress": "*",
+            "drupal/core": "*",
+            "joomla/joomla-cms": "*",
+          },
+        }),
+      },
+    ],
+    expectedSignals: {
+      languages: ["php"],
+      packageManagers: ["composer"],
+      frameworks: ["backend-framework"],
+      concerns: ["backend", "api-design", "cms"],
+      tooling: [
+        "packagist:laravel/framework",
+        "packagist:codeigniter4/framework",
+        "wordpress",
+        "drupal",
+        "joomla",
+      ],
+    },
+    expectedMatchedFilesMin: 1,
+  },
+  {
+    archetype: "systems-and-beam-polyglot",
+    files: [
+      { path: "native/src/main.c", content: "int main(void) { return 0; }" },
+      { path: "native/src/lib.cpp", content: "int answer() { return 42; }" },
+      {
+        path: "native/CMakeLists.txt",
+        content: "project(native LANGUAGES C CXX)",
+      },
+      { path: "native/Makefile", content: "all:\n\tcc main.c\n" },
+      { path: "go/main.go", content: "package main\nfunc main() {}\n" },
+      { path: "rust/src/lib.rs", content: "pub fn answer() -> i32 { 42 }\n" },
+      { path: "erlang/src/app.erl", content: "-module(app).\n" },
+      { path: "erlang/rebar.config", content: "{deps, [cowboy]}.\n" },
+      {
+        path: "elixir/mix.exs",
+        content: 'defp deps, do: [{:phoenix, "~> 1.7"}]\n',
+      },
+      { path: "julia/Project.toml", content: 'DataFrames = "uuid"\n' },
+    ],
+    expectedSignals: {
+      languages: ["c", "cpp", "go", "rust", "erlang", "elixir", "julia"],
+      packageManagers: ["rebar", "hex", "julia-pkg"],
+      frameworks: ["backend-framework"],
+      concerns: ["backend", "systems-programming", "scientific-computing"],
+      tooling: ["cmake", "make"],
+    },
+    expectedMatchedFilesMin: 10,
+  },
+  {
+    archetype: "lockfile-no-text-intent",
+    files: [
+      {
+        path: "package-lock.json",
+        content: JSON.stringify({ packages: { "node_modules/debug": {} } }),
+      },
+    ],
+    expectedSignals: {
+      packageManagers: ["npm"],
+    },
+    unexpectedSignals: {
+      concerns: ["logging", "debugging", "mocking", "replay"],
+    },
+    expectedMatchedFilesMin: 1,
+  },
 ];
 
 void test("demand profiles produce meaningful signals for representative repo archetypes", async () => {
@@ -232,6 +604,11 @@ void test("demand profiles produce meaningful signals for representative repo ar
         fixture.archetype,
         profile.signals,
         fixture.expectedSignals,
+      );
+      assertUnexpectedSignals(
+        fixture.archetype,
+        profile.signals,
+        fixture.unexpectedSignals ?? {},
       );
     } finally {
       await rm(root, { force: true, recursive: true });
@@ -261,6 +638,24 @@ function assertExpectedSignals(
       assert.ok(
         actualValues.includes(expectedValue),
         `${archetype} should emit ${signalKind}:${expectedValue}`,
+      );
+    }
+  }
+}
+
+function assertUnexpectedSignals(
+  archetype: string,
+  actualSignals: DemandSignalSet,
+  unexpectedSignals: Partial<DemandSignalSet>,
+): void {
+  for (const [signalKind, unexpectedValues] of Object.entries(
+    unexpectedSignals,
+  )) {
+    const actualValues = actualSignals[signalKind as keyof DemandSignalSet];
+    for (const unexpectedValue of unexpectedValues ?? []) {
+      assert.ok(
+        !actualValues.includes(unexpectedValue),
+        `${archetype} should not emit ${signalKind}:${unexpectedValue}`,
       );
     }
   }

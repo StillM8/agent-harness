@@ -15,13 +15,12 @@ import {
   buildCandidateRankHint,
   buildCatalogId,
   buildTrustSignals,
+  deriveDisplayNameFromPath,
   computeHostFit,
   computePortfolioFit,
   computeTrustScore,
   findDuplicateGroup,
   GENERIC_CAPABILITY_TOKENS,
-  humanizeSlug,
-  lastPathSegment,
   splitIntoKeywords,
   uniqueStrings,
 } from "./catalog-utils.js";
@@ -94,7 +93,7 @@ function buildGitHubCatalogEntry(
 
   return {
     id: buildCatalogId(source.id, relativePath),
-    displayName: humanizeSlug(lastPathSegment(relativePath)),
+    displayName: deriveDisplayNameFromPath(relativePath),
     assetKind: classification.assetKind,
     hosts,
     compatibilityMode: classification.compatibilityMode,
@@ -229,11 +228,25 @@ function classifyGitHubTreePath(
 
   if (
     normalizedPath.endsWith("copilot-instructions.md") ||
-    (/(^|\/)(instructions?)(\/|$)/u.test(normalizedPath) &&
-      normalizedPath.endsWith(".md"))
+    /(^|\/)(?:agents|claude)\.md$/u.test(normalizedPath) ||
+    (/(^|\/)(?:instructions?|rules?)(\/|$)/u.test(normalizedPath) &&
+      /\.(?:md|mdc)$/u.test(normalizedPath))
   ) {
     return {
       assetKind: "instruction",
+      compatibilityMode: nativeHosts ? "native" : "adaptable",
+      hosts: nativeHosts ?? adaptableHosts,
+    };
+  }
+
+  if (
+    /(^|\/)(?:commands?|prompts?|prompt-templates?)(\/|$)/u.test(
+      normalizedPath,
+    ) &&
+    normalizedPath.endsWith(".md")
+  ) {
+    return {
+      assetKind: "prompt-pack",
       compatibilityMode: nativeHosts ? "native" : "adaptable",
       hosts: nativeHosts ?? adaptableHosts,
     };
@@ -262,7 +275,9 @@ function classifyGitHubTreePath(
   }
 
   if (
-    /(^|\/)(plugins?)(\/|$)/u.test(normalizedPath) &&
+    (/\.claude-plugin\/plugin\.json$/u.test(normalizedPath) ||
+      /\.cursor-plugin\/plugin\.json$/u.test(normalizedPath) ||
+      /(^|\/)(plugins?)(\/|$)/u.test(normalizedPath)) &&
     /\.(md|sh|js|ts|json)$/u.test(normalizedPath)
   ) {
     return {
@@ -272,10 +287,7 @@ function classifyGitHubTreePath(
     };
   }
 
-  if (
-    /mcp/u.test(normalizedPath) &&
-    /\.(md|json|js|ts|ya?ml)$/u.test(normalizedPath)
-  ) {
+  if (isExecutableMcpServerPath(normalizedPath)) {
     return {
       assetKind: "mcp-server",
       compatibilityMode: "native",
@@ -292,6 +304,16 @@ function classifyGitHubTreePath(
   }
 
   return null;
+}
+
+function isExecutableMcpServerPath(normalizedPath: string): boolean {
+  if (!/\.(js|ts|mjs|cjs|mts|cts)$/u.test(normalizedPath)) {
+    return false;
+  }
+
+  return /(^|\/)(mcp[-_ ]?servers?|servers?\/.*mcp|.*mcp[-_ ]?server.*)(\/|\.|$)/u.test(
+    normalizedPath,
+  );
 }
 
 function isGenericRepositoryArtifact(normalizedPath: string): boolean {
