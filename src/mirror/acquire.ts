@@ -117,6 +117,7 @@ export async function acquireMirrorArtifacts(
   );
   const entriesToAcquire = unresolvedEntries.slice(0, batchSize);
   const newMirrorIndexEntries: MirrorIndexEntry[] = [];
+  const skippedAssetIds: string[] = [];
   const evidenceAllowedRoots = buildMirrorEvidenceAllowedRoots(
     projectRoot,
     workingDirectory,
@@ -130,6 +131,7 @@ export async function acquireMirrorArtifacts(
       evidenceAllowedRoots,
     );
     if (materializedArtifact === null) {
+      skippedAssetIds.push(entry.id);
       continue;
     }
 
@@ -213,26 +215,59 @@ export async function acquireMirrorArtifacts(
     mergedMirrorIndexEntries,
     policy.bundleTemplates.map((template) => template.id),
   );
+
+  const mirroredAssetIds = new Set(
+    mergedMirrorIndexEntries.map((mirrorEntry) => mirrorEntry.assetId),
+  );
+  const totalMirroredCount = mirrorEligibleEntries.filter((entry) =>
+    mirroredAssetIds.has(entry.id),
+  ).length;
+  const batchRemainingCount =
+    mirrorEligibleEntries.length - totalMirroredCount - skippedAssetIds.length;
+  const exhaustedEligibleEntries = batchRemainingCount <= 0;
+  const stalledBatch =
+    entriesToAcquire.length > 0 &&
+    newMirrorIndexEntries.length === 0 &&
+    !exhaustedEligibleEntries;
+  const isTerminal = exhaustedEligibleEntries || stalledBatch;
+  const totalSkippedCount = exhaustedEligibleEntries
+    ? Math.max(0, mirrorEligibleEntries.length - totalMirroredCount)
+    : skippedAssetIds.length;
+  const actualRemainingCount = exhaustedEligibleEntries
+    ? 0
+    : Math.max(0, batchRemainingCount);
+
   await writeMirrorAcquireState(projectRoot, {
     schemaVersion: 1,
     updatedAt: new Date().toISOString(),
     batchSize,
     totalEligibleCount: mirrorEligibleEntries.length,
-    mirroredCount: mirrorEligibleEntries.filter((entry) =>
-      mergedMirrorIndexEntries.some(
-        (mirrorEntry) => mirrorEntry.assetId === entry.id,
-      ),
-    ).length,
-    remainingCount: Math.max(
-      0,
-      unresolvedEntries.length - entriesToAcquire.length,
-    ),
+    mirroredCount: totalMirroredCount,
+    remainingCount: Math.max(0, actualRemainingCount),
+    skippedCount: totalSkippedCount,
     lastBatchAssetIds: entriesToAcquire.map((entry) => entry.id),
+    lastBatchMirroredCount: newMirrorIndexEntries.length,
+    lastBatchSkippedCount: skippedAssetIds.length,
+    terminal: isTerminal,
   });
 
-  console.log(
-    `Mirror artifacts acquired under ${toPosixPath(join(projectRoot, "mirror"))}`,
-  );
+  if (isTerminal && totalMirroredCount === mirrorEligibleEntries.length) {
+    console.log(
+      `Mirror acquire complete: ${totalMirroredCount}/${mirrorEligibleEntries.length} artifacts under ${toPosixPath(join(projectRoot, "mirror"))}`,
+    );
+  } else if (stalledBatch) {
+    console.log(
+      `Mirror acquire stalled: ${totalMirroredCount}/${mirrorEligibleEntries.length} mirrored, ${skippedAssetIds.length} skipped in last batch, ${actualRemainingCount} remaining`,
+    );
+  } else if (isTerminal) {
+    console.log(
+      `Mirror acquire terminal: ${totalMirroredCount} mirrored, ${totalSkippedCount} skipped (unmirrorable) of ${mirrorEligibleEntries.length} eligible`,
+    );
+  } else {
+    console.log(
+      `Mirror acquire batch: ${newMirrorIndexEntries.length} mirrored, ${skippedAssetIds.length} skipped this batch (${totalMirroredCount}/${mirrorEligibleEntries.length} total)`,
+    );
+  }
 }
 
 async function materializeMirrorArtifact(
