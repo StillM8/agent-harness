@@ -392,9 +392,7 @@ async function requestWithPinnedAddress(
 ): Promise<Response> {
   const body = serializeRequestBody(options.body);
   const headers = buildRequestHeaders(options.headers, body);
-  const pinnedLookup: LookupFunction = (_hostname, _options, callback) => {
-    callback(null, address.address, address.family);
-  };
+  const pinnedLookup = createPinnedLookup(address);
 
   return new Promise((resolve, reject) => {
     const requestMessage = request(
@@ -421,6 +419,35 @@ async function requestWithPinnedAddress(
     }
     requestMessage.end();
   });
+}
+
+/**
+ * Builds a DNS lookup override pinned to a single resolved address while
+ * honoring Node's single-result and all-results lookup callback modes.
+ */
+export function createPinnedLookup(
+  address: ResolvedHostnameAddress,
+): LookupFunction {
+  return (_hostname, options, callback) => {
+    const resolvedCallback = typeof options === "function" ? options : callback;
+
+    if (!resolvedCallback) {
+      throw new TypeError("DNS lookup callback is required.");
+    }
+
+    const all =
+      typeof options === "object" &&
+      options !== null &&
+      "all" in options &&
+      options.all === true;
+
+    if (all) {
+      resolvedCallback(null, [address]);
+      return;
+    }
+
+    resolvedCallback(null, address.address, address.family);
+  };
 }
 
 function serializeRequestBody(

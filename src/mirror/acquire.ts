@@ -30,7 +30,10 @@ import {
   assertMirrorIndexEntry,
   assertMirrorPolicy,
 } from "../manifest-validation.js";
-import { fetchOfficialIndexPageContent } from "../official-index.js";
+import {
+  fetchOfficialIndexPageContent,
+  fetchOfficialIndexPageRepositoryUrl,
+} from "../official-index.js";
 import type {
   AssetCatalogEntry,
   MirrorAcquireState,
@@ -44,6 +47,7 @@ import {
   MAX_GITHUB_MIRROR_FILE_SIZE_BYTES,
   MAX_OFFICIAL_INDEX_FILE_SIZE_BYTES,
   MAX_OFFICIAL_INDEX_PACKAGE_FILES,
+  MAX_OFFICIAL_INDEX_PACKAGE_TOTAL_BYTES,
   MIRROR_ACQUIRE_STATE_OUTPUT_PATH,
   MIRROR_INDEX_OUTPUT_PATH,
   MIRROR_INDEX_SNAPSHOT_PATH,
@@ -77,14 +81,32 @@ interface MirrorFileManifest {
   }>;
 }
 
+type MirrorAcquireSkipReason =
+  | "materialize-failed"
+  | "official-index-package-too-many-files"
+  | "official-index-file-too-large"
+  | "official-index-package-too-large";
+
+interface MaterializeArtifactResult {
+  artifact: MaterializedMirrorArtifact | null;
+  skipReason?: MirrorAcquireSkipReason;
+}
+
+interface PersistedSkippedAssets {
+  assetIds: Set<string>;
+  assetReasons: Map<string, string>;
+}
+
 interface AcquireMirrorArtifactsDependencies {
   materializeArtifact?: (
     entry: AssetCatalogEntry,
     projectRoot: string,
     requirePinnedProvenance: boolean,
     evidenceAllowedRoots: readonly string[],
-  ) => Promise<MaterializedMirrorArtifact | null>;
+  ) => Promise<MaterializeArtifactResult>;
 }
+
+const officialIndexRepoUrlCache = new Map<string, string | null>();
 
 /**
  * Provides acquire mirror artifacts for the lifecycle pipeline.
@@ -123,11 +145,14 @@ export async function acquireMirrorArtifacts(
     join(projectRoot, ...MIRROR_INDEX_OUTPUT_PATH),
     assertMirrorIndexEntry,
   );
-  const previouslySkippedAssetIds = await readPersistedSkippedAssetIds(
-    projectRoot,
-  );
+  const previouslySkippedAssets = await readPersistedSkippedAssets(projectRoot);
   const scopedSkippedAssetIds = new Set(
-    [...previouslySkippedAssetIds].filter((assetId) =>
+    [...previouslySkippedAssets.assetIds].filter((assetId) =>
+      mirrorEligibleAssetIds.has(assetId),
+    ),
+  );
+  const scopedSkippedAssetReasons = new Map(
+    [...previouslySkippedAssets.assetReasons].filter(([assetId]) =>
       mirrorEligibleAssetIds.has(assetId),
     ),
   );
@@ -142,6 +167,7 @@ export async function acquireMirrorArtifacts(
   const entriesToAcquire = unresolvedEntries.slice(0, batchSize);
   const newMirrorIndexEntries: MirrorIndexEntry[] = [];
   const skippedAssetIds: string[] = [];
+  const skippedAssetReasons = new Map<string, string>();
   const evidenceAllowedRoots = buildMirrorEvidenceAllowedRoots(
     projectRoot,
     workingDirectory,
@@ -150,17 +176,22 @@ export async function acquireMirrorArtifacts(
     dependencies.materializeArtifact ?? materializeMirrorArtifact;
 
   for (const entry of entriesToAcquire) {
-    const materializedArtifact = await materializeArtifact(
+    const materializedArtifactResult = await materializeArtifact(
       entry,
       projectRoot,
       policy.selection.requirePinnedProvenance,
       evidenceAllowedRoots,
     );
-    if (materializedArtifact === null) {
+    if (materializedArtifactResult.artifact === null) {
       skippedAssetIds.push(entry.id);
+      skippedAssetReasons.set(
+        entry.id,
+        materializedArtifactResult.skipReason ?? "materialize-failed",
+      );
       continue;
     }
 
+    const materializedArtifact = materializedArtifactResult.artifact;
     const fileManifest = buildMirrorFileManifest(materializedArtifact, entry);
     const mirrorId = `sha256-${createContentHash(`${entry.id}\n${fileManifest.aggregateHash}`)}`;
     const rawRoot = join(
@@ -249,9 +280,18 @@ export async function acquireMirrorArtifacts(
     ...scopedSkippedAssetIds,
     ...skippedAssetIds,
   ]);
+  const cumulativeSkippedAssetReasons = new Map(scopedSkippedAssetReasons);
+  for (const [assetId, reason] of skippedAssetReasons) {
+    cumulativeSkippedAssetReasons.set(assetId, reason);
+  }
   const effectiveSkippedAssetIds = new Set(
     [...cumulativeSkippedAssetIds].filter(
       (assetId) => !mirroredAssetIds.has(assetId),
+    ),
+  );
+  const effectiveSkippedAssetReasons = new Map(
+    [...cumulativeSkippedAssetReasons].filter(([assetId]) =>
+      effectiveSkippedAssetIds.has(assetId),
     ),
   );
   const totalMirroredCount = mirrorEligibleEntries.filter((entry) =>
@@ -273,9 +313,11 @@ export async function acquireMirrorArtifacts(
     remainingCount: actualRemainingCount,
     skippedCount: totalSkippedCount,
     skippedAssetIds: [...effectiveSkippedAssetIds].sort(),
+    skippedAssetReasons: buildSortedReasonRecord(effectiveSkippedAssetReasons),
     lastBatchAssetIds: entriesToAcquire.map((entry) => entry.id),
     lastBatchMirroredCount: newMirrorIndexEntries.length,
     lastBatchSkippedCount: skippedAssetIds.length,
+    lastBatchSkippedReasons: buildSortedReasonRecord(skippedAssetReasons),
     terminal: isTerminal,
   });
 
@@ -299,14 +341,16 @@ async function materializeMirrorArtifact(
   projectRoot: string,
   requirePinnedProvenance: boolean,
   evidenceAllowedRoots: readonly string[],
-): Promise<MaterializedMirrorArtifact | null> {
+): Promise<MaterializeArtifactResult> {
   if (entry.install.method.endsWith("-summary")) {
     const referenceContent = await fetchOfficialIndexPageContent(
       entry.source.originUrl,
     );
     if (referenceContent !== null) {
       return {
-        content: Buffer.from(referenceContent, "utf8"),
+        artifact: {
+          content: Buffer.from(referenceContent, "utf8"),
+        },
       };
     }
   }
@@ -316,16 +360,7 @@ async function materializeMirrorArtifact(
   }
 
   if (entry.install.method === "official-index-entry") {
-    const officialIndexPackageArtifact = await materializeOfficialIndexPackage(
-      entry,
-      projectRoot,
-      requirePinnedProvenance,
-    );
-    if (officialIndexPackageArtifact !== null) {
-      return officialIndexPackageArtifact;
-    }
-
-    return null;
+    return materializeOfficialIndexPackage(entry, projectRoot);
   }
 
   const filePath = entry.evidence.filePath;
@@ -343,7 +378,9 @@ async function materializeMirrorArtifact(
     const fileContent = await readTextFileOrNull(safeFilePath);
     if (fileContent !== null) {
       return {
-        content: Buffer.from(fileContent, "utf8"),
+        artifact: {
+          content: Buffer.from(fileContent, "utf8"),
+        },
       };
     }
   }
@@ -357,29 +394,37 @@ async function materializeMirrorArtifact(
     const cacheContent = await readTextFileOrNull(cachePath);
     if (cacheContent !== null) {
       return {
-        content: Buffer.from(cacheContent, "utf8"),
+        artifact: {
+          content: Buffer.from(cacheContent, "utf8"),
+        },
       };
     }
   }
 
   return {
-    content: Buffer.from(JSON.stringify(entry, null, 2), "utf8"),
+    artifact: {
+      content: Buffer.from(JSON.stringify(entry, null, 2), "utf8"),
+    },
   };
 }
 
 async function materializeGitHubTreeArtifact(
   entry: AssetCatalogEntry,
   requirePinnedProvenance: boolean,
-): Promise<MaterializedMirrorArtifact | null> {
+): Promise<MaterializeArtifactResult> {
   const repoInfo = parseGitHubBlobEntry(entry);
   if (!repoInfo) {
     return requirePinnedProvenance
-      ? null
-      : { content: Buffer.from(JSON.stringify(entry, null, 2), "utf8") };
+      ? { artifact: null }
+      : {
+          artifact: {
+            content: Buffer.from(JSON.stringify(entry, null, 2), "utf8"),
+          },
+        };
   }
 
   if (!repoInfo.expectedBlobSha) {
-    return null;
+    return { artifact: null };
   }
 
   const commitSha = await fetchGitHubBranchCommitSha(
@@ -387,10 +432,6 @@ async function materializeGitHubTreeArtifact(
     repoInfo.repo,
     repoInfo.ref,
   );
-  if (requirePinnedProvenance && !commitSha) {
-    return null;
-  }
-
   const fetchRef = commitSha ?? repoInfo.ref;
   const content = await fetchVerifiedGitHubFileContent(
     repoInfo.owner,
@@ -401,30 +442,33 @@ async function materializeGitHubTreeArtifact(
     repoInfo.expectedBlobSha,
   );
   if (content === null) {
-    return null;
+    return { artifact: null };
   }
 
   return {
-    content,
-    upstreamRef: repoInfo.ref,
-    upstreamCommit: commitSha ?? undefined,
-    upstreamBlobSha: repoInfo.expectedBlobSha,
+    artifact: {
+      content,
+      upstreamRef: repoInfo.ref,
+      upstreamCommit: commitSha ?? undefined,
+      upstreamBlobSha: repoInfo.expectedBlobSha,
+    },
   };
 }
 
 async function materializeOfficialIndexPackage(
   entry: AssetCatalogEntry,
   projectRoot: string,
-  requirePinnedProvenance: boolean,
-): Promise<MaterializedMirrorArtifact | null> {
+): Promise<MaterializeArtifactResult> {
   const slug = entry.install.manifestEntry;
   const owner = entry.source.sourceId.split(":")[1];
+  let capSkipReason: MirrorAcquireSkipReason | undefined;
+  let sawNonCapFailure = false;
 
   if (!slug || !owner) {
-    return null;
+    return { artifact: null };
   }
 
-  for (const repoUrl of buildOfficialIndexRepoUrlCandidates(entry, owner)) {
+  for (const repoUrl of await buildOfficialIndexRepoUrlCandidates(entry, owner)) {
     const snapshot = await fetchGitHubRepoSnapshotByRepoUrl({
       repoUrl,
       projectRoot,
@@ -432,6 +476,7 @@ async function materializeOfficialIndexPackage(
     });
 
     if (!snapshot || snapshot.tree.truncated) {
+      sawNonCapFailure = true;
       continue;
     }
 
@@ -440,6 +485,7 @@ async function materializeOfficialIndexPackage(
       slug,
     );
     if (!skillRootPath) {
+      sawNonCapFailure = true;
       continue;
     }
 
@@ -448,20 +494,35 @@ async function materializeOfficialIndexPackage(
         treeEntry.type === "blob" &&
         treeEntry.path.startsWith(`${skillRootPath}/`),
     );
+    const packageTotalBytes = packageFileCandidates.reduce(
+      (totalBytes, treeEntry) => totalBytes + Math.max(0, treeEntry.size ?? 0),
+      0,
+    );
+    if (packageFileCandidates.length > MAX_OFFICIAL_INDEX_PACKAGE_FILES) {
+      capSkipReason ??= "official-index-package-too-many-files";
+      continue;
+    }
+
     if (
-      packageFileCandidates.length > MAX_OFFICIAL_INDEX_PACKAGE_FILES ||
       packageFileCandidates.some(
         (treeEntry) =>
           treeEntry.size !== null &&
           treeEntry.size > MAX_OFFICIAL_INDEX_FILE_SIZE_BYTES,
       )
     ) {
+      capSkipReason ??= "official-index-file-too-large";
+      continue;
+    }
+
+    if (packageTotalBytes > MAX_OFFICIAL_INDEX_PACKAGE_TOTAL_BYTES) {
+      capSkipReason ??= "official-index-package-too-large";
       continue;
     }
 
     const packageFiles = packageFileCandidates;
 
     if (packageFiles.length === 0) {
+      sawNonCapFailure = true;
       continue;
     }
 
@@ -470,9 +531,6 @@ async function materializeOfficialIndexPackage(
       snapshot.repo,
       snapshot.repoSummary.defaultBranch,
     );
-    if (requirePinnedProvenance && !commitSha) {
-      continue;
-    }
 
     const materializedFiles: Array<{
       relativePath: string;
@@ -503,6 +561,7 @@ async function materializeOfficialIndexPackage(
     }
 
     if (materializedFiles.length === 0) {
+      sawNonCapFailure = true;
       continue;
     }
 
@@ -511,23 +570,40 @@ async function materializeOfficialIndexPackage(
     );
 
     return {
-      content:
-        skillMarkdownFile?.content ??
-        Buffer.from(JSON.stringify(entry, null, 2), "utf8"),
-      files: materializedFiles,
-      upstreamRef: snapshot.repoSummary.defaultBranch,
-      upstreamCommit: commitSha ?? undefined,
+      artifact: {
+        content:
+          skillMarkdownFile?.content ??
+          Buffer.from(JSON.stringify(entry, null, 2), "utf8"),
+        files: materializedFiles,
+        upstreamRef: snapshot.repoSummary.defaultBranch,
+        upstreamCommit: commitSha ?? undefined,
+      },
     };
   }
 
-  return null;
+  return {
+    artifact: null,
+    skipReason: sawNonCapFailure ? undefined : capSkipReason,
+  };
 }
 
-function buildOfficialIndexRepoUrlCandidates(
+async function buildOfficialIndexRepoUrlCandidates(
   entry: AssetCatalogEntry,
   owner: string,
-): string[] {
+): Promise<string[]> {
+  let officialIndexRepoUrl = officialIndexRepoUrlCache.get(
+    entry.source.originUrl,
+  );
+
+  if (!officialIndexRepoUrlCache.has(entry.source.originUrl)) {
+    officialIndexRepoUrl = await fetchOfficialIndexPageRepositoryUrl(
+      entry.source.originUrl,
+    );
+    officialIndexRepoUrlCache.set(entry.source.originUrl, officialIndexRepoUrl);
+  }
+
   const candidateRepoUrls = [
+    officialIndexRepoUrl,
     entry.evidence.rootPath,
     `https://github.com/${owner}/${owner}-skills`,
     `https://github.com/${owner}/skills`,
@@ -845,20 +921,51 @@ function isGitBlobSha(value: string | undefined): value is string {
   return Boolean(value && /^[a-f0-9]{40}$/iu.test(value));
 }
 
-async function readPersistedSkippedAssetIds(
+async function readPersistedSkippedAssets(
   projectRoot: string,
-): Promise<Set<string>> {
-  const state = await readJsonFileOrNull<{ skippedAssetIds?: unknown }>(
-    join(projectRoot, ...MIRROR_ACQUIRE_STATE_OUTPUT_PATH),
-  );
+): Promise<PersistedSkippedAssets> {
+  const state = await readJsonFileOrNull<{
+    skippedAssetIds?: unknown;
+    skippedAssetReasons?: unknown;
+  }>(join(projectRoot, ...MIRROR_ACQUIRE_STATE_OUTPUT_PATH));
 
   if (!state || !Array.isArray(state.skippedAssetIds)) {
-    return new Set();
+    return {
+      assetIds: new Set(),
+      assetReasons: new Map(),
+    };
   }
 
-  return new Set(
+  const assetIds = new Set(
     state.skippedAssetIds.filter(
       (value): value is string => typeof value === "string",
+    ),
+  );
+  const assetReasons = new Map<string, string>();
+  if (
+    typeof state.skippedAssetReasons === "object" &&
+    state.skippedAssetReasons !== null &&
+    !Array.isArray(state.skippedAssetReasons)
+  ) {
+    for (const [assetId, reason] of Object.entries(state.skippedAssetReasons)) {
+      if (typeof reason === "string" && assetIds.has(assetId)) {
+        assetReasons.set(assetId, reason);
+      }
+    }
+  }
+
+  return {
+    assetIds,
+    assetReasons,
+  };
+}
+
+function buildSortedReasonRecord(
+  reasons: Map<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    [...reasons.entries()].sort(([leftAssetId], [rightAssetId]) =>
+      leftAssetId.localeCompare(rightAssetId),
     ),
   );
 }
