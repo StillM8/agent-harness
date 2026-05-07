@@ -17,18 +17,40 @@ const OFFICIAL_INDEX_ALLOWED_ORIGINS = [
 ] as const;
 
 /**
+ * Fetches an official index page once and extracts the structured fallback
+ * summary plus any advertised backing GitHub repository URL.
+ */
+export async function fetchOfficialIndexPageInfo(url: string): Promise<{
+  content: string | null;
+  repositoryUrl: string | null;
+}> {
+  const html = await fetchOfficialIndexPageHtml(url);
+  if (html === null) {
+    return {
+      content: null,
+      repositoryUrl: null,
+    };
+  }
+
+  const installCommand = extractInstallCommand(html);
+  const githubUrl = extractGitHubUrl(html, installCommand);
+  const extractedContent = extractOfficialIndexPageSummary(html, url, {
+    installCommand,
+    githubUrl,
+  });
+  return {
+    content: extractedContent.length > 0 ? extractedContent : null,
+    repositoryUrl: normalizeGitHubRepositoryUrl(githubUrl),
+  };
+}
+
+/**
  * Fetches official index page content with the configured runtime safeguards.
  */
 export async function fetchOfficialIndexPageContent(
   url: string,
 ): Promise<string | null> {
-  const html = await fetchOfficialIndexPageHtml(url);
-  if (html === null) {
-    return null;
-  }
-
-  const extractedContent = extractOfficialIndexPageSummary(html, url);
-  return extractedContent.length > 0 ? extractedContent : null;
+  return (await fetchOfficialIndexPageInfo(url)).content;
 }
 
 /**
@@ -38,14 +60,7 @@ export async function fetchOfficialIndexPageContent(
 export async function fetchOfficialIndexPageRepositoryUrl(
   url: string,
 ): Promise<string | null> {
-  const html = await fetchOfficialIndexPageHtml(url);
-  if (html === null) {
-    return null;
-  }
-
-  return normalizeGitHubRepositoryUrl(
-    extractGitHubUrl(html, extractInstallCommand(html)),
-  );
+  return (await fetchOfficialIndexPageInfo(url)).repositoryUrl;
 }
 
 /**
@@ -74,11 +89,18 @@ async function fetchOfficialIndexPageHtml(url: string): Promise<string | null> {
   });
 }
 
-function extractOfficialIndexPageSummary(html: string, url: string): string {
+function extractOfficialIndexPageSummary(
+  html: string,
+  url: string,
+  options: {
+    installCommand?: string | null;
+    githubUrl?: string | null;
+  } = {},
+): string {
   const title = extractTitle(html);
   const description = extractMetaDescription(html);
-  const installCommand = extractInstallCommand(html);
-  const githubUrl = extractGitHubUrl(html, installCommand);
+  const installCommand = options.installCommand ?? extractInstallCommand(html);
+  const githubUrl = options.githubUrl ?? extractGitHubUrl(html, installCommand);
   const skillSummary = extractSectionParagraph("What This Skill Does", html);
   const whyItHelps = extractWhyItHelps(html);
   const useCases = extractSectionListItems("When to use it", html);
@@ -254,13 +276,13 @@ function cleanHtmlText(value: string): string | null {
 
 function decodeHtmlEntities(value: string): string {
   return value
-    .replace(/&amp;/gu, "&")
     .replace(/&quot;/gu, '"')
     .replace(/&#x27;/gu, "'")
     .replace(/&#39;/gu, "'")
     .replace(/&lt;/gu, "<")
     .replace(/&gt;/gu, ">")
-    .replace(/&nbsp;/gu, " ");
+    .replace(/&nbsp;/gu, " ")
+    .replace(/&amp;/gu, "&");
 }
 
 function normalizeGitHubRepositoryUrl(url: string | null): string | null {

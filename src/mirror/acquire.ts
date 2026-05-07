@@ -32,6 +32,7 @@ import {
 } from "../manifest-validation.js";
 import {
   fetchOfficialIndexPageContent,
+  fetchOfficialIndexPageInfo,
   fetchOfficialIndexPageRepositoryUrl,
 } from "../official-index.js";
 import type {
@@ -468,7 +469,19 @@ async function materializeOfficialIndexPackage(
     return { artifact: null };
   }
 
-  for (const repoUrl of await buildOfficialIndexRepoUrlCandidates(entry, owner)) {
+  const officialIndexPage = await fetchOfficialIndexPageInfo(
+    entry.source.originUrl,
+  );
+  officialIndexRepoUrlCache.set(
+    entry.source.originUrl,
+    officialIndexPage.repositoryUrl,
+  );
+
+  for (const repoUrl of await buildOfficialIndexRepoUrlCandidates(
+    entry,
+    owner,
+    officialIndexPage.repositoryUrl,
+  )) {
     const snapshot = await fetchGitHubRepoSnapshotByRepoUrl({
       repoUrl,
       projectRoot,
@@ -581,6 +594,14 @@ async function materializeOfficialIndexPackage(
     };
   }
 
+  if (sawNonCapFailure && officialIndexPage.content !== null) {
+    return {
+      artifact: {
+        content: Buffer.from(officialIndexPage.content, "utf8"),
+      },
+    };
+  }
+
   return {
     artifact: null,
     skipReason: sawNonCapFailure ? undefined : capSkipReason,
@@ -590,12 +611,16 @@ async function materializeOfficialIndexPackage(
 async function buildOfficialIndexRepoUrlCandidates(
   entry: AssetCatalogEntry,
   owner: string,
+  resolvedOfficialIndexRepoUrl?: string | null,
 ): Promise<string[]> {
-  let officialIndexRepoUrl = officialIndexRepoUrlCache.get(
-    entry.source.originUrl,
-  );
+  let officialIndexRepoUrl =
+    resolvedOfficialIndexRepoUrl ??
+    officialIndexRepoUrlCache.get(entry.source.originUrl);
 
-  if (!officialIndexRepoUrlCache.has(entry.source.originUrl)) {
+  if (
+    resolvedOfficialIndexRepoUrl === undefined &&
+    !officialIndexRepoUrlCache.has(entry.source.originUrl)
+  ) {
     officialIndexRepoUrl = await fetchOfficialIndexPageRepositoryUrl(
       entry.source.originUrl,
     );

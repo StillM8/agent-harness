@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -1090,10 +1090,23 @@ void test("acquireMirrorArtifacts mirrors official-index packages with files bet
   }
 });
 
-void test("acquireMirrorArtifacts falls back to materialize-failed when cap failures are followed by non-cap candidate failures", async (context) => {
-  const entry = buildOfficialIndexAsset(
+void test("acquireMirrorArtifacts falls back to official-index page content when cap failures are followed by non-cap candidate failures", async (context) => {
+  const originUrl =
+    "https://officialskills.sh/cloudflare/skills/cloudflare?cap-then-noncap=1";
+  const baseEntry = buildOfficialIndexAsset(
     "official-index-cap-then-noncap-failure",
   );
+  const entry = {
+    ...baseEntry,
+    source: {
+      ...baseEntry.source,
+      originUrl,
+    },
+    evidence: {
+      ...baseEntry.evidence,
+      rootPath: originUrl,
+    },
+  };
   const projectRoot = await createAcquireFixture([entry]);
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
@@ -1116,9 +1129,7 @@ void test("acquireMirrorArtifacts falls back to materialize-failed when cap fail
   globalThis.fetch = async (url) => {
     const requestUrl = String(url);
 
-    if (
-      requestUrl === "https://officialskills.sh/cloudflare/skills/cloudflare"
-    ) {
+    if (requestUrl === originUrl) {
       return new Response(createOfficialIndexHtml(repoUrl), { status: 200 });
     }
 
@@ -1213,19 +1224,35 @@ void test("acquireMirrorArtifacts falls back to materialize-failed when cap fail
     ]);
 
     const state = await readAcquireStateFixture(projectRoot);
+    const mirrorIndex = await readMirrorIndexFixture(projectRoot);
 
     assert.equal(state.terminal, true);
-    assert.equal(state.mirroredCount, 0);
-    assert.equal(state.skippedCount, 1);
-    assert.deepEqual(state.skippedAssetIds, [
+    assert.equal(state.mirroredCount, 1);
+    assert.equal(state.skippedCount, 0);
+    assert.deepEqual(state.skippedAssetIds, []);
+    assert.deepEqual(state.skippedAssetReasons, {});
+    assert.deepEqual(state.lastBatchSkippedReasons, {});
+    assert.equal(mirrorIndex.length, 1);
+    assert.equal(
+      mirrorIndex[0]?.assetId,
       "official-index-cap-then-noncap-failure",
-    ]);
-    assert.deepEqual(state.skippedAssetReasons, {
-      "official-index-cap-then-noncap-failure": "materialize-failed",
-    });
-    assert.deepEqual(state.lastBatchSkippedReasons, {
-      "official-index-cap-then-noncap-failure": "materialize-failed",
-    });
+    );
+
+    const mirroredContent = await readFile(
+      join(
+        projectRoot,
+        "mirror",
+        "raw",
+        mirrorIndex[0]?.mirrorId ?? "",
+        "content.txt",
+      ),
+      "utf8",
+    );
+    assert.ok(mirroredContent.includes(`**Official Page**: ${originUrl}`));
+    assert.match(
+      mirroredContent,
+      /\*\*GitHub\*\*: https:\/\/github\.com\/cloudflare\/cloudflare-skills\/tree\/main\/skills\/cloudflare/u,
+    );
   } finally {
     globalThis.fetch = originalFetch;
     restoreFetchMockFlag(previousFetchMockFlag);
