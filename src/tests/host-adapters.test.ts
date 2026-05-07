@@ -544,8 +544,19 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
 }
 
 async function assertPathExists(pathValue: string): Promise<void> {
-  const entry = await stat(pathValue);
-  assert.ok(entry.isDirectory() || entry.isFile());
+  let entry;
+  try {
+    entry = await stat(pathValue);
+  } catch (error) {
+    throw new Error(`expected ${pathValue} to exist`, {
+      cause: error,
+    });
+  }
+
+  assert.ok(
+    entry.isDirectory() || entry.isFile(),
+    `expected ${pathValue} to be a file or directory`,
+  );
 }
 
 function buildAllAssetFixtures(): AssetCatalogEntry[] {
