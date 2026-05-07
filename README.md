@@ -1128,6 +1128,7 @@ Known boundaries:
 ## Related documentation
 
 - `CHANGELOG.md` — release notes
+- `SECURITY.md` — vulnerability reporting and supported-version policy
 - `Roadmap.md` — gap analysis and long-range direction
 - `IMPLEMENTATION-PLAN.md` — milestone-oriented execution plan
 - `FUTURE-IMPROVEMENTS.md` — follow-up ideas and architectural extensions
