@@ -4,19 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Added
-
-- added `github-awesome-copilot-site` as a default official docs source so discovery can harvest the `awesome-copilot.github.com` catalog alongside the backing repository
-- added `clawhub` as a default community registry source for broader catalog/reference coverage without enabling default mirror/install promotion
-
-### Changed
-
-- mirror acquisition now accepts pinned GitHub-tree and official-index artifacts when raw content verifies against the pinned blob SHA even if the GitHub branch-commit lookup is temporarily unavailable
-- README and `.env.example` now document that GitHub tokens help both discovery and GitHub-backed mirror acquisition on larger real-workspace runs
-
-### Fixed
-
-- guarded pinned GitHub lookups now honor Node's `lookup(..., { all: true })` callback shape, which eliminates the `ERR_INVALID_IP_ADDRESS` failure mode that caused real-workspace GitHub fetches to be skipped as null
+- No unreleased changes yet.
 
 ## [1.0.0] - 2026-05-01
 
@@ -28,6 +16,8 @@ All notable changes to this project will be documented in this file.
 - scan budgets, expanded ignore profiles, link lifecycle tests, scan benchmark budgets, and Windows/macOS/Linux CI coverage
 - source utilization reporting that separates configured sources from operationally harvested sources
 - dependency-evidence package registry harvesting for npm and PyPI plus docs, registry, and marketplace reference harvesters
+- `github-awesome-copilot-site` as a default official docs source so discovery can harvest the `awesome-copilot.github.com` catalog alongside the backing repository
+- `clawhub` as a default community registry source for broader catalog/reference coverage without enabling default mirror/install promotion
 - host adapter registry with capability matrices, guided setup/doctor commands, adapter-specific CLI readiness diagnostics, native project-local auto-wiring for Cursor, Zed, Claude Code, and Pi, independent per-host recommendation policies, extension install planning, prompt-template/command coverage, and shared MCP wire plan projection
 - policy coverage reporting that checks detector-emitted terms against recommendation policy maps, fails CI on unmapped terms, and emits human-reviewed draft policy suggestions
 - regression tests for dotenv duplicate/multiline parsing, CLI option missing-value handling, VS Code settings patching, safe mirror artifact paths, and PyPI metadata normalization
@@ -59,6 +49,8 @@ All notable changes to this project will be documented in this file.
 - changed `wire <host>` to default to preview mode; `--apply` or `--reset` is required for mutating wire operations
 - made workspace and full rebuild runs invoke the recommendation stage explicitly after discovery selection instead of relying on hidden `discover select` side effects
 - made docs, registry, and marketplace source references attempt guarded summary harvesting and source utilization distinguish active, reference-only, and dormant sources
+- mirror acquisition now accepts pinned GitHub-tree and official-index artifacts when raw content verifies against the pinned blob SHA even if the GitHub branch-commit lookup is temporarily unavailable
+- README and `.env.example` now document that GitHub tokens help both discovery and GitHub-backed mirror acquisition on larger real-workspace runs
 - made VS Code settings path resolution lazy so `.env` overrides for path-related variables are honored after CLI bootstrap
 - centralized CLI option parsing and rejection of flag-looking tokens as missing option values
 - split recommendation policy loading, CLI commands, host enumeration, internal recommendation models, and report/scoring logic into `src/recommend/` modules behind the stable `src/recommend.ts` facade
@@ -77,6 +69,7 @@ All notable changes to this project will be documented in this file.
 - install batching no longer treats a missing progress state as a completed bundle
 - demand profiling honors `.gitignore`, `.ignore`, and `.agent-harnessignore` patterns in addition to built-in generated-directory skips, including simple glob wildcards and negation re-inclusion rules
 - GitHub/repo assets are mirrored through guarded fetches during mirror acquisition instead of being fetched live during wire-in
+- guarded pinned GitHub lookups now honor Node's `lookup(..., { all: true })` callback shape, which eliminates the `ERR_INVALID_IP_ADDRESS` failure mode that caused real-workspace GitHub fetches to be skipped as null
 - official-index upstream repository links are constrained by a checked-in owner allowlist and schema-backed `discover/official-upstreams.json` asset
 - install and activation now enforce bundle activation eligibility, verify/copy only mirror-manifest-listed files, and skip quarantined or unpromoted assets
 - mirror acquisition quarantines prompt-injection-like community content for manual review
