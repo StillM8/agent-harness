@@ -77,13 +77,14 @@ jobs:
 
       - name: Check whether version is already published
         id: npm-version-published
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           PACKAGE_NAME=$(node -p "require('./package.json').name")
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
           if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
             echo "value=true" >> "$GITHUB_OUTPUT"
-            echo "$PACKAGE_NAME@$PACKAGE_VERSION is already published; publish dry-run will be skipped."
+            echo "$PACKAGE_NAME@$PACKAGE_VERSION is already published."
           else
             echo "value=false" >> "$GITHUB_OUTPUT"
           fi
@@ -98,7 +99,7 @@ jobs:
         run: npm pack --dry-run --json --ignore-scripts
 
       - name: Verify publish dry run
-        if: steps.npm-version-published.outputs.value != 'true'
+        if: matrix.os == 'ubuntu-latest' && !(github.event_name == 'workflow_dispatch' && steps.npm-version-published.outputs.value == 'true')
         run: npm publish --dry-run --ignore-scripts --access public --tag ${{ steps.npm-dist-tag.outputs.value }}
 
   publish:
@@ -173,7 +174,7 @@ jobs:
         run: npm run build
 
       - name: Publish package with npm trusted publishing
-        if: steps.npm-version-published.outputs.value != 'true'
+        if: github.event_name != 'workflow_dispatch' || steps.npm-version-published.outputs.value != 'true'
         run: |
           unset NODE_AUTH_TOKEN
           npm publish --ignore-scripts --access public --tag ${{ steps.npm-dist-tag.outputs.value }} --provenance
