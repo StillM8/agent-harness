@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -104,6 +111,94 @@ void test("OpenCode adapter upserts and resets only the managed AGENTS section",
     const resetContent = await readFile(agentsPath, "utf8");
     assert.match(resetContent, /Keep this\./u);
     assert.doesNotMatch(resetContent, /agent-harness:begin/u);
+  } finally {
+    await rm(projectRoot, { force: true, recursive: true });
+    await rm(workspaceRoot, { force: true, recursive: true });
+  }
+});
+
+void test("OpenCode wire links every supported asset bucket into the project overlay", async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "agent-harness-opencode-"));
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-workspace-"),
+  );
+
+  try {
+    const selectedAssets = buildAllAssetFixtures();
+    await writeOpenCodeActivation(projectRoot, selectedAssets);
+    await writeOpenCodeInstallBundle(projectRoot, selectedAssets);
+
+    const adapter = resolveHostAdapter("opencode");
+    assert.ok(adapter);
+    await adapter.wire({ projectRoot, workspaceRoot, mode: "apply" });
+
+    const localOverlayRoot = join(workspaceRoot, ".opencode");
+    const wirePlan = JSON.parse(
+      await readFile(
+        join(
+          localOverlayRoot,
+          "context",
+          "project-intelligence",
+          "agent-harness",
+          "wire-plan.json",
+        ),
+        "utf8",
+      ),
+    ) as WirePlanManifest;
+    assert.equal(wirePlan.host, "opencode-project");
+
+    await assertPathExists(
+      join(
+        localOverlayRoot,
+        "instructions",
+        sanitizeAssetId("asset-instruction"),
+      ),
+    );
+    await assertPathExists(
+      join(localOverlayRoot, "agents", sanitizeAssetId("asset-agent")),
+    );
+    await assertPathExists(
+      join(localOverlayRoot, "skills", sanitizeAssetId("asset-skill")),
+    );
+    await assertPathExists(
+      join(localOverlayRoot, "plugins", sanitizeAssetId("asset-plugin")),
+    );
+    await assertPathExists(
+      join(localOverlayRoot, "hooks", sanitizeAssetId("asset-hook")),
+    );
+    await assertPathExists(
+      join(
+        localOverlayRoot,
+        "reference-packs",
+        sanitizeAssetId("asset-reference"),
+      ),
+    );
+    await assertPathExists(
+      join(localOverlayRoot, "mcp-servers", sanitizeAssetId("asset-mcp")),
+    );
+    await assertPathExists(
+      join(localOverlayRoot, "extensions", sanitizeAssetId("ms-python.python")),
+    );
+    await assertPathExists(
+      join(
+        localOverlayRoot,
+        "commands",
+        `${sanitizeAssetId("asset-workflow")}.md`,
+      ),
+    );
+    await assertPathExists(
+      join(
+        localOverlayRoot,
+        "commands",
+        `${sanitizeAssetId("asset-prompt-pack")}.md`,
+      ),
+    );
+
+    const managedAgents = await readFile(
+      join(workspaceRoot, "AGENTS.md"),
+      "utf8",
+    );
+    assert.match(managedAgents, /agent-harness:begin/u);
   } finally {
     await rm(projectRoot, { force: true, recursive: true });
     await rm(workspaceRoot, { force: true, recursive: true });
@@ -356,7 +451,7 @@ async function writeOpenCodeActivation(
     schemaVersion: 1,
     host: "opencode",
     generatedAt: new Date().toISOString(),
-    activeBundles: [],
+    activeBundles: ["bundle-all-assets"],
     activeAssets: assets.map((asset) => asset.id),
     runtimeRoot: activationRoot,
     notes: [],
@@ -365,6 +460,69 @@ async function writeOpenCodeActivation(
   for (const asset of assets) {
     await writeActivationAsset(activationRoot, asset);
   }
+}
+
+async function writeOpenCodeInstallBundle(
+  projectRoot: string,
+  assets: AssetCatalogEntry[],
+): Promise<void> {
+  const installRoot = join(projectRoot, "install", "opencode");
+  const packagesRoot = join(installRoot, "packages");
+  const bundlePath = join(
+    installRoot,
+    "bundles",
+    "bundle-all-assets.install.json",
+  );
+  const packages = [] as Array<{
+    assetId: string;
+    mirrorId: string;
+    manifestPath: string;
+  }>;
+
+  for (const asset of assets) {
+    const manifestPath = join(
+      packagesRoot,
+      sanitizeAssetId(asset.id),
+      "package.install.json",
+    );
+    await writeJson(manifestPath, {
+      schemaVersion: 1,
+      assetId: asset.id,
+      mirrorId: `mirror-${asset.id}`,
+      host: "opencode",
+      installedAt: new Date().toISOString(),
+      projectionType: "test-fixture",
+      assetKind: asset.assetKind,
+      sourceAuthorityTier: "trusted-local",
+      contextCost: {
+        sizeClass: "tiny",
+        estimatedPromptWeight: 1,
+      },
+      portfolioFit: 1,
+      filesRoot: join(
+        projectRoot,
+        "activate",
+        "opencode",
+        sanitizeAssetId(asset.id),
+      ),
+      bundleMembership: ["bundle-all-assets"],
+      activationEligible: true,
+      activeByDefault: true,
+    });
+    packages.push({
+      assetId: asset.id,
+      mirrorId: `mirror-${asset.id}`,
+      manifestPath,
+    });
+  }
+
+  await writeJson(bundlePath, {
+    schemaVersion: 1,
+    bundleId: "bundle-all-assets",
+    host: "opencode",
+    installedAt: new Date().toISOString(),
+    packages,
+  });
 }
 
 async function writeActivationAsset(
@@ -383,6 +541,11 @@ async function writeActivationAsset(
 async function writeJson(filePath: string, value: unknown): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function assertPathExists(pathValue: string): Promise<void> {
+  const entry = await stat(pathValue);
+  assert.ok(entry.isDirectory() || entry.isFile());
 }
 
 function buildAllAssetFixtures(): AssetCatalogEntry[] {
