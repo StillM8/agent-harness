@@ -329,12 +329,14 @@ These signatures live under `src/domains/discovery/` alongside focused demand-pr
 
 ### AI-assisted enrichment
 
-AI-assisted enrichment is optional and disabled by default. When configured, it writes a bounded summary to `discover/output/ai-enrichment.json` using an OpenAI-compatible chat-completions endpoint. The endpoint must use a known public provider origin; loopback, private-network, link-local, and non-allowlisted origins are rejected before any API key is sent.
+AI-assisted enrichment is optional and disabled by default. When configured, it writes a bounded summary to `discover/output/ai-enrichment.json` using an OpenAI-compatible chat-completions endpoint. Loopback, private-network, and non-public origins are still rejected before any API key is sent. By default the runtime allows a built-in set of public provider origins, automatically allows the configured endpoint origin when it is valid `https`, and can be extended with `AGENT_HARNESS_AI_ENRICHMENT_ALLOWED_ORIGINS` for compatible gateways or proxies.
 
 ```bash
 AGENT_HARNESS_AI_ENRICHMENT_URL=https://api.openai.com/v1/chat/completions
 AGENT_HARNESS_AI_ENRICHMENT_API_KEY=<token>
 AGENT_HARNESS_AI_ENRICHMENT_MODEL=gpt-4o-mini
+# Optional comma-separated extra allowlist entries for compatible public gateways.
+AGENT_HARNESS_AI_ENRICHMENT_ALLOWED_ORIGINS=https://gateway.example.com
 agent-harness discover enrich
 ```
 
@@ -502,6 +504,8 @@ npm run rebuild:full
 
 All host-specific behavior lives behind `src/host-adapters/`. Generic orchestration lives in `src/workspace.ts`, `src/wire.ts`, `src/pipeline.ts`, `src/install.ts`, `src/activate.ts`, and related lifecycle modules.
 
+For the checked-in host-surface classification backing the current README wording, see [`HOST-SURFACE-AUDIT.md`](./HOST-SURFACE-AUDIT.md).
+
 Preview, apply, and reset semantics are consistent across adapters:
 
 - **Preview** writes a wire preview manifest without applying workspace mutations.
@@ -518,6 +522,14 @@ Adapter implementation:
 - `src/host-adapters/vscode-settings.ts`
 
 This adapter is intentionally host-specific because VS Code and GitHub Copilot use protected user-scoped settings plus workspace-local instruction files.
+
+Current official docs:
+
+- <https://code.visualstudio.com/docs/copilot/customization/overview>
+- <https://code.visualstudio.com/docs/copilot/customization/custom-instructions>
+- <https://code.visualstudio.com/docs/copilot/customization/agent-skills>
+- <https://code.visualstudio.com/docs/copilot/customization/agent-plugins>
+- <https://code.visualstudio.com/docs/copilot/customization/mcp-servers>
 
 Supported behavior:
 
@@ -558,6 +570,7 @@ Workspace and activation outputs:
 Current boundaries:
 
 - Applying VS Code wire-in requires the VS Code user settings directory to exist and be writable.
+- The README treats instruction files, skills, plugins, and MCP as the primary documented public contract. Some patched settings remain implementation detail unless a current VS Code settings reference explicitly documents them.
 - The adapter never silently installs marketplace extensions during `wire`; native extension installation is an explicit `install native --operation install --apply` action.
 
 ### OpenCode
@@ -568,30 +581,41 @@ Adapter implementation:
 
 This adapter is intentionally host-specific because OpenCode consumes project-local overlays and asset-kind directory layouts.
 
+Current official docs:
+
+- <https://opencode.ai/docs/rules/>
+- <https://opencode.ai/docs/agents/>
+- <https://opencode.ai/docs/skills/>
+- <https://opencode.ai/docs/commands/>
+- <https://opencode.ai/docs/plugins/>
+- <https://opencode.ai/docs/mcp-servers/>
+- <https://opencode.ai/docs/custom-tools/>
+- <https://opencode.ai/docs/config/>
+
 Supported behavior:
 
-- writes `.opencode/context/project-intelligence/agent-harness/`
-- creates managed links under `.opencode/<asset-kind>/`, mapping workflow and prompt-pack assets to OpenCode `commands/`
-- writes an effective project-local wire plan under the `.opencode` overlay
-- projects shared MCP references into the wire plan when available
+- writes a managed overlay under `.opencode/context/project-intelligence/agent-harness/`
 - updates/removes managed `AGENTS.md` sections
+- links selected assets into project-local `.opencode/` directories by asset kind, mapping workflow and prompt-pack assets to OpenCode `commands/`
+- writes an effective project-local wire plan under the managed overlay
+- projects shared MCP references into the wire plan when available
 - uses Windows directory junctions on Windows
-- avoids global OpenAgentsControl install mutation
+- avoids global OpenCode or OpenAgentsControl install mutation
 - does not require a global OpenCode config directory for project-local apply/reset
 
-Managed project-local locations:
+Documented OpenCode-native surfaces that this adapter uses or stays compatible with:
 
-- `.opencode/context/project-intelligence/agent-harness/`
+- `AGENTS.md`
 - `.opencode/agents/`
 - `.opencode/skills/`
-- `.opencode/instructions/`
 - `.opencode/commands/`
-- `.opencode/hooks/`
 - `.opencode/plugins/`
-- `.opencode/mcp-servers/`
-- `.opencode/extensions/`
-- `.opencode/reference-packs/`
-- `AGENTS.md`
+
+Agent-harness-managed overlay/reference locations:
+
+- `.opencode/context/project-intelligence/agent-harness/`
+- harness-managed context-root link targets such as `.opencode/context/project-intelligence/agent-harness/instructions/`, `.opencode/context/project-intelligence/agent-harness/hooks/`, `.opencode/context/project-intelligence/agent-harness/mcp-servers/`, `.opencode/context/project-intelligence/agent-harness/extensions/`, and `.opencode/context/project-intelligence/agent-harness/reference-packs/`
+- `AGENTS.md` managed sections
 
 Wire-plan outputs:
 
@@ -600,8 +624,10 @@ Wire-plan outputs:
 
 Current boundaries:
 
-- The adapter links activated assets into the workspace overlay.
-- It does not install or modify global OpenCode packages.
+- The adapter links activated assets into a project-local overlay and reference tree.
+- It does not claim that every harness-managed `.opencode/*` path is a documented native OpenCode auto-discovery surface.
+- Although `opencode.json` `mcp` is a documented OpenCode-native surface, the adapter does not synthesize host-native MCP server config there yet because current asset metadata only carries MCP asset identity/reference content, not a normalized per-host server config payload.
+- It does not install or modify global OpenCode packages, `opencode.json`, or global MCP configuration.
 
 ### Cursor
 
@@ -612,9 +638,19 @@ Adapter implementation:
 
 Cursor is a project-local native adapter. It reuses the VS Code / Copilot lifecycle host for install and activation but ranks assets through its own `cursor` recommendation policy.
 
+Current official docs:
+
+- <https://cursor.com/docs/rules>
+- <https://cursor.com/docs/skills>
+- <https://cursor.com/docs/plugins>
+- <https://cursor.com/docs/mcp>
+- <https://cursor.com/docs/hooks>
+- <https://cursor.com/docs/subagents>
+- <https://cursor.com/marketplace>
+
 Supported behavior:
 
-- writes `.cursor/rules/agent-harness.mdc`
+- writes the documented Cursor rules file `.cursor/rules/agent-harness.mdc`
 - materializes selected assets under `.cursor/agent-harness/`
 - stages a Cursor plugin-compatible component tree at `.cursor/agent-harness/cursor-plugin/` with a `.cursor-plugin/plugin.json` manifest
 - maps selected Cursor command-like assets from `workflow` and `prompt-pack` recommendations into staged plugin `commands/`
@@ -625,11 +661,23 @@ Supported behavior:
 - avoids global VS Code profile mutation
 - plans explicit Cursor native extension install/verify/remove actions when selected extension assets expose structured extension IDs
 
+Documented Cursor-native surfaces used directly:
+
+- `.cursor/rules/`
+- compatible plugin bundle format via `.cursor-plugin/plugin.json`
+
+Agent-harness staged/plugin-compatible surfaces:
+
+- `.cursor/agent-harness/`
+- `.cursor/agent-harness/cursor-plugin/`
+- staged plugin `agents/`, `skills/`, `rules/`, `commands/`, and references
+
 Current boundaries:
 
 - Cursor native extension installation is explicit through `install native --host cursor --operation <verify|install|remove>` and depends on a compatible `cursor` CLI.
-- Cursor plugin assets are staged project-locally; registering plugin paths remains host/user-managed.
-- MCP assets are surfaced as references unless structured server configuration is available from the selected asset.
+- `.cursor/agent-harness/cursor-plugin/` is treated as a staged plugin bundle, not as a documented project-native auto-discovery location by itself.
+- Registering plugin paths remains host/user-managed.
+- `.cursor/mcp.json` is a documented Cursor-native surface, but the adapter does not synthesize it yet because MCP assets are currently carried as references/IDs rather than normalized host-native server config entries.
 - Extension-like assets without structured extension IDs are treated as reference material in the project-local managed tree.
 
 ### Zed
@@ -641,9 +689,15 @@ Adapter implementation:
 
 Zed is a project-local native adapter. It reuses the OpenCode-compatible lifecycle host for install and activation but ranks assets through its own `zed` recommendation policy.
 
+Current official docs:
+
+- <https://zed.dev/docs/ai/rules>
+- <https://zed.dev/docs/ai/mcp>
+- <https://zed.dev/docs/reference/all-settings.html>
+
 Supported behavior:
 
-- updates the project `.rules` file with an agent-harness managed section
+- updates the documented project `.rules` file with an agent-harness managed section
 - adds an `agent-harness` profile entry to `.zed/settings.json`
 - materializes selected assets of every supported asset kind under `.zed/agent-harness/`
 - surfaces agents, skills, workflows, prompt packs, plugins, hooks, extensions, reference packs, and MCP assets as project-readable references in managed Zed context
@@ -652,9 +706,21 @@ Supported behavior:
 - avoids global Zed profile/settings mutation
 - avoids global OpenCode profile mutation
 
+Documented Zed-native surfaces used directly:
+
+- `.rules`
+- `.zed/settings.json` agent profile settings
+
+Agent-harness managed reference surfaces:
+
+- `.zed/agent-harness/`
+- project-readable references for non-native asset kinds
+
 Current boundaries:
 
 - The adapter writes project-local context and profile hints.
+- `.zed/agent-harness/` is a managed reference tree, not a claim that every staged asset kind is a documented Zed-native directory.
+- Zed's documented MCP/context-server settings live in `.zed/settings.json`, but the adapter does not synthesize full `context_servers` entries yet because MCP assets do not currently carry a normalized host-native server config payload.
 - Zed extension installation remains manual through Zed's Extension Gallery or `auto_install_extensions`; extension assets are wired as managed project references rather than installed automatically.
 
 ### Claude Code
@@ -665,6 +731,14 @@ Adapter implementation:
 - registered as `claude-code` in `src/host-adapters/registry.ts`
 
 Claude Code is a project-local native adapter. It reuses the OpenCode-compatible lifecycle host for install and activation but ranks assets through its own `claude-code` recommendation policy.
+
+Current official docs:
+
+- <https://code.claude.com/docs/en/memory>
+- <https://code.claude.com/docs/en/slash-commands>
+- <https://code.claude.com/docs/en/sub-agents>
+- <https://code.claude.com/docs/en/hooks>
+- <https://code.claude.com/docs/en/settings>
 
 Supported behavior:
 
@@ -696,13 +770,22 @@ Adapter implementation:
 
 Pi is a project-local native adapter. It reuses the OpenCode-compatible lifecycle host for install and activation but ranks assets through its own `pi` recommendation policy.
 
+Current official docs:
+
+- <https://pi.dev/docs/latest/settings>
+- <https://pi.dev/docs/latest/skills>
+- <https://pi.dev/docs/latest/prompt-templates>
+- <https://pi.dev/docs/latest/extensions>
+- <https://pi.dev/docs/latest/packages>
+- <https://pi.dev/docs/latest/usage>
+
 Supported behavior:
 
 - writes managed project agent context to `AGENTS.md`
 - writes managed project system context to `SYSTEM.md`
 - writes `.pi/skills/agent-harness/SKILL.md`
 - writes `.pi/prompts/agent-harness.md`
-- updates `.pi/settings.json` with skill and prompt resource entries
+- updates `.pi/settings.json` using Pi's documented top-level `skills` and `prompts` arrays
 - includes selected instruction, agent, skill, workflow, and prompt-pack content in the matching managed Pi files
 - materializes selected assets of every supported asset kind under `.pi/agent-harness/`
 - surfaces plugins, hooks, extensions, reference packs, and MCP assets as managed project-readable references
@@ -710,9 +793,18 @@ Supported behavior:
 - writes `activate/pi/wire-plan.json` on apply
 - avoids global Pi profile mutation
 
+Documented Pi-native surfaces used directly:
+
+- `AGENTS.md`
+- `SYSTEM.md`
+- `.pi/skills/`
+- `.pi/prompts/`
+- `.pi/settings.json` top-level resource arrays
+
 Current boundaries:
 
 - Pi does not include `shared-mcp` in its default bundles.
+- `.pi/agent-harness/` remains a harness-managed reference tree for non-native assets.
 - MCP, extension, hook, and plugin assets are wired as managed references unless your Pi installation includes compatible executable support.
 
 ### Native adapter wire-plan fields
@@ -876,6 +968,57 @@ $env:GITHUB_PERSONAL_ACCESS_TOKEN = '<token>'
 $env:GITHUB_TOKEN = $env:GITHUB_PERSONAL_ACCESS_TOKEN
 ```
 
+### Optional AI enrichment
+
+```bash
+AGENT_HARNESS_AI_ENRICHMENT_URL=
+AGENT_HARNESS_AI_ENRICHMENT_API_KEY=
+AGENT_HARNESS_AI_ENRICHMENT_MODEL=gpt-4o-mini
+# Optional comma-separated extra https origins for compatible public gateways.
+AGENT_HARNESS_AI_ENRICHMENT_ALLOWED_ORIGINS=
+AGENT_HARNESS_AI_ENRICHMENT_TIMEOUT_MS=20000
+AGENT_HARNESS_AI_ENRICHMENT_MAX_RESPONSE_BYTES=1000000
+```
+
+`AGENT_HARNESS_AI_ENRICHMENT_ALLOWED_ORIGINS` extends the built-in public-provider allowlist. The configured enrichment endpoint origin is also auto-allowed when it is a valid public `https` origin, and DNS/public-IP checks still run before any request is sent.
+
+### Shared network and host-command safeguards
+
+```bash
+AGENT_HARNESS_HTTP_TIMEOUT_MS=10000
+AGENT_HARNESS_HTTP_MAX_RESPONSE_BYTES=1000000
+AGENT_HARNESS_GITHUB_FETCH_TIMEOUT_MS=10000
+AGENT_HARNESS_GITHUB_JSON_MAX_BYTES=2000000
+AGENT_HARNESS_REGISTRY_FETCH_TIMEOUT_MS=5000
+AGENT_HARNESS_REGISTRY_METADATA_MAX_BYTES=2000000
+AGENT_HARNESS_REGISTRY_SEARCH_MAX_BYTES=500000
+AGENT_HARNESS_REFERENCE_SOURCE_MAX_BYTES=600000
+AGENT_HARNESS_OFFICIAL_INDEX_PAGE_MAX_BYTES=1000000
+AGENT_HARNESS_OFFICIAL_INDEX_CONTENT_MAX_BYTES=1000000
+AGENT_HARNESS_NATIVE_COMMAND_TIMEOUT_MS=30000
+AGENT_HARNESS_NATIVE_COMMAND_MAX_BUFFER_BYTES=2000000
+AGENT_HARNESS_PREFLIGHT_COMMAND_TIMEOUT_MS=10000
+```
+
+### Discovery recall caps
+
+```bash
+AGENT_HARNESS_GENERIC_REFERENCE_MAX_ITEMS=8
+AGENT_HARNESS_VSCODE_MARKETPLACE_MAX_QUERIES=4
+AGENT_HARNESS_VSCODE_MARKETPLACE_MAX_ITEMS_PER_QUERY=6
+AGENT_HARNESS_NPM_SEARCH_RESULT_LIMIT=12
+AGENT_HARNESS_NPM_MCP_SEARCH_QUERY_LIMIT=8
+```
+
+### Mirror safety limits
+
+```bash
+AGENT_HARNESS_MAX_OFFICIAL_INDEX_PACKAGE_FILES=1000
+AGENT_HARNESS_MAX_OFFICIAL_INDEX_FILE_SIZE_BYTES=1000000
+AGENT_HARNESS_MAX_OFFICIAL_INDEX_PACKAGE_TOTAL_BYTES=20000000
+AGENT_HARNESS_MAX_GITHUB_MIRROR_FILE_SIZE_BYTES=1000000
+```
+
 ### GitHub API and retries
 
 ```bash
@@ -883,34 +1026,24 @@ GITHUB_API_VERSION=2022-11-28
 AGENT_HARNESS_GITHUB_FETCH_RETRIES=3
 ```
 
-### Batch sizes
+### Diagnostics, batch sizes, and scan budgets
 
 ```bash
+AGENT_HARNESS_DEBUG=false
 AGENT_HARNESS_REMOTE_BATCH_SIZE=15
 AGENT_HARNESS_MIRROR_BATCH_SIZE=120
 AGENT_HARNESS_INSTALL_BATCH_SIZE=250
-```
-
-### Scan budgets
-
-```bash
 AGENT_HARNESS_SCAN_MAX_DEPTH=14
 AGENT_HARNESS_SCAN_MAX_FILES=20000
 AGENT_HARNESS_SCAN_MAX_BYTES=50000000
 ```
 
+The runtime config exposes diagnostics as a boolean flag at `diagnostics.debugEnabled`; there is no full log-level hierarchy today. The current `AGENT_HARNESS_DEBUG` env var maps directly to `diagnostics.debugEnabled`, so diagnostics can be controlled either through that env var or by reading the resolved runtime config object.
+
 ### Mutable state root override
 
 ```bash
 AGENT_HARNESS_STATE_ROOT=.agent-harness
-```
-
-### Optional AI enrichment
-
-```bash
-AGENT_HARNESS_AI_ENRICHMENT_URL=
-AGENT_HARNESS_AI_ENRICHMENT_API_KEY=
-AGENT_HARNESS_AI_ENRICHMENT_MODEL=gpt-4o-mini
 ```
 
 You can also pass `--state-root <path>` on the CLI. This option is global and may appear before or after the command domain.
@@ -1196,6 +1329,7 @@ Known boundaries:
 
 - `CHANGELOG.md` - release notes
 - `AGENT-SETUP-PLAYBOOK.md` - dry-run setup workflow, decision tree, and reusable agent prompts for workspace/host asset setup
+- `HOST-SURFACE-AUDIT.md` - checked-in matrix mapping host-facing paths/settings to documented, compatibility, harness-managed, or implementation-detail status
 - `SECURITY.md` - vulnerability reporting and supported-version policy
 - `Roadmap.md` - gap analysis and long-range direction
 - `IMPLEMENTATION-PLAN.md` - milestone-oriented execution plan
