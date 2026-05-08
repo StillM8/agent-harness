@@ -7,6 +7,7 @@ import {
   collectMatchedSignals,
   computeOutOfDomainPenalty,
   normalizePhrase,
+  shouldEnforceConcernTarget,
 } from "./signals.js";
 import type {
   AssetCatalogEntry,
@@ -16,6 +17,25 @@ import type {
 } from "../types.js";
 import type { RecommendationHost } from "./hosts.js";
 import type { CandidateRecommendation, DemandContext } from "./model.js";
+
+const WRAPPER_LIKE_TERMS = new Set([
+  "config",
+  "docs",
+  "json",
+  "knowledge",
+  "reference",
+  "scenario",
+  "wrapper",
+  "yaml",
+  "yml",
+]);
+
+interface MatchQuality {
+  exactStackWeight: number;
+  ecosystemWeight: number;
+  genericConcernWeight: number;
+  hasOnlyGenericConcernMatch: boolean;
+}
 
 /**
  * Provides compute entry preselection score for the lifecycle pipeline.
@@ -42,6 +62,12 @@ export function buildCandidateRecommendation(
   demandContext: DemandContext,
   policy: RecommendationPolicy,
 ): CandidateRecommendation | null {
+  const capabilitySearchTerms = buildSearchTerms(
+    [entry.id, entry.displayName, ...entry.capabilities],
+    policy,
+  );
+  const genericToolingTerms = buildGenericToolingTerms(policy);
+  const wrapperLikeTerms = buildSearchTerms([...WRAPPER_LIKE_TERMS], policy);
   const searchTerms = buildSearchTerms(
     [
       entry.id,
@@ -63,6 +89,12 @@ export function buildCandidateRecommendation(
     searchTerms,
     demandContext,
     policy,
+  );
+  const matchQuality = analyzeMatchQuality(
+    matchedSignals,
+    capabilitySearchTerms,
+    wrapperLikeTerms,
+    genericToolingTerms,
   );
   const coverageTags = buildCoverageTags(searchTerms, matchedSignals, policy);
   const taskModes = buildTaskModes(
@@ -88,19 +120,27 @@ export function buildCandidateRecommendation(
   const breakdown: RecommendationScoreBreakdown = {
     authority: policy.scoring.authorityWeights[entry.source.authorityTier],
     compatibility: policy.scoring.compatibilityWeights[entry.compatibilityMode],
-    portfolioFit: Math.round(
-      (entry.fit.portfolioFit * 0.7 + entry.fit.hostFit * 0.3) *
-        policy.scoring.portfolioFitMultiplier,
-    ),
+    portfolioFit:
+      Math.round(
+        (entry.fit.portfolioFit * 0.7 + entry.fit.hostFit * 0.3) *
+          policy.scoring.portfolioFitMultiplier,
+      ) + computePortfolioFitBonus(matchQuality),
     trust: Math.round(entry.trust.score / policy.scoring.trustDivisor),
     sourcePriority: Math.round(
       entry.source.sourcePriority / policy.scoring.sourcePriorityDivisor,
     ),
     demand: Math.min(
       policy.scoring.demandMatchCap,
-      matchedSignals.reduce((total, match) => total + match.weight, 0),
+      matchedSignals.reduce((total, match) => total + match.weight, 0) +
+        computeDemandExactnessBonus(matchQuality),
     ),
-    hostPreference: computeHostPreference(entry, host, coverageTags, policy),
+    hostPreference: computeHostPreference(
+      entry,
+      host,
+      coverageTags,
+      demandContext,
+      policy,
+    ),
     coverage: 0,
     diversity: 0,
     freshness: computeFreshnessScore(entry, policy),
@@ -119,6 +159,7 @@ export function buildCandidateRecommendation(
         entry,
         searchTerms,
         matchedSignals,
+        matchQuality,
         demandContext,
         policy,
       ) + hostDeprioritizationPenalty,
@@ -136,9 +177,124 @@ export function buildCandidateRecommendation(
     taskModes,
     matchedSignals,
     duplicateGroup,
-    reasons: buildBaseReasons(entry, matchedSignals, coverageTags, taskModes),
+    reasons: buildBaseReasons(
+      entry,
+      matchedSignals,
+      coverageTags,
+      taskModes,
+      matchQuality,
+    ),
     breakdown,
   };
+}
+
+function analyzeMatchQuality(
+  matchedSignals: RecommendationSignalMatch[],
+  capabilitySearchTerms: Set<string>,
+  wrapperLikeTerms: Set<string>,
+  genericToolingTerms: Set<string>,
+): MatchQuality {
+  const exactnessEligible = !isWrapperLikeAsset(
+    capabilitySearchTerms,
+    wrapperLikeTerms,
+  );
+  let exactStackWeight = 0;
+  let ecosystemWeight = 0;
+  let genericConcernWeight = 0;
+
+  for (const match of matchedSignals) {
+    if (exactnessEligible) {
+      if (
+        match.signalType === "frameworks" ||
+        match.signalType === "packageManagers"
+      ) {
+        exactStackWeight += match.weight;
+        continue;
+      }
+
+      if (
+        match.signalType === "tooling" &&
+        isSpecificToolingSignal(match.term, genericToolingTerms)
+      ) {
+        exactStackWeight += match.weight;
+        continue;
+      }
+    }
+
+    if (match.signalType === "languages") {
+      ecosystemWeight += match.weight;
+      continue;
+    }
+
+    if (match.signalType === "concerns") {
+      genericConcernWeight += match.weight;
+    }
+  }
+
+  return {
+    exactStackWeight,
+    ecosystemWeight,
+    genericConcernWeight,
+    hasOnlyGenericConcernMatch:
+      genericConcernWeight > 0 &&
+      exactStackWeight === 0 &&
+      ecosystemWeight === 0,
+  };
+}
+
+function isWrapperLikeAsset(
+  capabilitySearchTerms: Set<string>,
+  wrapperLikeTerms: Set<string>,
+): boolean {
+  for (const term of capabilitySearchTerms) {
+    if (wrapperLikeTerms.has(term)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function buildGenericToolingTerms(policy: RecommendationPolicy): Set<string> {
+  const genericToolingTerms = new Set<string>(GENERIC_CAPABILITY_TERMS);
+
+  for (const [concern, keywords] of Object.entries(policy.concernKeywordMap)) {
+    for (const term of buildSearchTerms([concern, ...keywords], policy)) {
+      genericToolingTerms.add(term);
+    }
+  }
+
+  return genericToolingTerms;
+}
+
+function isSpecificToolingSignal(
+  term: string,
+  genericToolingTerms: Set<string>,
+): boolean {
+  return !genericToolingTerms.has(normalizePhrase(term));
+}
+
+function computePortfolioFitBonus(matchQuality: MatchQuality): number {
+  if (matchQuality.exactStackWeight > 0) {
+    return matchQuality.exactStackWeight * 3 + matchQuality.ecosystemWeight;
+  }
+
+  if (matchQuality.ecosystemWeight > 0) {
+    return matchQuality.ecosystemWeight;
+  }
+
+  return 0;
+}
+
+function computeDemandExactnessBonus(matchQuality: MatchQuality): number {
+  if (matchQuality.exactStackWeight > 0) {
+    return (
+      matchQuality.exactStackWeight * 2 +
+      Math.round(matchQuality.ecosystemWeight / 2)
+    );
+  }
+
+  return 0;
 }
 
 function computeHostDeprioritizationPenalty(
@@ -173,6 +329,7 @@ function computeHostPreference(
   entry: AssetCatalogEntry,
   host: RecommendationHost,
   coverageTags: string[],
+  demandContext: DemandContext,
   policy: RecommendationPolicy,
 ): number {
   const hostPolicy = policy.hosts[host];
@@ -185,7 +342,10 @@ function computeHostPreference(
   }
 
   for (const target of hostPolicy.targetConcerns) {
-    if (coverageTags.includes(target.concern)) {
+    if (
+      coverageTags.includes(target.concern) &&
+      shouldEnforceConcernTarget(target.concern, demandContext, policy)
+    ) {
       score += Math.max(1, Math.round(target.weight / 2));
     }
   }
@@ -197,6 +357,7 @@ function computeNegativePenalty(
   entry: AssetCatalogEntry,
   searchTerms: Set<string>,
   matchedSignals: RecommendationSignalMatch[],
+  matchQuality: MatchQuality,
   demandContext: DemandContext,
   policy: RecommendationPolicy,
 ): number {
@@ -217,6 +378,9 @@ function computeNegativePenalty(
   );
   if (specificTerms.length < 3) {
     penalty += policy.scoring.genericCapabilityPenalty;
+  }
+  if (matchQuality.hasOnlyGenericConcernMatch) {
+    penalty += Math.max(2, policy.scoring.genericCapabilityPenalty);
   }
 
   return penalty;
@@ -247,6 +411,7 @@ function buildBaseReasons(
   matchedSignals: RecommendationSignalMatch[],
   coverageTags: string[],
   taskModes: string[],
+  matchQuality: MatchQuality,
 ): string[] {
   const reasons = [
     `authority:${entry.source.authorityTier}`,
@@ -265,6 +430,14 @@ function buildBaseReasons(
 
   for (const taskMode of taskModes.slice(0, 3)) {
     reasons.push(`mode:${taskMode}`);
+  }
+
+  if (matchQuality.exactStackWeight > 0) {
+    reasons.push("fit:exact-stack");
+  } else if (matchQuality.ecosystemWeight > 0) {
+    reasons.push("fit:ecosystem");
+  } else if (matchQuality.genericConcernWeight > 0) {
+    reasons.push("fit:generic-concern");
   }
 
   return reasons;

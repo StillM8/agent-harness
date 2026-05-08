@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildTopRecommendationsForHost } from "../recommend/selection.js";
+import { buildDemandContext } from "../recommend/signals.js";
 import { buildSuggestedBundle } from "../recommend/summary.js";
 import type {
   AssetCatalogEntry,
+  DemandProfile,
   RecommendationEntry,
   RecommendationPolicy,
 } from "../types.js";
@@ -85,6 +87,244 @@ void test("suggested bundle skips over-budget first recommendation", () => {
   assert.equal(bundle.estimatedPromptWeight, 3);
 });
 
+void test("exact stack matches outrank generic concern overlap", () => {
+  const policy = buildPolicy();
+  policy.concernKeywordMap = {
+    backend: ["backend"],
+    integration: ["integration"],
+    testing: ["testing"],
+  };
+
+  const demandContext = buildDemandContext(
+    createDemandProfile([
+      {
+        path: "package.json",
+        fileName: "package.json",
+        evidenceStrength: "strong",
+        matchedSignals: {
+          languages: ["javascript"],
+          packageManagers: ["npm"],
+          frameworks: ["apify"],
+          concerns: [],
+          tooling: ["npm:apify"],
+        },
+      },
+      {
+        path: "README.md",
+        fileName: "README.md",
+        evidenceStrength: "weak",
+        matchedSignals: {
+          languages: [],
+          packageManagers: [],
+          frameworks: [],
+          concerns: ["backend", "integration", "testing"],
+          tooling: [],
+        },
+      },
+    ]),
+    policy,
+  );
+
+  const recommendations = buildTopRecommendationsForHost(
+    "copilot-vscode",
+    [
+      buildCatalogEntry("generic-backend", "skill", 95, {
+        capabilities: ["skill", "backend", "integration", "testing"],
+        fit: { portfolioFit: 0.55, hostFit: 1 },
+      }),
+      buildCatalogEntry("apify-exact", "skill", 55, {
+        capabilities: ["skill", "apify", "npm:apify"],
+        fit: { portfolioFit: 0.55, hostFit: 1 },
+      }),
+    ],
+    demandContext,
+    policy,
+  );
+
+  assert.equal(recommendations[0]?.assetId, "apify-exact");
+  assert.ok(recommendations[0]?.reasons.includes("fit:exact-stack"));
+});
+
+void test("wrapper-like assets do not claim exact-stack fit from generic aliases", () => {
+  const policy = buildPolicy();
+  policy.synonyms = { apify: ["automation"], documentation: ["docs"] };
+  policy.concernKeywordMap = { automation: ["automation"] };
+
+  const demandContext = buildDemandContext(
+    createDemandProfile([
+      {
+        path: "package.json",
+        fileName: "package.json",
+        evidenceStrength: "strong",
+        matchedSignals: {
+          languages: [],
+          packageManagers: [],
+          frameworks: ["apify"],
+          concerns: ["automation"],
+          tooling: [],
+        },
+      },
+    ]),
+    policy,
+  );
+
+  const recommendations = buildTopRecommendationsForHost(
+    "copilot-vscode",
+    [
+      buildCatalogEntry("scenario-wrapper", "skill", 80, {
+        capabilities: ["skill", "scenario", "automation", "docs"],
+        fit: { portfolioFit: 0.55, hostFit: 1 },
+      }),
+    ],
+    demandContext,
+    policy,
+  );
+
+  assert.ok(!recommendations[0]?.reasons.includes("fit:exact-stack"));
+  assert.ok(recommendations[0]?.reasons.includes("fit:generic-concern"));
+});
+
+void test("path tokens do not block exact-stack fit", () => {
+  const policy = buildPolicy();
+
+  const demandContext = buildDemandContext(
+    createDemandProfile([
+      {
+        path: "package.json",
+        fileName: "package.json",
+        evidenceStrength: "strong",
+        matchedSignals: {
+          languages: [],
+          packageManagers: ["npm"],
+          frameworks: ["apify"],
+          concerns: [],
+          tooling: ["npm:apify"],
+        },
+      },
+    ]),
+    policy,
+  );
+
+  const recommendations = buildTopRecommendationsForHost(
+    "copilot-vscode",
+    [
+      buildCatalogEntry("apify-helper", "skill", 80, {
+        capabilities: ["skill", "apify", "npm:apify"],
+        evidenceFilePath: "docs/reference.yaml",
+        fit: { portfolioFit: 0.55, hostFit: 1 },
+        installRelativePath: "config/package.json",
+      }),
+    ],
+    demandContext,
+    policy,
+  );
+
+  assert.ok(recommendations[0]?.reasons.includes("fit:exact-stack"));
+});
+
+void test("canonicalized concern targets still enforce coverage goals", () => {
+  const policy = buildPolicy({
+    recommendationLimit: 1,
+    targetConcerns: [{ concern: "backend", minimum: 1, weight: 200 }],
+  });
+  policy.concernKeywordMap = { backend: ["backend"] };
+  policy.synonyms = { "node-backend": ["backend"] };
+
+  const demandContext = buildDemandContext(
+    createDemandProfile([
+      {
+        path: "package.json",
+        fileName: "package.json",
+        evidenceStrength: "strong",
+        matchedSignals: {
+          languages: [],
+          packageManagers: [],
+          frameworks: [],
+          concerns: ["backend"],
+          tooling: [],
+        },
+      },
+    ]),
+    policy,
+  );
+
+  const recommendations = buildTopRecommendationsForHost(
+    "copilot-vscode",
+    [
+      buildCatalogEntry("other-skill", "skill", 100, {
+        capabilities: ["skill", "testing"],
+        fit: { portfolioFit: 0.55, hostFit: 1 },
+      }),
+      buildCatalogEntry("backend-skill", "skill", 10, {
+        capabilities: ["skill", "backend"],
+        fit: { portfolioFit: 0.55, hostFit: 1 },
+      }),
+    ],
+    demandContext,
+    policy,
+  );
+
+  assert.equal(recommendations[0]?.assetId, "backend-skill");
+  assert.ok(recommendations[0]?.reasons.includes("coverage-gap-fill"));
+});
+
+void test("weak-only concern demand does not force coverage-gap fill", () => {
+  const policy = buildPolicy({
+    recommendationLimit: 1,
+    targetConcerns: [{ concern: "backend", minimum: 1, weight: 200 }],
+  });
+  policy.concernKeywordMap = { backend: ["backend"] };
+
+  const demandContext = buildDemandContext(
+    createDemandProfile([
+      {
+        path: "package.json",
+        fileName: "package.json",
+        evidenceStrength: "strong",
+        matchedSignals: {
+          languages: [],
+          packageManagers: ["npm"],
+          frameworks: ["apify"],
+          concerns: [],
+          tooling: ["npm:apify"],
+        },
+      },
+      {
+        path: "README.md",
+        fileName: "README.md",
+        evidenceStrength: "weak",
+        matchedSignals: {
+          languages: [],
+          packageManagers: [],
+          frameworks: [],
+          concerns: ["backend"],
+          tooling: [],
+        },
+      },
+    ]),
+    policy,
+  );
+
+  const recommendations = buildTopRecommendationsForHost(
+    "copilot-vscode",
+    [
+      buildCatalogEntry("generic-backend", "skill", 95, {
+        capabilities: ["skill", "backend"],
+        fit: { portfolioFit: 0.55, hostFit: 1 },
+      }),
+      buildCatalogEntry("apify-exact", "skill", 55, {
+        capabilities: ["skill", "apify", "npm:apify"],
+        fit: { portfolioFit: 0.55, hostFit: 1 },
+      }),
+    ],
+    demandContext,
+    policy,
+  );
+
+  assert.equal(recommendations[0]?.assetId, "apify-exact");
+  assert.ok(!recommendations[0]?.reasons.includes("coverage-gap-fill"));
+});
+
 function buildPolicy(
   overrides: Partial<RecommendationPolicy["hosts"]["copilot-vscode"]> = {},
 ): RecommendationPolicy {
@@ -163,7 +403,14 @@ function buildCatalogEntry(
   id: string,
   assetKind: AssetCatalogEntry["assetKind"],
   sourcePriority: number,
-  options: { duplicateGroup?: string; sourceId?: string } = {},
+  options: {
+    capabilities?: string[];
+    duplicateGroup?: string;
+    evidenceFilePath?: string;
+    fit?: { portfolioFit: number; hostFit: number };
+    installRelativePath?: string;
+    sourceId?: string;
+  } = {},
 ): AssetCatalogEntry {
   const sourceId = options.sourceId ?? id;
   return {
@@ -182,13 +429,17 @@ function buildCatalogEntry(
       publisherVerified: false,
     },
     trust: { score: sourcePriority, signals: [] },
-    capabilities: [assetKind, id],
-    install: { method: "local-file" },
+    capabilities: options.capabilities ?? [assetKind, id],
+    install: {
+      method: "local-file",
+      relativePath: options.installRelativePath,
+    },
     evidence: {
       manifestFound: true,
       readmeFound: true,
       examplesFound: false,
       docsLinked: true,
+      filePath: options.evidenceFilePath,
     },
     maintenance: {
       lastUpdated: new Date().toISOString(),
@@ -202,7 +453,7 @@ function buildCatalogEntry(
       requiresNetwork: false,
     },
     contextCost: { sizeClass: "tiny", estimatedPromptWeight: 1 },
-    fit: { portfolioFit: 1, hostFit: 1 },
+    fit: options.fit ?? { portfolioFit: 1, hostFit: 1 },
     dedupe: {
       duplicateGroup: options.duplicateGroup,
       candidateRankHint: "test",
@@ -261,5 +512,27 @@ function createEmptyDemandContext() {
     terms: [],
     hasSignals: false,
     activeDomainGroups: new Set<string>(),
+  };
+}
+
+function createDemandProfile(
+  evidence: DemandProfile["evidence"],
+): DemandProfile {
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    scanRoot: "C:/fixture",
+    summary: {
+      scannedFiles: evidence.length,
+      matchedFiles: evidence.length,
+    },
+    signals: {
+      languages: [],
+      packageManagers: [],
+      frameworks: [],
+      concerns: [],
+      tooling: [],
+    },
+    evidence,
   };
 }
