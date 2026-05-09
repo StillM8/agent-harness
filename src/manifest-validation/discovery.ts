@@ -30,6 +30,15 @@ import {
 } from "./primitives.js";
 
 const DEMAND_EVIDENCE_STRENGTHS = ["strong", "medium", "weak"] as const;
+const HOST_NATIVE_CONFIG_HOST_KEYS = [
+  "opencode",
+  "cursor",
+  "zed",
+  "claude-code",
+  "pi",
+] as const;
+
+type HostNativeConfigHostKey = (typeof HOST_NATIVE_CONFIG_HOST_KEYS)[number];
 
 /**
  * Validates unknown data as source registry.
@@ -276,6 +285,12 @@ export function assertAssetCatalogEntry(
     status.activationEligible,
     `${context}.status.activationEligible`,
   );
+  if (record.hostNativeConfig !== undefined) {
+    assertAssetHostNativeConfigMap(
+      record.hostNativeConfig,
+      `${context}.hostNativeConfig`,
+    );
+  }
 }
 
 /**
@@ -397,6 +412,114 @@ function assertAssetPrerequisites(value: unknown, context: string): void {
       assertHostTarget(prerequisite.host, `${context}[${index}].host`);
     }
   });
+}
+
+function assertAssetHostNativeConfigMap(value: unknown, context: string): void {
+  const record = assertRecord(value, context);
+  for (const hostKey of HOST_NATIVE_CONFIG_HOST_KEYS) {
+    const hostValue = record[hostKey];
+    if (hostValue === undefined) {
+      continue;
+    }
+
+    const hostRecord = assertRecord(hostValue, `${context}.${hostKey}`);
+    assertArray(hostRecord.files, `${context}.${hostKey}.files`).forEach(
+      (entry, index) => {
+        const entryRecord = assertRecord(
+          entry,
+          `${context}.${hostKey}.files[${index}]`,
+        );
+        const entryPath = assertString(
+          entryRecord.path,
+          `${context}.${hostKey}.files[${index}].path`,
+        );
+        const entryFormat = assertLiteral(
+          entryRecord.format,
+          ["text", "json"],
+          `${context}.${hostKey}.files[${index}].format`,
+        );
+
+        if (entryFormat === "text") {
+          assertString(
+            entryRecord.content,
+            `${context}.${hostKey}.files[${index}].content`,
+          );
+          if (entryRecord.merge !== undefined) {
+            throw new Error(
+              `${context}.${hostKey}.files[${index}].merge is only valid ` +
+                "for json payloads",
+            );
+          }
+        } else {
+          assertRecord(
+            entryRecord.content,
+            `${context}.${hostKey}.files[${index}].content`,
+          );
+          if (entryRecord.merge !== undefined) {
+            assertBoolean(
+              entryRecord.merge,
+              `${context}.${hostKey}.files[${index}].merge`,
+            );
+          }
+        }
+
+        assertHostNativeFilePayloadConstraints(
+          hostKey,
+          entryPath,
+          entryFormat,
+          entryRecord.merge === true,
+          `${context}.${hostKey}.files[${index}]`,
+        );
+      },
+    );
+  }
+}
+
+function assertHostNativeFilePayloadConstraints(
+  hostKey: HostNativeConfigHostKey,
+  path: string,
+  format: "text" | "json",
+  merge: boolean,
+  context: string,
+): void {
+  const mergeOnlyJsonPaths: Record<HostNativeConfigHostKey, readonly string[]> =
+    {
+      opencode: ["opencode.json"],
+      cursor: [".cursor/mcp.json", ".cursor/hooks.json"],
+      zed: [".zed/settings.json"],
+      "claude-code": [
+        ".mcp.json",
+        ".claude/settings.json",
+        ".claude/settings.local.json",
+      ],
+      pi: [],
+    };
+
+  const writeOnlyPrefixes: Record<HostNativeConfigHostKey, readonly string[]> =
+    {
+      opencode: [".opencode/tools/"],
+      cursor: [".cursor/hooks/", ".cursor/agents/"],
+      zed: [],
+      "claude-code": [],
+      pi: [".pi/extensions/", ".pi/packages/"],
+    };
+
+  if (mergeOnlyJsonPaths[hostKey]?.includes(path)) {
+    if (format !== "json") {
+      throw new Error(`${context}.format must be "json" for ${path}`);
+    }
+    if (!merge) {
+      throw new Error(`${context}.merge must be true for ${path}`);
+    }
+    return;
+  }
+
+  if (writeOnlyPrefixes[hostKey]?.some((prefix) => path.startsWith(prefix))) {
+    if (merge) {
+      throw new Error(`${context}.merge must not be true for ${path}`);
+    }
+    return;
+  }
 }
 
 function assertDemandSignalSet(value: unknown, context: string): void {

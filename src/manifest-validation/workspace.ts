@@ -133,5 +133,65 @@ export function assertWirePlanManifest(
   if (record.hookFiles !== undefined) {
     assertStringArray(record.hookFiles, `${context}.hookFiles`);
   }
+  if (record.nativeConfigOperations !== undefined) {
+    assertNativeConfigOperations(
+      record.nativeConfigOperations,
+      `${context}.nativeConfigOperations`,
+    );
+  }
   assertStringArray(record.notes, `${context}.notes`);
+}
+
+function assertNativeConfigOperations(value: unknown, context: string): void {
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array`);
+  }
+
+  const operations = value;
+
+  operations.forEach((entry, index) => {
+    const operation = assertRecord(entry, `${context}[${index}]`);
+    assertString(operation.path, `${context}[${index}].path`);
+    assertLiteral(
+      operation.format,
+      ["text", "json"],
+      `${context}[${index}].format`,
+    );
+    assertLiteral(
+      operation.mode,
+      ["write", "merge"],
+      `${context}[${index}].mode`,
+    );
+
+    if (operation.mode === "merge") {
+      if (operation.format !== "json") {
+        throw new Error(
+          `${context}[${index}].format must be "json" when ${context}[${index}].mode is "merge"`,
+        );
+      }
+      assertRecord(operation.content, `${context}[${index}].content`);
+    } else if (operation.format === "text") {
+      assertString(operation.content, `${context}[${index}].content`);
+    } else {
+      assertRecord(operation.content, `${context}[${index}].content`);
+    }
+
+    if (operation.mode === "merge") {
+      if (operation.previousContent === undefined) {
+        throw new Error(
+          `${context}[${index}].previousContent is required when ${context}[${index}].mode is "merge"`,
+        );
+      }
+    }
+
+    if (
+      operation.previousContent !== undefined &&
+      operation.previousContent !== null
+    ) {
+      assertRecord(
+        operation.previousContent,
+        `${context}[${index}].previousContent`,
+      );
+    }
+  });
 }

@@ -18,11 +18,19 @@ import {
 import { assertWirePlanManifest } from "../manifest-validation.js";
 import { sanitizeAssetId } from "../lib/safe-paths.js";
 import { readSharedMcpAssetIds } from "../lib/shared-mcp.js";
+import {
+  applyHostNativeFilePayloads,
+  collectHostNativeFilePayloads,
+  revertNativeConfigOperations,
+  toWorkspaceRelativeConfigPath,
+} from "./native-config.js";
 import type {
   ActivationManifest,
+  AssetCatalogEntry,
   AssetKind,
   InstalledBundleManifest,
   InstalledPackageManifest,
+  NativeConfigOperation,
   WirePlanManifest,
   WirePreviewManifest,
 } from "../types.js";
@@ -101,12 +109,22 @@ export async function wireOpenCode(options: {
   }
 
   if (mode === "reset") {
+    await revertNativeConfigOperations({
+      workspaceRoot,
+      host: "opencode",
+      operations: previousWirePlan?.nativeConfigOperations,
+    });
     await removeManagedAgentsSection(localAgentsPath);
     await removeManagedLinks(previousWirePlan?.linkedPaths ?? []);
     await removePath(localContextRoot);
     return;
   }
 
+  await revertNativeConfigOperations({
+    workspaceRoot,
+    host: "opencode",
+    operations: previousWirePlan?.nativeConfigOperations,
+  });
   await removeManagedAgentsSection(localAgentsPath);
   await removeManagedLinks(previousWirePlan?.linkedPaths ?? []);
   await ensureDirectory(localContextRoot);
@@ -135,8 +153,13 @@ export async function wireOpenCode(options: {
     activationManifest,
     localOverlayRoot,
   });
+  const activeAssets = await loadActiveOpenCodeAssets(
+    activationRoot,
+    activationManifest,
+  );
 
   const createdLinkPaths: string[] = [];
+  let nativeConfigOperations: NativeConfigOperation[] = [];
   try {
     for (const linkedAsset of linkedAssets) {
       await materializeOpenCodeLinkedAsset(linkedAsset);
@@ -151,6 +174,12 @@ export async function wireOpenCode(options: {
       sharedMcpAssetIds,
     });
 
+    nativeConfigOperations = await applyOpenCodeNativeConfig({
+      workspaceRoot,
+      activeAssets,
+      linkedAssets,
+    });
+
     const wirePlan: WirePlanManifest = {
       schemaVersion: 1,
       host: "opencode-project",
@@ -159,6 +188,7 @@ export async function wireOpenCode(options: {
       runtimeRoot: toPosixPath(localOverlayRoot),
       linkedPaths: createdLinkPaths.map(toPosixPath),
       mcpServers: sharedMcpAssetIds,
+      nativeConfigOperations,
       notes: [
         "Project-local OpenCode overlay written under .opencode/context/project-intelligence/agent-harness.",
         "Documented OpenCode-native asset buckets stay under .opencode/agents, .opencode/skills, .opencode/commands, and .opencode/plugins.",
@@ -170,7 +200,14 @@ export async function wireOpenCode(options: {
 
     await writeJsonFile(join(localContextRoot, "wire-plan.json"), wirePlan);
   } catch (error) {
+    await revertNativeConfigOperations({
+      workspaceRoot,
+      host: "opencode",
+      operations: nativeConfigOperations,
+    });
+    await removeManagedAgentsSection(localAgentsPath);
     await removeManagedLinksBestEffort(createdLinkPaths);
+    await removePath(localContextRoot);
     throw error;
   }
 }
@@ -225,10 +262,10 @@ async function resolveOpenCodeLinkedAssets(options: {
         activationRoot,
         sanitizeAssetId(packageManifest.assetId),
       );
-      const commandLikeAsset = isOpenCodeCommandAsset(
+      const fileLinkedAsset = isOpenCodeFileLinkedAsset(
         packageManifest.assetKind,
       );
-      const sourcePath = commandLikeAsset
+      const sourcePath = fileLinkedAsset
         ? join(assetRoot, "content.txt")
         : assetRoot;
 
@@ -240,11 +277,11 @@ async function resolveOpenCodeLinkedAssets(options: {
         assetId: packageManifest.assetId,
         assetKind: packageManifest.assetKind,
         sourcePath,
-        linkMode: commandLikeAsset ? "file" : "directory",
+        linkMode: fileLinkedAsset ? "file" : "directory",
         linkPath: join(
           localOverlayRoot,
           OPENCODE_DIRECTORY_BY_ASSET_KIND[packageManifest.assetKind],
-          commandLikeAsset
+          fileLinkedAsset
             ? `${sanitizeAssetId(packageManifest.assetId)}.md`
             : sanitizeAssetId(packageManifest.assetId),
         ),
@@ -258,6 +295,64 @@ async function resolveOpenCodeLinkedAssets(options: {
   );
 }
 
+async function loadActiveOpenCodeAssets(
+  activationRoot: string,
+  activationManifest: ActivationManifest | null,
+): Promise<AssetCatalogEntry[]> {
+  if (!activationManifest) {
+    return [];
+  }
+
+  const assets: AssetCatalogEntry[] = [];
+  for (const assetId of activationManifest.activeAssets) {
+    const asset = await readJsonFileOrNull<AssetCatalogEntry>(
+      join(activationRoot, sanitizeAssetId(assetId), "asset.json"),
+    );
+    if (asset) {
+      assets.push(asset);
+    }
+  }
+
+  return assets.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+async function applyOpenCodeNativeConfig(options: {
+  workspaceRoot: string;
+  activeAssets: AssetCatalogEntry[];
+  linkedAssets: OpenCodeLinkedAsset[];
+}): Promise<NativeConfigOperation[]> {
+  const instructionPaths = options.linkedAssets
+    .filter((asset) => asset.assetKind === "instruction")
+    .map((asset) =>
+      toWorkspaceRelativeConfigPath(options.workspaceRoot, asset.linkPath),
+    );
+  const payloads = collectHostNativeFilePayloads(
+    options.activeAssets,
+    "opencode",
+  );
+
+  if (instructionPaths.length > 0) {
+    payloads.unshift({
+      path: "opencode.json",
+      format: "json",
+      merge: true,
+      content: {
+        instructions: instructionPaths,
+      },
+    });
+  }
+
+  if (payloads.length === 0) {
+    return [];
+  }
+
+  return applyHostNativeFilePayloads({
+    workspaceRoot: options.workspaceRoot,
+    host: "opencode",
+    payloads,
+  });
+}
+
 async function materializeOpenCodeLinkedAsset(
   linkedAsset: OpenCodeLinkedAsset,
 ): Promise<void> {
@@ -268,22 +363,26 @@ async function materializeOpenCodeLinkedAsset(
 
   if (await pathEntryExists(linkedAsset.linkPath)) {
     throw new Error(
-      `Refusing to overwrite existing OpenCode command file for asset ${linkedAsset.assetKind}:${linkedAsset.assetId}: ${toPosixPath(linkedAsset.linkPath)}`,
+      `Refusing to overwrite existing OpenCode file link for asset ${linkedAsset.assetKind}:${linkedAsset.assetId}: ${toPosixPath(linkedAsset.linkPath)}`,
     );
   }
 
   const content = await readTextFileOrNull(linkedAsset.sourcePath);
   if (content === null) {
     throw new Error(
-      `Cannot materialize OpenCode command file because source content is missing: ${toPosixPath(linkedAsset.sourcePath)} -> ${toPosixPath(linkedAsset.linkPath)}`,
+      `Cannot materialize OpenCode file link because source content is missing: ${toPosixPath(linkedAsset.sourcePath)} -> ${toPosixPath(linkedAsset.linkPath)}`,
     );
   }
 
   await writeTextFile(linkedAsset.linkPath, content);
 }
 
-function isOpenCodeCommandAsset(assetKind: AssetKind): boolean {
-  return assetKind === "workflow" || assetKind === "prompt-pack";
+function isOpenCodeFileLinkedAsset(assetKind: AssetKind): boolean {
+  return (
+    assetKind === "instruction" ||
+    assetKind === "workflow" ||
+    assetKind === "prompt-pack"
+  );
 }
 
 /**
