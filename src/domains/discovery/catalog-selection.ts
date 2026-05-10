@@ -1,4 +1,6 @@
 import { splitIntoKeywords } from "./catalog-utils.js";
+import { hasDesignSystemSignals, SPECIALIZED_GATES } from "./demand-helpers.js";
+import { stripPackageManifestEntryPrefix } from "../../lib/package-manifest-entry.js";
 import type {
   AssetCatalogEntry,
   AssetContextCost,
@@ -17,6 +19,7 @@ interface DemandRelevanceTerms {
   exactHighSignalTerms: Set<string>;
   highSignalPhrases: string[][];
   lowSignalTerms: Set<string>;
+  demandKeywords: Set<string>;
 }
 
 interface CatalogTermData {
@@ -68,8 +71,6 @@ const LOW_SIGNAL_TERMS = new Set([
   "yarn",
 ]);
 
-const PACKAGE_REGISTRY_PREFIX_RE =
-  /^(?:cargo|cocoapods|gem|go|gradle|maven|npm|nuget|packagist|pub|pypi|swift):/iu;
 const IGNORED_CONCERN_TERMS = new Set(["base", "detector"]);
 const LOW_SIGNAL_CONCERN_MATCH_THRESHOLD = 4;
 const HIGH_SIGNAL_PHRASE_MATCH_THRESHOLD = 2;
@@ -248,12 +249,14 @@ function buildDemandTermSet(
       exactHighSignalTerms: new Set(),
       highSignalPhrases: [],
       lowSignalTerms: new Set(),
+      demandKeywords: new Set(),
     };
   }
 
   const exactHighSignalTerms = new Set<string>();
   const highSignalPhrases: string[][] = [];
   const lowSignalTerms = new Set<string>();
+  const demandKeywords = new Set<string>();
 
   for (const language of demandProfile.signals.languages) {
     addDemandSignal(
@@ -261,6 +264,7 @@ function buildDemandTermSet(
       exactHighSignalTerms,
       highSignalPhrases,
       lowSignalTerms,
+      demandKeywords,
       catalogTermDocumentFrequency,
       catalogEntryCount,
     );
@@ -272,6 +276,7 @@ function buildDemandTermSet(
       exactHighSignalTerms,
       highSignalPhrases,
       lowSignalTerms,
+      demandKeywords,
       catalogTermDocumentFrequency,
       catalogEntryCount,
     );
@@ -283,6 +288,7 @@ function buildDemandTermSet(
       exactHighSignalTerms,
       highSignalPhrases,
       lowSignalTerms,
+      demandKeywords,
       catalogTermDocumentFrequency,
       catalogEntryCount,
     );
@@ -294,6 +300,7 @@ function buildDemandTermSet(
       exactHighSignalTerms,
       highSignalPhrases,
       lowSignalTerms,
+      demandKeywords,
       catalogTermDocumentFrequency,
       catalogEntryCount,
     );
@@ -305,15 +312,19 @@ function buildDemandTermSet(
       exactHighSignalTerms,
       highSignalPhrases,
       lowSignalTerms,
+      demandKeywords,
       catalogTermDocumentFrequency,
       catalogEntryCount,
     );
   }
 
+  addBridgeDemandTerms(demandProfile, exactHighSignalTerms, demandKeywords);
+
   return {
     exactHighSignalTerms,
     highSignalPhrases,
     lowSignalTerms,
+    demandKeywords,
   };
 }
 
@@ -322,10 +333,14 @@ function addDemandSignal(
   exactHighSignalTerms: Set<string>,
   highSignalPhrases: string[][],
   lowSignalTerms: Set<string>,
+  demandKeywords: Set<string>,
   catalogTermDocumentFrequency: Map<string, number>,
   catalogEntryCount: number,
 ): void {
   const keywords = normalizeDemandSignalKeywords(value);
+  for (const keyword of keywords) {
+    demandKeywords.add(keyword);
+  }
   if (keywords.length === 0) {
     return;
   }
@@ -401,6 +416,35 @@ function normalizeDemandSignalKeywords(value: string): string[] {
   );
 }
 
+function addBridgeDemandTerms(
+  demandProfile: DemandProfile,
+  exactHighSignalTerms: Set<string>,
+  demandKeywords: Set<string>,
+): void {
+  if (hasDesignSystemSignals(demandProfile)) {
+    exactHighSignalTerms.add("penpot");
+    demandKeywords.add("penpot");
+  }
+}
+
+function isRejectedBySpecializedDemandGate(
+  entryTerms: Set<string>,
+  demandTerms: DemandRelevanceTerms,
+): boolean {
+  return SPECIALIZED_GATES.some(
+    (gate) =>
+      matchesTermGroupSet(entryTerms, gate.entryTermGroups) &&
+      !matchesTermGroupSet(demandTerms.demandKeywords, gate.demandTermGroups),
+  );
+}
+
+function matchesTermGroupSet(
+  terms: Set<string>,
+  termGroups: string[][],
+): boolean {
+  return termGroups.some((group) => group.every((term) => terms.has(term)));
+}
+
 function isCatalogCommonHighSignal(
   keyword: string,
   catalogTermDocumentFrequency: Map<string, number>,
@@ -438,7 +482,7 @@ function buildCatalogTermData(
 }
 
 function stripPackageEvidencePrefix(value: string): string {
-  return value.replace(PACKAGE_REGISTRY_PREFIX_RE, "");
+  return stripPackageManifestEntryPrefix(value);
 }
 
 function buildEntryTermSet(entry: AssetCatalogEntry): Set<string> {
@@ -459,6 +503,10 @@ function isEntryRelevantToDemand(
 ): boolean {
   if (isExecutableMcpServerEntry(entry)) {
     return true;
+  }
+
+  if (isRejectedBySpecializedDemandGate(entryTerms, demandTerms)) {
+    return false;
   }
 
   for (const demandTerm of demandTerms.exactHighSignalTerms) {

@@ -139,7 +139,33 @@ export function assertWirePlanManifest(
       `${context}.nativeConfigOperations`,
     );
   }
+  if (record.textFileSnapshots !== undefined) {
+    assertTextFileSnapshots(
+      record.textFileSnapshots,
+      `${context}.textFileSnapshots`,
+    );
+  }
   assertStringArray(record.notes, `${context}.notes`);
+}
+
+function assertTextFileSnapshots(value: unknown, context: string): void {
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array`);
+  }
+
+  const seenPaths = new Set<string>();
+
+  value.forEach((entry, index) => {
+    const snapshot = assertRecord(entry, `${context}[${index}]`);
+    const path = assertString(snapshot.path, `${context}[${index}].path`);
+    if (seenPaths.has(path)) {
+      throw new Error(`${context}: duplicate path '${path}'`);
+    }
+    seenPaths.add(path);
+    if (snapshot.content !== null) {
+      assertString(snapshot.content, `${context}[${index}].content`);
+    }
+  });
 }
 
 function assertNativeConfigOperations(value: unknown, context: string): void {

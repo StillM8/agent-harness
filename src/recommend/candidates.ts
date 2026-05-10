@@ -1,3 +1,4 @@
+import { SPECIALIZED_GATES } from "../domains/discovery/demand-helpers.js";
 import { GENERIC_CAPABILITY_TERMS } from "./constants.js";
 import {
   buildCoverageTags,
@@ -30,7 +31,6 @@ const WRAPPER_LIKE_TERMS = new Set([
   "yaml",
   "yml",
 ]);
-
 interface MatchQuality {
   exactStackWeight: number;
   ecosystemWeight: number;
@@ -69,6 +69,13 @@ export function buildCandidateRecommendation(
   );
   const genericToolingTerms = buildGenericToolingTerms(policy);
   const wrapperLikeTerms = buildSearchTerms([...WRAPPER_LIKE_TERMS], policy);
+  const rawKeywordTerms = buildRawKeywordTerms([
+    entry.id,
+    entry.displayName,
+    ...entry.capabilities,
+    entry.install.relativePath ?? "",
+    entry.evidence.filePath ?? "",
+  ]);
   const searchTerms = buildSearchTerms(
     [
       entry.id,
@@ -83,6 +90,17 @@ export function buildCandidateRecommendation(
   );
 
   if (isSuppressedForHost(entry, host, searchTerms, policy)) {
+    return null;
+  }
+  if (
+    isSuppressedBySpecializedDemandGate(entry, rawKeywordTerms, demandContext)
+  ) {
+    return null;
+  }
+  if (isSuppressedForDesignSystemDemand(rawKeywordTerms, demandContext)) {
+    return null;
+  }
+  if (isSuppressedByDependencySelfEcho(entry, demandContext)) {
     return null;
   }
 
@@ -311,7 +329,7 @@ function determineRecommendationBasis(
 
 function computePortfolioFitBonus(matchQuality: MatchQuality): number {
   if (matchQuality.exactStackWeight > 0) {
-    return matchQuality.exactStackWeight * 3 + matchQuality.ecosystemWeight;
+    return matchQuality.exactStackWeight * 5 + matchQuality.ecosystemWeight * 2;
   }
 
   if (matchQuality.ecosystemWeight > 0) {
@@ -323,10 +341,7 @@ function computePortfolioFitBonus(matchQuality: MatchQuality): number {
 
 function computeDemandExactnessBonus(matchQuality: MatchQuality): number {
   if (matchQuality.exactStackWeight > 0) {
-    return (
-      matchQuality.exactStackWeight * 2 +
-      Math.round(matchQuality.ecosystemWeight / 2)
-    );
+    return matchQuality.exactStackWeight * 4 + matchQuality.ecosystemWeight;
   }
 
   return 0;
@@ -448,6 +463,96 @@ function computeFreshnessScore(
   }
 
   return 0;
+}
+
+function isSuppressedBySpecializedDemandGate(
+  entry: AssetCatalogEntry,
+  rawKeywordTerms: Set<string>,
+  demandContext: DemandContext,
+): boolean {
+  if (entry.assetKind === "mcp-server") {
+    return false;
+  }
+
+  return SPECIALIZED_GATES.some(
+    (gate) =>
+      matchesTermGroupSet(rawKeywordTerms, gate.entryTermGroups) &&
+      !matchesTermGroupSetForDemandContext(
+        demandContext,
+        gate.demandTermGroups,
+      ),
+  );
+}
+
+function isSuppressedByDependencySelfEcho(
+  entry: AssetCatalogEntry,
+  demandContext: DemandContext,
+): boolean {
+  return Boolean(
+    entry.source.sourceKind === "package-registry" &&
+    entry.install.manifestEntry &&
+    demandContext.packageManifestEntries.has(
+      normalizePhrase(entry.install.manifestEntry),
+    ),
+  );
+}
+
+function matchesTermGroupSet(
+  terms: Set<string>,
+  termGroups: readonly (readonly string[])[],
+): boolean {
+  return termGroups.some((group) => group.every((term) => terms.has(term)));
+}
+
+function matchesTermGroupSetForDemandContext(
+  demandContext: DemandContext,
+  termGroups: readonly (readonly string[])[],
+): boolean {
+  return termGroups.some((group) =>
+    group.every((term) =>
+      demandContext.demandKeywords.has(normalizePhrase(term)),
+    ),
+  );
+}
+
+function buildRawKeywordTerms(values: string[]): Set<string> {
+  const terms = new Set<string>();
+
+  for (const value of values) {
+    const normalizedPhrase = normalizePhrase(value);
+    if (normalizedPhrase) {
+      terms.add(normalizedPhrase);
+    }
+
+    for (const token of value
+      .toLowerCase()
+      .split(/[^a-z0-9]+/u)
+      .filter((part) => part.length > 1)) {
+      terms.add(normalizePhrase(token));
+    }
+  }
+
+  return terms;
+}
+
+function isSuppressedForDesignSystemDemand(
+  rawKeywordTerms: Set<string>,
+  demandContext: DemandContext,
+): boolean {
+  return (
+    demandContext.demandKeywords.has("penpot") &&
+    isGenericMobileOnlyAsset(rawKeywordTerms)
+  );
+}
+
+function isGenericMobileOnlyAsset(searchTerms: Set<string>): boolean {
+  return (
+    searchTerms.has("mobile") &&
+    (searchTerms.has("android") || searchTerms.has("ios")) &&
+    !searchTerms.has("design") &&
+    !searchTerms.has("design-systems") &&
+    !searchTerms.has("penpot")
+  );
 }
 
 function buildBaseReasons(
