@@ -4,21 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Changed
+No unreleased changes yet.
 
-- source-sync now reruns finite indexed sources from the beginning on completed passes, evicts entries that disappeared upstream after a fresh complete sync, and keeps append-only cursors resumable for feed-style registries
-- install refresh now blocks ambiguous multi-bundle mirror conflicts instead of silently picking the last seen mirror id, and refresh report validation now checks nested fingerprint/native-install payloads
-- guarded HTTP body timeouts now cancel active readers before surfacing timeout failures, demand-context session intent signals still apply when no demand profile is available, `discover breadth` now provides a first-class recall-first discovery command for widening the candidate pool before ranking, and `stage` is now the clearer preferred lifecycle term with `install` retained as a supported alias
-
-### Fixed
-
-- JSONL state reads now tolerate ENOENT races during streaming, rethrow non-ENOENT stream failures correctly, and JSONL writes replace existing destinations reliably on Windows while avoiding repeated chunk byte-length rescans
-- discovery catalog generation now buckets indexed entries by source once, avoids stack-overflowing on very large indexed source populations, trusted-local demand gating no longer lets concern-only phrases reject trusted-local guidance, source-sync avoids pruning indexed entries after transient zero-observation complete runs, and source-utilization fallback coverage matches source kind defaults
-- README and `AGENT-SETUP-PLAYBOOK.md` now consistently mark lifecycle artifact paths as state-root-relative, distinguish state-root lifecycle output from workspace-local host files, and clarify the real lifecycle ordering plus the bounded meaning of the stage/install phase
-- added scenario-specific playbooks for discovery breadth, AI enrichment, asset refresh/update, and recommendation policy tuning so both manual setup and agent-operated setup can follow the same verified workflows, and the workspace pipeline now runs indexed discovery sync before catalog/recommendation so one-shot host flows use the same broadened discovery universe
-- `.env.example` keeps install refresh policy comments adjacent to the policy key, recommendation-report coverage now documents validator defaulting side effects, and install refresh due-only coverage asserts the persisted schedule state is left untouched when a run is skipped
-
-## [1.0.3] - 2026-05-10
+## [1.0.3] - 2026-05-11
 
 ### Added
 
@@ -27,6 +15,7 @@ All notable changes to this project will be documented in this file.
 - checked-in `mattpocock/skills` trusted-community repo coverage in the discovery registry
 - widened generic official/community repo and registry sources to target every supported host instead of legacy minimized host pairs where the assets are portable across adapters
 - recommendation fixture evaluation now records aggregate quality metrics, including top-rank reason mix, top-rank confidence mix, broad-fallback frequency, and local-availability frequency
+- scenario-specific playbooks for discovery breadth, AI enrichment, asset refresh/update, recommendation policy tuning, and dry-run operator setup so both manual setup and agent-operated setup can follow the same verified workflows
 
 ### Changed
 
@@ -34,6 +23,11 @@ All notable changes to this project will be documented in this file.
 - Cursor now writes project-local agent files under `.cursor/agents/agent-harness/` in addition to the staged plugin-compatible bundle
 - README and `HOST-SURFACE-AUDIT.md` now document current host-native synthesis boundaries, direct per-host discovery coverage, and the current CLI surface without migration-era wrapper-binary framing
 - README now documents the layered confidence model, explain-output reason classes, and how to read `recommend evaluate` as a precision-vs-fallback signal instead of only a pass/fail check
+- source-sync now reruns finite indexed sources from the beginning on completed passes, evicts entries that disappeared upstream after a fresh complete sync, and keeps append-only cursors resumable for feed-style registries
+- install refresh now blocks ambiguous multi-bundle mirror conflicts instead of silently picking the last seen mirror id, and refresh report validation now checks nested fingerprint and native-install payloads
+- guarded HTTP body timeouts now cancel active readers before surfacing timeout failures, demand-context session intent signals still apply when no demand profile is available, `discover breadth` now provides a first-class recall-first discovery command for widening the candidate pool before ranking, and `stage` is now the clearer preferred lifecycle term with `install` retained as a supported alias
+- README and `AGENT-SETUP-PLAYBOOK.md` now consistently mark lifecycle artifact paths as state-root-relative, distinguish state-root lifecycle output from workspace-local host files, and clarify the real lifecycle ordering plus the bounded meaning of the stage/install phase
+- the workspace pipeline now runs indexed discovery sync before catalog/recommendation so one-shot host flows use the same broadened discovery universe as explicit breadth audits
 
 ### Fixed
 
@@ -41,6 +35,9 @@ All notable changes to this project will be documented in this file.
 - AI enrichment validators now accept nullable fingerprint hashes for disabled/skipped artifact fingerprints during explicit opt-out and other non-completed flows
 - Zed and Pi native reset cleanup now removes empty managed parent directories instead of leaving empty host metadata folders behind
 - demand discovery now prioritizes root manifests under scan-budget pressure and ignores `.agent`, `.dart_tool`, and `.specify` metadata directories by default so real-workspace detection is less distorted by tool metadata
+- JSONL state reads now tolerate ENOENT races during streaming, rethrow non-ENOENT stream failures correctly, and JSONL writes replace existing destinations reliably on Windows while avoiding repeated chunk byte-length rescans
+- discovery catalog generation now buckets indexed entries by source once, avoids stack-overflowing on very large indexed source populations, trusted-local demand gating no longer lets concern-only phrases reject trusted-local guidance, source-sync avoids pruning indexed entries after transient zero-observation complete runs, and source-utilization fallback coverage matches source kind defaults
+- `.env.example` keeps install refresh policy comments adjacent to the policy key, recommendation-report coverage now documents validator defaulting side effects, and install refresh due-only coverage asserts the persisted schedule state is left untouched when a run is skipped
 
 ## [1.0.2] - 2026-05-08
 
