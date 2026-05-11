@@ -2,6 +2,10 @@ import { join } from "node:path";
 
 import { readJsonFile, writeJsonFile } from "../files.js";
 import { getOptionValue } from "../lib/cli-options.js";
+import {
+  parseSessionIntent,
+  SESSION_INTENT_CHOICES,
+} from "../lib/session-intent.js";
 import { assertRecommendationReport } from "../manifest-validation.js";
 import { buildRecommendationFixtures } from "../recommend-fixtures.js";
 import { EVALUATION_FILE_PATH, REPORT_FILE_PATH } from "./constants.js";
@@ -31,13 +35,16 @@ export async function runRecommend(
   switch (command) {
     case "report": {
       const shouldRunAiReview = rest.includes("--ai-review");
+      const sessionIntent = parseSessionIntent(
+        getOptionValue(rest, "--intent"),
+      );
       const policy = shouldRunAiReview
         ? await loadRecommendationPolicy(projectRoot)
         : undefined;
-      const deterministicReport = await writeRecommendationReport(
-        projectRoot,
+      const deterministicReport = await writeRecommendationReport(projectRoot, {
         policy,
-      );
+        sessionIntent,
+      });
       const report =
         shouldRunAiReview && policy
           ? (
@@ -77,10 +84,13 @@ export async function runRecommend(
     }
     case "ai-review": {
       const policy = await loadRecommendationPolicy(projectRoot);
-      const deterministicReport = await writeRecommendationReport(
-        projectRoot,
-        policy,
+      const sessionIntent = parseSessionIntent(
+        getOptionValue(rest, "--intent"),
       );
+      const deterministicReport = await writeRecommendationReport(projectRoot, {
+        policy,
+        sessionIntent,
+      });
       const result = await runRecommendationAiReview({
         projectRoot,
         policy,
@@ -351,6 +361,9 @@ function printRecommendHelp(): void {
   explain   Explain why an asset ranked for a host
   evaluate  Run golden recommendation fixtures and print quality summary metrics (use --write to persist results)
   policy:print  Print the merged effective policy (--host <host> to scope)
+
+Recommendation options:
+  --intent <${SESSION_INTENT_CHOICES}>
 
 AI review options:
   --host <host>

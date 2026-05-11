@@ -1,5 +1,9 @@
 import { hasDesignSystemSignals } from "../domains/discovery/demand-helpers.js";
 import { extractPackageManifestEntry } from "../lib/package-manifest-entry.js";
+import {
+  getSessionIntentConcernTerms,
+  getSessionIntentKeywords,
+} from "../lib/session-intent.js";
 import type {
   AssetContextCost,
   AssetKind,
@@ -8,6 +12,7 @@ import type {
   RecommendationPolicy,
   RecommendationSignalMatch,
   RecommendationSignalType,
+  SessionIntent,
 } from "../types.js";
 import type { DemandContext, DemandTermContext } from "./model.js";
 
@@ -52,17 +57,8 @@ export function collectMatchedSignals(
 export function buildDemandContext(
   demandProfile: DemandProfile | null,
   policy: RecommendationPolicy,
+  sessionIntent: SessionIntent = "general",
 ): DemandContext {
-  if (!demandProfile) {
-    return {
-      terms: [],
-      hasSignals: false,
-      activeDomainGroups: new Set<string>(),
-      packageManifestEntries: new Set<string>(),
-      demandKeywords: new Set<string>(),
-    };
-  }
-
   const demandTermMap = new Map<string, DemandTermContext>();
 
   const registerTerm = (
@@ -95,19 +91,22 @@ export function buildDemandContext(
     });
   };
 
-  for (const evidence of demandProfile.evidence) {
-    for (const signalType of recommendationSignalTypes()) {
-      for (const rawTerm of evidence.matchedSignals[signalType]) {
-        registerTerm(
-          signalType,
-          rawTerm,
-          evidence.evidenceStrength ?? "medium",
-        );
+  if (demandProfile) {
+    for (const evidence of demandProfile.evidence) {
+      for (const signalType of recommendationSignalTypes()) {
+        for (const rawTerm of evidence.matchedSignals[signalType]) {
+          registerTerm(
+            signalType,
+            rawTerm,
+            evidence.evidenceStrength ?? "medium",
+          );
+        }
       }
     }
-  }
 
-  registerBridgeDemandTerms(demandProfile, registerTerm);
+    registerBridgeDemandTerms(demandProfile, registerTerm);
+  }
+  registerSessionIntentTerms(sessionIntent, registerTerm);
 
   const terms = [...demandTermMap.values()].sort((left, right) =>
     left.key.localeCompare(right.key),
@@ -117,8 +116,10 @@ export function buildDemandContext(
     terms,
     hasSignals: demandTermMap.size > 0,
     activeDomainGroups: buildActiveDomainGroups(terms, policy),
-    packageManifestEntries: buildPackageManifestEntrySet(demandProfile),
-    demandKeywords: buildDemandKeywordSet(demandProfile, policy),
+    packageManifestEntries: demandProfile
+      ? buildPackageManifestEntrySet(demandProfile)
+      : new Set<string>(),
+    demandKeywords: buildDemandKeywordSet(demandProfile, policy, sessionIntent),
   };
 }
 
@@ -165,29 +166,49 @@ function buildPackageManifestEntrySet(
   );
 }
 
+function registerSessionIntentTerms(
+  sessionIntent: SessionIntent,
+  registerTerm: (
+    signalType: RecommendationSignalType,
+    rawTerm: string,
+    evidenceStrength: DemandEvidenceStrength,
+  ) => void,
+): void {
+  for (const concern of getSessionIntentConcernTerms(sessionIntent)) {
+    registerTerm("concerns", concern, "strong");
+  }
+}
+
 function buildDemandKeywordSet(
-  demandProfile: DemandProfile,
+  demandProfile: DemandProfile | null,
   policy: RecommendationPolicy,
+  sessionIntent: SessionIntent,
 ): Set<string> {
   const keywords = new Set<string>();
 
-  for (const signalType of recommendationSignalTypes()) {
-    for (const rawTerm of demandProfile.signals[signalType]) {
-      keywords.add(normalizePhrase(rawTerm));
-      for (const token of rawTerm
-        .toLowerCase()
-        .split(/[^a-z0-9]+/u)
-        .filter((part) => part.length > 1)) {
-        keywords.add(normalizePhrase(token));
+  if (demandProfile) {
+    for (const signalType of recommendationSignalTypes()) {
+      for (const rawTerm of demandProfile.signals[signalType]) {
+        keywords.add(normalizePhrase(rawTerm));
+        for (const token of rawTerm
+          .toLowerCase()
+          .split(/[^a-z0-9]+/u)
+          .filter((part) => part.length > 1)) {
+          keywords.add(normalizePhrase(token));
+        }
+        for (const matchTerm of buildSearchTerms([rawTerm], policy)) {
+          keywords.add(matchTerm);
+        }
       }
-      for (const matchTerm of buildSearchTerms([rawTerm], policy)) {
-        keywords.add(matchTerm);
-      }
+    }
+
+    if (hasDesignSystemSignals(demandProfile)) {
+      keywords.add("penpot");
     }
   }
 
-  if (hasDesignSystemSignals(demandProfile)) {
-    keywords.add("penpot");
+  for (const keyword of getSessionIntentKeywords(sessionIntent)) {
+    keywords.add(keyword);
   }
 
   return keywords;

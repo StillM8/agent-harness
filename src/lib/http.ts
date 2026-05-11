@@ -111,6 +111,7 @@ export async function fetchTextWithGuards(
     return await readResponseTextWithLimit(
       response,
       options.maxBytes ?? httpConfig.maxResponseBytes,
+      options.timeoutMs ?? httpConfig.timeoutMs,
     );
   } catch {
     return null;
@@ -148,6 +149,7 @@ export async function fetchBytesWithGuards(
     return await readResponseBytesWithLimit(
       response,
       options.maxBytes ?? httpConfig.maxResponseBytes,
+      options.timeoutMs ?? httpConfig.timeoutMs,
     );
   } catch {
     return null;
@@ -600,8 +602,9 @@ function isPrivateIpv6Address(hostname: string): boolean {
 export async function readResponseTextWithLimit(
   response: Response,
   maxBytes: number,
+  timeoutMs = getRuntimeConfig().http.timeoutMs,
 ): Promise<string> {
-  const bytes = await readResponseBytesWithLimit(response, maxBytes);
+  const bytes = await readResponseBytesWithLimit(response, maxBytes, timeoutMs);
   return new TextDecoder().decode(bytes);
 }
 
@@ -611,6 +614,7 @@ export async function readResponseTextWithLimit(
 export async function readResponseBytesWithLimit(
   response: Response,
   maxBytes: number,
+  timeoutMs = getRuntimeConfig().http.timeoutMs,
 ): Promise<Buffer> {
   const contentLength = response.headers.get("content-length");
   if (contentLength) {
@@ -627,7 +631,11 @@ export async function readResponseBytesWithLimit(
   }
 
   if (!response.body) {
-    const bytes = Buffer.from(await response.arrayBuffer());
+    const bytes = Buffer.from(
+      await withBodyReadTimeout(response.arrayBuffer(), timeoutMs, () =>
+        response.body?.cancel(),
+      ),
+    );
     ensureBytesWithinLimit(bytes.byteLength, maxBytes);
     return bytes;
   }
@@ -636,26 +644,80 @@ export async function readResponseBytesWithLimit(
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
+  try {
+    while (true) {
+      const { done, value } = await withBodyReadTimeout(
+        reader.read(),
+        timeoutMs,
+        () => reader.cancel(),
+      );
+      if (done) {
+        break;
+      }
 
-    if (!value) {
-      continue;
-    }
+      if (!value) {
+        continue;
+      }
 
-    totalBytes += value.byteLength;
-    if (totalBytes > maxBytes) {
-      await reader.cancel();
-      ensureBytesWithinLimit(totalBytes, maxBytes);
-    }
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel();
+        ensureBytesWithinLimit(totalBytes, maxBytes);
+      }
 
-    chunks.push(value);
+      chunks.push(value);
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   }
 
   return Buffer.from(concatenateChunks(chunks, totalBytes));
+}
+
+async function withBodyReadTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  cleanup?: () => Promise<void> | void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      void Promise.resolve(cleanup?.())
+        .catch(() => undefined)
+        .then(() => {
+          reject(
+            new Error(
+              `Timed out while reading response body after ${timeoutMs}ms.`,
+            ),
+          );
+        });
+    }, timeoutMs);
+
+    operation.then(
+      (value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function ensureBytesWithinLimit(bytes: number, maxBytes: number): void {

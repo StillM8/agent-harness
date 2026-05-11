@@ -7,9 +7,11 @@ import test from "node:test";
 import {
   createDirectoryLink,
   ensureDirectory,
+  readJsonLinesFile,
   readTextFileOrNull,
   removeManagedSection,
   upsertManagedSection,
+  writeJsonLinesFile,
   writeTextFile,
 } from "../files.js";
 
@@ -61,4 +63,60 @@ void test("managed section round-trips for appended markdown", () => {
     }),
     `${originalContent}\n`,
   );
+});
+
+void test("writeJsonLinesFile writes large jsonl sets without losing records", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-files-test-"));
+
+  try {
+    const filePath = join(root, "large.jsonl");
+    const values = Array.from({ length: 4000 }, (_, index) => ({
+      id: `asset-${index}`,
+      payload: "x".repeat(512),
+    }));
+
+    await writeJsonLinesFile(filePath, values);
+    const roundTripped = await readJsonLinesFile<{
+      id: string;
+      payload: string;
+    }>(filePath);
+
+    assert.equal(roundTripped.length, values.length);
+    assert.deepEqual(roundTripped[0], values[0]);
+    assert.deepEqual(roundTripped.at(-1), values.at(-1));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+void test("writeJsonLinesFile replaces an existing destination file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-files-test-"));
+
+  try {
+    const filePath = join(root, "state.jsonl");
+
+    await writeJsonLinesFile(filePath, [{ id: "first" }]);
+    await writeJsonLinesFile(filePath, [{ id: "second" }]);
+
+    const roundTripped = await readJsonLinesFile<{ id: string }>(filePath);
+    assert.deepEqual(roundTripped, [{ id: "second" }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+void test("readJsonLinesFile rethrows non-ENOENT stream errors", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-files-test-"));
+
+  try {
+    const filePath = join(root, "directory-as-jsonl");
+    await ensureDirectory(filePath);
+
+    await assert.rejects(readJsonLinesFile(filePath), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      return /EISDIR|EPERM|EACCES/u.test(error.message);
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

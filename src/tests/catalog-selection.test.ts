@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { filterCatalogEntriesByDemandRelevance } from "../domains/discovery/catalog-selection.js";
+import { interactnoteFullDemandProfile } from "./fixtures/interactnote-full-demand-profile.js";
 import type { AssetCatalogEntry, DemandProfile } from "../types.js";
 
 void test("selection relevance rejects specialized domains on broad generic signals", () => {
@@ -77,6 +78,202 @@ void test("selection relevance bridges design-system demand into penpot recall",
   assert.ok(selectedEntries.some((entry) => entry.id === "penpot-skill"));
 });
 
+void test("selection relevance rejects unrelated trusted-local guidance when meaningful stack anchors exist", () => {
+  const demandProfile = createDemandProfile({
+    languages: ["dart", "swift"],
+    packageManagers: ["pub"],
+    frameworks: ["flutter"],
+    concerns: ["frontend", "mobile", "testing", "integration"],
+    tooling: ["flutter", "xcode", "pub"],
+  });
+  const unrelatedLocalSkill = createEntry(
+    "api-endpoint-builder",
+    ["api", "backend", "integration", "testing", "automation"],
+    {
+      authorityTier: "trusted-local",
+      sourceKind: "local-directory",
+    },
+  );
+  const flutterLocalSkill = createEntry(
+    "flutter-architecting-apps",
+    ["flutter", "dart", "mobile", "frontend", "testing"],
+    {
+      authorityTier: "trusted-local",
+      sourceKind: "local-directory",
+    },
+  );
+
+  const { selectedEntries, rejectedEntries } =
+    filterCatalogEntriesByDemandRelevance(
+      [unrelatedLocalSkill, flutterLocalSkill],
+      demandProfile,
+    );
+
+  assert.deepEqual(
+    selectedEntries.map((entry) => entry.id),
+    ["flutter-architecting-apps"],
+  );
+  assert.deepEqual(
+    rejectedEntries.map((entry) => entry.id),
+    ["api-endpoint-builder"],
+  );
+});
+
+void test("selection relevance ignores concern-only phrases when trusted-local stack anchors are absent", () => {
+  const demandProfile = createDemandProfile({
+    languages: [],
+    packageManagers: [],
+    frameworks: [],
+    concerns: ["docs", "research", "testing"],
+    tooling: [],
+  });
+  const localSkill = createEntry(
+    "docs-research-skill",
+    ["docs", "research", "testing", "analysis"],
+    {
+      authorityTier: "trusted-local",
+      sourceKind: "local-directory",
+    },
+  );
+
+  const { selectedEntries, rejectedEntries } =
+    filterCatalogEntriesByDemandRelevance([localSkill], demandProfile);
+
+  assert.deepEqual(
+    selectedEntries.map((entry) => entry.id),
+    ["docs-research-skill"],
+  );
+  assert.deepEqual(
+    rejectedEntries.map((entry) => entry.id),
+    [],
+  );
+});
+
+void test("selection relevance ignores windows path noise for trusted-local stack alignment", () => {
+  const demandProfile = interactnoteFullDemandProfile;
+  const localSkill = createEntry(
+    "codebase-audit-pre-push",
+    ["audit", "security", "documentation", "testing", "research"],
+    {
+      authorityTier: "trusted-local",
+      sourceKind: "local-directory",
+    },
+    {
+      filePath:
+        "C:/Users/ar271/.agents/skills/codebase-audit-pre-push/SKILL.md",
+    },
+  );
+
+  const { selectedEntries, rejectedEntries } =
+    filterCatalogEntriesByDemandRelevance([localSkill], demandProfile);
+
+  assert.deepEqual(
+    selectedEntries.map((entry) => entry.id),
+    [],
+  );
+  assert.deepEqual(
+    rejectedEntries.map((entry) => entry.id),
+    ["codebase-audit-pre-push"],
+  );
+});
+
+void test("selection relevance rejects generic trusted-local skills for a real Flutter workspace demand profile", () => {
+  const entries = [
+    createEntry(
+      "api-endpoint-builder",
+      ["api", "backend", "integration", "testing", "automation"],
+      {
+        authorityTier: "trusted-local",
+        sourceKind: "local-directory",
+      },
+    ),
+    createEntry(
+      "bug-hunter",
+      ["debugging", "testing", "research", "logging", "security"],
+      {
+        authorityTier: "trusted-local",
+        sourceKind: "local-directory",
+      },
+    ),
+    createEntry(
+      "codebase-audit-pre-push",
+      ["audit", "security", "documentation", "testing", "research"],
+      {
+        authorityTier: "trusted-local",
+        sourceKind: "local-directory",
+      },
+    ),
+    createEntry(
+      "audit-skills",
+      ["security", "audit", "static", "analysis", "mobile", "android", "ios"],
+      {
+        authorityTier: "trusted-local",
+        sourceKind: "local-directory",
+      },
+    ),
+    createEntry(
+      "ui-component",
+      ["ui", "frontend", "components", "design-systems", "accessibility"],
+      {
+        authorityTier: "trusted-local",
+        sourceKind: "local-directory",
+      },
+    ),
+    createEntry(
+      "ux-feedback",
+      ["ux", "frontend", "research", "design-assets", "writing"],
+      {
+        authorityTier: "trusted-local",
+        sourceKind: "local-directory",
+      },
+    ),
+    createEntry(
+      "flutter-architecting-apps",
+      ["flutter", "dart", "mobile", "frontend", "ios"],
+      {
+        authorityTier: "trusted-local",
+        sourceKind: "local-directory",
+      },
+    ),
+    createEntry(
+      "flutter-building-layouts",
+      ["flutter", "dart", "layouts", "ui", "mobile"],
+      {
+        authorityTier: "trusted-local",
+        sourceKind: "local-directory",
+      },
+    ),
+    createEntry(
+      "flutter-testing-apps",
+      ["flutter", "dart", "testing", "mobile", "ios"],
+      {
+        authorityTier: "trusted-local",
+        sourceKind: "local-directory",
+      },
+    ),
+  ];
+
+  const { selectedEntries, rejectedEntries } =
+    filterCatalogEntriesByDemandRelevance(
+      entries,
+      interactnoteFullDemandProfile,
+    );
+
+  assert.deepEqual(selectedEntries.map((entry) => entry.id).sort(), [
+    "flutter-architecting-apps",
+    "flutter-building-layouts",
+    "flutter-testing-apps",
+  ]);
+  assert.deepEqual(rejectedEntries.map((entry) => entry.id).sort(), [
+    "api-endpoint-builder",
+    "audit-skills",
+    "bug-hunter",
+    "codebase-audit-pre-push",
+    "ui-component",
+    "ux-feedback",
+  ]);
+});
+
 function createDemandProfile(
   overrides: Partial<DemandProfile["signals"]>,
 ): DemandProfile {
@@ -112,7 +309,12 @@ function createDemandProfile(
   };
 }
 
-function createEntry(id: string, capabilities: string[]): AssetCatalogEntry {
+function createEntry(
+  id: string,
+  capabilities: string[],
+  overrides: Partial<AssetCatalogEntry["source"]> = {},
+  evidenceOverrides: Partial<AssetCatalogEntry["evidence"]> = {},
+): AssetCatalogEntry {
   return {
     id,
     displayName: id,
@@ -127,6 +329,7 @@ function createEntry(id: string, capabilities: string[]): AssetCatalogEntry {
       originUrl: `https://example.com/${id}`,
       publisher: "fixture-source",
       publisherVerified: false,
+      ...overrides,
     },
     trust: {
       score: 80,
@@ -143,6 +346,7 @@ function createEntry(id: string, capabilities: string[]): AssetCatalogEntry {
       examplesFound: false,
       docsLinked: true,
       filePath: `${id}.md`,
+      ...evidenceOverrides,
     },
     maintenance: {
       lastUpdated: new Date().toISOString(),

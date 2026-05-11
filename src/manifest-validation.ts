@@ -12,6 +12,8 @@ export {
 export {
   assertInstallGenerationManifest,
   assertInstallProgressState,
+  assertInstallRefreshReport,
+  assertInstallRefreshState,
   assertInstalledBundleManifest,
   assertInstalledPackageManifest,
 } from "./manifest-validation/install.js";
