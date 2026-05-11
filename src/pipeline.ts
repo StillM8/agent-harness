@@ -20,8 +20,9 @@ const MIRROR_ACQUIRE_STATE_PATH = ["state", "mirror", "acquire-state.json"];
 const INSTALL_PROGRESS_STATE_PATH = ["state", "install", "progress.json"];
 
 /**
- * Runs discover, mirror, install, activation, and shared activation phases for
- * a workspace before the selected adapter performs final wire-in.
+ * Runs discover, recommendation, mirror, stage/install, activation, and shared
+ * activation phases for a workspace before the selected adapter performs final
+ * wire-in.
  */
 export async function runWorkspacePipeline(options: {
   projectRoot: string;
@@ -44,6 +45,8 @@ export async function runWorkspacePipeline(options: {
   const installBatchSize = String(config.batches.installBundle);
 
   await runDiscover(["demand-profile"], workspaceRoot, projectRoot);
+  await runDiscover(["sources"], workspaceRoot, projectRoot);
+  await runDiscover(["sync"], workspaceRoot, projectRoot);
   await runDiscover(["sources"], workspaceRoot, projectRoot);
   await runDiscover(["catalog"], workspaceRoot, projectRoot);
   await runDiscover(["select"], workspaceRoot, projectRoot);

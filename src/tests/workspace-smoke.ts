@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { clearRuntimeConfig } from "../config/runtime.js";
 import {
+  pathExists,
   readJsonFileOrNull,
   readJsonLinesFile,
   writeJsonFile,
@@ -106,6 +107,14 @@ try {
       throw new Error(`Unknown workspace smoke host: ${host}`);
     }
 
+    const sourceSyncReportPath = join(
+      stateRoot,
+      "discover",
+      "output",
+      "source-sync.json",
+    );
+    await removePath(sourceSyncReportPath);
+
     await runWorkspacePipeline({
       projectRoot: stateRoot,
       workspaceRoot,
@@ -114,6 +123,10 @@ try {
       sessionIntent: "testing",
       bundleIds: adapter.defaultBundleIds,
     });
+
+    if (!(await pathExists(sourceSyncReportPath))) {
+      throw new Error(`[${host}] source-sync report missing after pipeline`);
+    }
 
     // Assert mirror acquire state consistency
     const acquireState = await readJsonFileOrNull<MirrorAcquireState>(
