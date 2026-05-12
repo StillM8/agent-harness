@@ -32,6 +32,14 @@ void test("wire mode parsing honors explicit apply and defaults to preview", () 
   );
 });
 
+void test("repeatable CLI option parsing collects multi-intent values", () => {
+  assert.deepEqual(
+    getOptionValues(["--intent", "backend", "--intent", "docs"], "--intent"),
+    ["backend", "docs"],
+  );
+  assert.deepEqual(getOptionValues([], "--intent"), []);
+});
+
 void test("single-value CLI option parsing rejects duplicates", () => {
   assert.equal(
     getSingleOptionValue(["--intent", "frontend"], "--intent"),

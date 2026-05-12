@@ -3,7 +3,7 @@
 import { fileURLToPath } from "node:url";
 
 import { resolveProjectRoot } from "./files.js";
-import { getSingleOptionValue } from "./lib/cli-options.js";
+import { getOptionValues } from "./lib/cli-options.js";
 import {
   parseSessionIntent,
   SESSION_INTENT_CHOICES,
@@ -35,9 +35,13 @@ export async function runWorkspace(
   projectRoot: string,
 ): Promise<number> {
   const [target = "help", ...rest] = args;
-  const sessionIntent = parseSessionIntent(
-    getSingleOptionValue(rest, "--intent"),
+  const sessionIntents = getOptionValues(rest, "--intent").map((v) =>
+    parseSessionIntent(v),
   );
+  const sessionIntent =
+    sessionIntents.length > 0
+      ? sessionIntents[0]
+      : parseSessionIntent(undefined);
   const aiEnrichmentFlags = parseAiEnrichmentFlags(rest);
 
   if (target === "help") {
@@ -50,6 +54,10 @@ export async function runWorkspace(
     printWorkspaceHelp();
     return 1;
   }
+
+  console.log(
+    `[workspace ${getPreferredHostCommand(hostAdapter.id)}] Starting ${hostAdapter.displayName} workspace pipeline...`,
+  );
 
   const requiresLifecycleHostPaths =
     hostAdapter.requiresLifecycleHostPaths ?? hostAdapter.mutatesHostPaths;
@@ -70,6 +78,7 @@ export async function runWorkspace(
     targetHost: hostAdapter.lifecycleHost,
     recommendationHost: hostAdapter.recommendationHost,
     sessionIntent,
+    sessionIntents: sessionIntents.length > 1 ? sessionIntents : undefined,
     bundleIds: hostAdapter.defaultBundleIds,
   });
 
@@ -84,11 +93,18 @@ export async function runWorkspace(
   }
   assertNoPreflightErrors(prerequisiteDiagnostics);
 
+  console.log(
+    `[workspace ${getPreferredHostCommand(hostAdapter.id)}] Applying final host wire-in...`,
+  );
   await hostAdapter.wire({
     projectRoot,
     workspaceRoot: workingDirectory,
     mode: "apply",
   });
+
+  console.log(
+    `[workspace ${getPreferredHostCommand(hostAdapter.id)}] Final wire-in complete.`,
+  );
 
   return handleAiEnrichmentResult(
     await orchestrateAiEnrichment(projectRoot, {
@@ -112,7 +128,7 @@ function printWorkspaceHelp(): void {
 ${commands}
 
 Options:
-  --intent <${SESSION_INTENT_CHOICES}>   Exactly one intent per run
+  --intent <${SESSION_INTENT_CHOICES}>   Repeatable; multiple intents are merged additively
   --ai-enrich            Explicitly request enrichment after workspace wiring
   --no-ai-enrich         Explicitly skip enrichment for this workspace run
   --force                Bypass cache reuse and automatic policy skips, forcing a new provider call when enrichment runs

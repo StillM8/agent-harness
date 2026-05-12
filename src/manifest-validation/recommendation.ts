@@ -47,6 +47,27 @@ export function assertRecommendationReport(
   } else {
     record.sessionIntent = "general";
   }
+  if (Object.prototype.hasOwnProperty.call(record, "sessionIntents")) {
+    const sessionIntents = assertArray(
+      record.sessionIntents,
+      `${context}.sessionIntents`,
+    );
+    if (sessionIntents.length <= 1) {
+      fail(
+        `${context}.sessionIntents`,
+        "must contain at least two intents when present",
+      );
+    }
+    sessionIntents.forEach((v, i) => {
+      assertLiteral(v, [...SESSION_INTENTS], `${context}.sessionIntents[${i}]`);
+    });
+    if (sessionIntents[0] !== record.sessionIntent) {
+      fail(
+        `${context}.sessionIntents[0]`,
+        "must match sessionIntent when sessionIntents is present",
+      );
+    }
+  }
   const topByHost = assertRecord(record.topByHost, `${context}.topByHost`);
 
   for (const expectedHost of HOST_TARGETS) {
