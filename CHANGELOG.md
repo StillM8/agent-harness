@@ -4,9 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+## [1.0.4] - 2026-05-12
+
 ### Added
 
 - `--intent` now accepts repeated values to combine multiple session intents additively in a single run (e.g. `--intent backend --intent docs`); the first intent is recorded as the primary for backward compatibility; single-intent runs are unaffected
+- long-running discovery and workspace flows now print visible phase and batch progress so `discover demand-profile`, `discover sources`, `discover sync`, `discover catalog`, `discover select`, `discover full`, `discover breadth`, and workspace mirror/install orchestration expose live progress instead of appearing stalled
 
 ### Fixed
 
