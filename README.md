@@ -22,8 +22,11 @@ It is built around one generic command surface and a host-adapter model. The lif
 - [Usage examples](#usage-examples)
 - [Agent setup playbook](./AGENT-SETUP-PLAYBOOK.md)
 - [Discovery breadth playbook](./DISCOVERY-BREADTH-PLAYBOOK.md)
+- [Demand detection playbook](./DEMAND-DETECTION-PLAYBOOK.md)
+- [Source coverage playbook](./SOURCE-COVERAGE-PLAYBOOK.md)
 - [AI enrichment playbook](./AI-ENRICHMENT-PLAYBOOK.md)
 - [Asset update playbook](./ASSET-UPDATE-PLAYBOOK.md)
+- [Logging strategy](./LOGGING-STRATEGY.md)
 - [Recommendation policy playbook](./RECOMMENDATION-POLICY-PLAYBOOK.md)
 - [Command reference](#command-reference)
 - [Host wire-in details](#host-wire-in-details)
@@ -221,6 +224,8 @@ Available playbooks:
 
 - [`AGENT-SETUP-PLAYBOOK.md`](./AGENT-SETUP-PLAYBOOK.md) - dry-run setup workflow, decision tree, and reusable agent prompts for workspace/host asset setup
 - [`DISCOVERY-BREADTH-PLAYBOOK.md`](./DISCOVERY-BREADTH-PLAYBOOK.md) - maximize the practical candidate pool before judging recommendation quality
+- [`DEMAND-DETECTION-PLAYBOOK.md`](./DEMAND-DETECTION-PLAYBOOK.md) - debug false negatives, false positives, and weak evidence in `discover/output/demand-profile.json`
+- [`SOURCE-COVERAGE-PLAYBOOK.md`](./SOURCE-COVERAGE-PLAYBOOK.md) - widen discovery sources cleanly when the workspace is understood but the source universe is too narrow
 - [`AI-ENRICHMENT-PLAYBOOK.md`](./AI-ENRICHMENT-PLAYBOOK.md) - choose enrichment modes, bounded AI review, and operator workflows
 - [`ASSET-UPDATE-PLAYBOOK.md`](./ASSET-UPDATE-PLAYBOOK.md) - refresh staged assets safely with report-only, due-only, and apply-safe flows
 - [`RECOMMENDATION-POLICY-PLAYBOOK.md`](./RECOMMENDATION-POLICY-PLAYBOOK.md) - inspect and tune ranking only after recall looks healthy
@@ -234,7 +239,7 @@ Short version:
 - separate staged/wired assets from native installs and manual runtime follow-up
 - only run mutating install/apply commands after the dry run looks correct
 
-If your main question is "how do I give recommendations the widest sensible candidate pool first?", use [`DISCOVERY-BREADTH-PLAYBOOK.md`](./DISCOVERY-BREADTH-PLAYBOOK.md) before changing recommendation policy.
+If your main question is "how do I give recommendations the widest sensible candidate pool first?", use [`DISCOVERY-BREADTH-PLAYBOOK.md`](./DISCOVERY-BREADTH-PLAYBOOK.md) before changing recommendation policy. If breadth looks wrong because stack detection is weak, continue with [`DEMAND-DETECTION-PLAYBOOK.md`](./DEMAND-DETECTION-PLAYBOOK.md); if the stack looks right but the discovery universe is still too small, continue with [`SOURCE-COVERAGE-PLAYBOOK.md`](./SOURCE-COVERAGE-PLAYBOOK.md).
 
 ### Apply and reset one host
 
@@ -1033,10 +1038,17 @@ Recommendation policy is split across smaller JSON files:
 - `discover/recommendation-policy/hosts/zed.json`
 - `discover/recommendation-policy/hosts/claude-code.json`
 - `discover/recommendation-policy/hosts/pi.json`
+- `discover/recommendation-policy/overrides/base.json`
+- `discover/recommendation-policy/overrides/hosts/<host>.json`
 - `discover/schema/recommendation-policy-base.schema.json`
+- `discover/schema/recommendation-policy-base-override.schema.json`
 - `discover/schema/recommendation-host-policy-override.schema.json`
 
-`base.json` holds global scoring, keyword maps, optional host defaults, and reusable presets. Each host file holds host-specific overrides. At runtime the loader composes these files into the effective recommendation policy.
+`base.json` holds global scoring, keyword maps, optional host defaults, and reusable presets. Each host file holds host-specific defaults. Put durable workspace/user customization in `discover/recommendation-policy/overrides/` rather than editing package-owned defaults. At runtime the loader composes recommendation policy in this order:
+
+1. checked-in/package defaults
+2. user-owned override files
+3. runtime env overrides
 
 `discover select` first applies workspace-demand relevance filtering, then canonical duplicate selection. Entries with no language, framework, concern, tooling, or executable MCP overlap are rejected before recommendation so unrelated source packs do not dominate real-world reports.
 
@@ -1185,15 +1197,22 @@ AGENT_HARNESS_NPM_MCP_SEARCH_QUERY_LIMIT=8
 
 ```bash
 AGENT_HARNESS_SHARED_RECOMMENDATION_LIMIT=12
+AGENT_HARNESS_SHARED_RECOMMENDATION_LIMIT_MODE=preserve
 AGENT_HARNESS_COPILOT_VSCODE_RECOMMENDATION_LIMIT=240
+AGENT_HARNESS_COPILOT_VSCODE_RECOMMENDATION_LIMIT_MODE=preserve
 AGENT_HARNESS_OPENCODE_RECOMMENDATION_LIMIT=80
+AGENT_HARNESS_OPENCODE_RECOMMENDATION_LIMIT_MODE=preserve
 AGENT_HARNESS_CURSOR_RECOMMENDATION_LIMIT=240
+AGENT_HARNESS_CURSOR_RECOMMENDATION_LIMIT_MODE=preserve
 AGENT_HARNESS_ZED_RECOMMENDATION_LIMIT=80
+AGENT_HARNESS_ZED_RECOMMENDATION_LIMIT_MODE=preserve
 AGENT_HARNESS_CLAUDE_CODE_RECOMMENDATION_LIMIT=80
+AGENT_HARNESS_CLAUDE_CODE_RECOMMENDATION_LIMIT_MODE=preserve
 AGENT_HARNESS_PI_RECOMMENDATION_LIMIT=80
+AGENT_HARNESS_PI_RECOMMENDATION_LIMIT_MODE=preserve
 ```
 
-These env vars override the checked-in host policy recommendation caps at runtime. Generated recommendation reports record whether the effective limit came from policy or an env override.
+These env vars override the checked-in host policy recommendation caps at runtime. `*_RECOMMENDATION_LIMIT_MODE=preserve` keeps the current default behavior and changes only the total `recommendationLimit`. Set the mode to `scale` when you explicitly want `maxPerAssetKind`, target minimums, and related host-selection caps to scale with the overridden limit. Generated recommendation reports and `recommend policy:print --host <host>` both record whether the effective limit and mode came from policy or env overrides.
 
 ### Mirror safety limits
 
@@ -1370,8 +1389,11 @@ Before pushing changes, run at least:
 ```bash
 npm run validate
 npm run build
-npm test
+npm run test:coverage
+npm run test:self-hosting
 ```
+
+Coverage is enforced through `npm run test:coverage` using the checked-in `.c8rc.json` policy. The current gate targets the main shipped runtime surface while excluding generated types, test harness artifacts, and selected built command-entry outputs listed in `.c8rc.json`; it fails CI if statements/lines drop below 71%, branches below 75%, or functions below 74%.
 
 For release or adapter changes, also run:
 
@@ -1391,7 +1413,9 @@ For release readiness, run:
 npm run validate:release
 ```
 
-The CI quality workflow runs on Ubuntu, macOS, and Windows. It validates linting, formatting, types, tests, scan budgets, detection quality, policy coverage, isolated CLI smoke checks, packed artifact smoke checks, and recommendation fixtures. The release workflow additionally runs production dependency audit and npm publish dry-run checks before tagged publication.
+The CI quality workflow runs on Ubuntu, macOS, and Windows. It validates linting, formatting, types, coverage-gated unit/integration tests, the dedicated self-hosting suite, scan budgets, detection quality, policy coverage, isolated CLI smoke checks, packed artifact smoke checks, and recommendation fixtures. It also publishes a coverage summary into the GitHub Actions step summary for each run. The release workflow additionally runs production dependency audit and npm publish dry-run checks before tagged publication.
+
+For output/logging conventions and the current decision to prefer lightweight internal helpers over a full logging library, see [`LOGGING-STRATEGY.md`](./LOGGING-STRATEGY.md).
 
 ## Troubleshooting
 
@@ -1555,6 +1579,7 @@ Known boundaries:
 - `DISCOVERY-BREADTH-PLAYBOOK.md` - how to maximize the practical candidate pool before judging recommendation quality
 - `AI-ENRICHMENT-PLAYBOOK.md` - scenario-based guidance for enrichment modes, bounded AI review, and operator workflows
 - `ASSET-UPDATE-PLAYBOOK.md` - report-only, due-only, and apply-safe refresh/update workflows for installed assets
+- `LOGGING-STRATEGY.md` - current decision and guardrails for CLI output/logging vs a full logging library
 - `RECOMMENDATION-POLICY-PLAYBOOK.md` - how to inspect and tweak ranking policy only after recall looks healthy
 - `HOST-SURFACE-AUDIT.md` - checked-in matrix mapping host-facing paths/settings to documented, compatibility, harness-managed, or implementation-detail status
 - `SECURITY.md` - vulnerability reporting and supported-version policy

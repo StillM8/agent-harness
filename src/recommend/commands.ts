@@ -1,6 +1,8 @@
 import { join } from "node:path";
 
+import { getRuntimeConfig } from "../config/runtime.js";
 import { readJsonFile, writeJsonFile } from "../files.js";
+import { printCommandHelp } from "../lib/cli-output.js";
 import { getOptionValue, getOptionValues } from "../lib/cli-options.js";
 import {
   parseSessionIntent,
@@ -272,13 +274,34 @@ async function printRecommendationPolicy(
     );
   }
 
+  const recommendationRuntime = getRuntimeConfig().recommendation;
+  const limitOverride = recommendationRuntime.limitOverrides[resolvedHost];
+  const modeOverride = recommendationRuntime.limitOverrideModes[resolvedHost];
+  const hostPolicy = policy.hosts[resolvedHost];
+
   console.log(
     JSON.stringify(
       {
         schemaVersion: policy.schemaVersion,
         host: formatRecommendationHostForDisplay(resolvedHost),
         scoring: policy.scoring,
-        hostPolicy: policy.hosts[resolvedHost],
+        hostPolicy,
+        runtimeOverrides: {
+          recommendationLimitSource: limitOverride ? "env" : "policy",
+          recommendationLimitEnvVar: limitOverride?.envVar,
+          recommendationLimitOverrideMode:
+            hostPolicy.recommendationLimitOverrideMode ?? "preserve",
+          recommendationLimitOverrideModeSource: modeOverride
+            ? "env"
+            : "policy",
+          recommendationLimitOverrideModeEnvVar: modeOverride?.envVar,
+          scalingApplied:
+            (hostPolicy.recommendationLimitScaledFields?.length ?? 0) > 0,
+          recommendationLimitScaleFactor:
+            hostPolicy.recommendationLimitScaleFactor,
+          recommendationLimitScaledFields:
+            hostPolicy.recommendationLimitScaledFields,
+        },
         concernKeywordMap: policy.concernKeywordMap,
         taskModeKeywordMap: policy.taskModeKeywordMap,
         domainKeywordGroups: policy.domainKeywordGroups,
@@ -374,19 +397,50 @@ function formatScoreBreakdown(breakdown: RecommendationScoreBreakdown): string {
 }
 
 function printRecommendHelp(): void {
-  console.log(`recommend commands:
-  report    Recompute the recommendation report using the external policy (default)
-  ai-review Run bounded recommendation-native AI review (--apply to rewrite report)
-  explain   Explain why an asset ranked for a host
-  evaluate  Run golden recommendation fixtures and print quality summary metrics (use --write to persist results)
-  policy:print  Print the merged effective policy (--host <host> to scope)
-
-Recommendation options:
-  --intent <${SESSION_INTENT_CHOICES}>   Repeatable; multiple intents are merged additively
-
-AI review options:
-  --host <${getRecommendationHostChoices().join("|")}>
-  --review-limit <n>
-  --apply
-  --ai-review (for recommend report)`);
+  printCommandHelp({
+    heading: "recommend commands:",
+    entries: [
+      {
+        command: "report",
+        description:
+          "Recompute the recommendation report using the external policy (default)",
+      },
+      {
+        command: "ai-review",
+        description:
+          "Run bounded recommendation-native AI review (--apply to rewrite report)",
+      },
+      {
+        command: "explain",
+        description: "Explain why an asset ranked for a host",
+      },
+      {
+        command: "evaluate",
+        description:
+          "Run golden recommendation fixtures and print quality summary metrics (use --write to persist results)",
+      },
+      {
+        command: "policy:print",
+        description:
+          "Print the merged effective policy (--host <host> to scope)",
+      },
+    ],
+    sections: [
+      {
+        title: "Recommendation options:",
+        lines: [
+          `--intent <${SESSION_INTENT_CHOICES}> Repeatable; multiple intents are merged additively`,
+        ],
+      },
+      {
+        title: "AI review options:",
+        lines: [
+          `--host <${getRecommendationHostChoices().join("|")}>`,
+          "--review-limit <n>",
+          "--apply",
+          "--ai-review (for recommend report)",
+        ],
+      },
+    ],
+  });
 }

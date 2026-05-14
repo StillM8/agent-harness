@@ -3,6 +3,7 @@ import type {
   RecommendationHostPolicyOverride,
   RecommendationPolicy,
   RecommendationPolicyBase,
+  RecommendationPolicyBaseOverride,
   RecommendationReport,
 } from "../types.js";
 import {
@@ -226,6 +227,49 @@ export function assertRecommendationReport(
       `${context}.hostSummaries.${host}.recommendationLimitEnvVar`,
       false,
     );
+    if (
+      Object.prototype.hasOwnProperty.call(
+        summaryRecord,
+        "recommendationLimitOverrideMode",
+      )
+    ) {
+      assertLiteral(
+        summaryRecord.recommendationLimitOverrideMode,
+        ["preserve", "scale"],
+        `${context}.hostSummaries.${host}.recommendationLimitOverrideMode`,
+      );
+    } else {
+      summaryRecord.recommendationLimitOverrideMode = "preserve";
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(
+        summaryRecord,
+        "recommendationLimitOverrideModeSource",
+      )
+    ) {
+      assertLiteral(
+        summaryRecord.recommendationLimitOverrideModeSource,
+        ["policy", "env"],
+        `${context}.hostSummaries.${host}.recommendationLimitOverrideModeSource`,
+      );
+    } else {
+      summaryRecord.recommendationLimitOverrideModeSource = "policy";
+    }
+    assertMaybeString(
+      summaryRecord.recommendationLimitOverrideModeEnvVar,
+      `${context}.hostSummaries.${host}.recommendationLimitOverrideModeEnvVar`,
+      false,
+    );
+    assertMaybeNumber(
+      summaryRecord.recommendationLimitScaleFactor,
+      `${context}.hostSummaries.${host}.recommendationLimitScaleFactor`,
+      false,
+    );
+    assertMaybeStringArray(
+      summaryRecord.recommendationLimitScaledFields,
+      `${context}.hostSummaries.${host}.recommendationLimitScaledFields`,
+      false,
+    );
     assertNumber(
       summaryRecord.activationBudget,
       `${context}.hostSummaries.${host}.activationBudget`,
@@ -352,6 +396,32 @@ export function assertRecommendationPolicyBase(
 }
 
 /**
+ * Validates unknown data as recommendation policy base override.
+ */
+export function assertRecommendationPolicyBaseOverride(
+  value: unknown,
+  context: string,
+): asserts value is RecommendationPolicyBaseOverride {
+  const record = assertRecord(value, context);
+  assertNumber(record.schemaVersion, `${context}.schemaVersion`);
+  if (record.scoring !== undefined) {
+    assertRecommendationScoring(record.scoring, `${context}.scoring`);
+  }
+  if (record.hostDefaults !== undefined) {
+    assertRecommendationHostPolicy(
+      record.hostDefaults,
+      `${context}.hostDefaults`,
+      true,
+    );
+  }
+  if (record.presets !== undefined) {
+    assertRecommendationPolicyPresets(record.presets, `${context}.presets`);
+  }
+
+  assertOptionalRecommendationKeywordMaps(record, context);
+}
+
+/**
  * Validates unknown data as recommendation host policy override.
  */
 export function assertRecommendationHostPolicyOverride(
@@ -452,6 +522,30 @@ function assertRecommendationHostPolicy(
     `${context}.suggestedBundleId`,
     required,
   );
+  assertMaybeString(
+    record.recommendationLimitOverrideMode,
+    `${context}.recommendationLimitOverrideMode`,
+    false,
+  );
+  if (
+    record.recommendationLimitOverrideMode !== undefined &&
+    record.recommendationLimitOverrideMode !== "preserve" &&
+    record.recommendationLimitOverrideMode !== "scale"
+  ) {
+    throw new Error(
+      `${context}.recommendationLimitOverrideMode must be one of: preserve, scale`,
+    );
+  }
+  assertMaybeNumber(
+    record.recommendationLimitScaleFactor,
+    `${context}.recommendationLimitScaleFactor`,
+    false,
+  );
+  assertMaybeStringArray(
+    record.recommendationLimitScaledFields,
+    `${context}.recommendationLimitScaledFields`,
+    false,
+  );
   assertMaybeNumber(
     record.fallbackSkillCount,
     `${context}.fallbackSkillCount`,
@@ -551,6 +645,33 @@ function assertRecommendationKeywordMaps(
     `${context}.domainKeywordGroups`,
   );
   assertStringArrayRecord(record.synonyms, `${context}.synonyms`);
+}
+
+function assertOptionalRecommendationKeywordMaps(
+  record: JsonRecord,
+  context: string,
+): void {
+  if (record.concernKeywordMap !== undefined) {
+    assertStringArrayRecord(
+      record.concernKeywordMap,
+      `${context}.concernKeywordMap`,
+    );
+  }
+  if (record.taskModeKeywordMap !== undefined) {
+    assertStringArrayRecord(
+      record.taskModeKeywordMap,
+      `${context}.taskModeKeywordMap`,
+    );
+  }
+  if (record.domainKeywordGroups !== undefined) {
+    assertStringArrayRecord(
+      record.domainKeywordGroups,
+      `${context}.domainKeywordGroups`,
+    );
+  }
+  if (record.synonyms !== undefined) {
+    assertStringArrayRecord(record.synonyms, `${context}.synonyms`);
+  }
 }
 
 function assertRecommendationPolicyPresets(
