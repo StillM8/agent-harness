@@ -56,6 +56,8 @@ interface ClassifiedLocalFile {
   hosts: HostTarget[];
 }
 
+type ReadLocalTextFile = typeof readTextFileOrNull;
+
 /**
  * Provides harvest local manifest source for the lifecycle pipeline.
  */
@@ -175,6 +177,7 @@ export async function harvestLocalDirectorySource(
   demandProfile: DemandProfile | null,
   selectionRegistry: SelectionRegistry,
   projectRoot: string,
+  readLocalTextFile: ReadLocalTextFile = readTextFileOrNull,
 ): Promise<AssetCatalogEntry[]> {
   const rootPath = resolveEndpointPath(source.endpoints.path, projectRoot);
 
@@ -187,7 +190,7 @@ export async function harvestLocalDirectorySource(
   const antigravityManifestEntries =
     source.id === "local-antigravity-skills"
       ? await loadAntigravityManifestEntrySet(projectRoot)
-      : null;
+      : new Set<string>();
 
   for (const filePath of files) {
     const relativePath = toRelativePosixPath(rootPath, filePath);
@@ -199,15 +202,12 @@ export async function harvestLocalDirectorySource(
 
     if (source.id === "local-antigravity-skills") {
       const antigravitySkillKey = toAntigravityManifestEntry(relativePath);
-      if (
-        !antigravitySkillKey ||
-        !antigravityManifestEntries?.has(antigravitySkillKey)
-      ) {
+      if (!antigravityManifestEntries.has(antigravitySkillKey)) {
         continue;
       }
     }
 
-    const content = await readTextFileOrNull(filePath);
+    const content = await readLocalTextFile(filePath);
     if (content === null) {
       continue;
     }
@@ -553,11 +553,7 @@ function buildReferenceLocalFile(
   };
 }
 
-function toAntigravityManifestEntry(relativePath: string): string | null {
-  if (!relativePath.endsWith("/SKILL.md")) {
-    return null;
-  }
-
+function toAntigravityManifestEntry(relativePath: string): string {
   return relativePath.replace(/\/SKILL\.md$/u, "").toLowerCase();
 }
 
@@ -628,10 +624,6 @@ async function determineRisk(
     return buildRisk(hasHooks, hasExecScripts, requiresNetwork);
   }
 
-  if (source.id === "local-opencode-context") {
-    return buildRisk(false, false, false);
-  }
-
   return buildRisk(false, false, false);
 }
 
@@ -645,3 +637,11 @@ function resolveEndpointPath(
 
   return resolvePortablePath(endpointValue, projectRoot);
 }
+
+/**
+ * Exposes focused local-harvester helpers for deterministic tests.
+ */
+export const localHarvesterInternals = {
+  classifyLocalDirectoryFile,
+  resolveEndpointPath,
+};

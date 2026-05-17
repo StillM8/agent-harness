@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 
 import type { HostAdapter } from "../host-adapters/registry.js";
 import {
+  checkExecutableOnPath,
+  preflightInternals,
   runAdapterPreflight,
   runNativeInstallPreflight,
 } from "../lib/preflight.js";
@@ -45,61 +44,76 @@ void test("native install preflight rejects adapters without native provider", a
   );
 });
 
-void test("adapter runtime preflight can execute Windows cmd wrappers", async (t) => {
-  if (process.platform !== "win32") {
-    t.skip("Windows-specific wrapper execution test.");
-    return;
-  }
+void test("adapter runtime preflight builds Windows wrapper spawn specs", () => {
+  const wrapperSpec = preflightInternals.buildRuntimeCommandSpawnSpec({
+    args: ["--version"],
+    executable: "fake-wrapper",
+    platform: "win32",
+    resolvedExecutable: "C:\\Tools\\fake-wrapper.cmd",
+  });
+  assert.equal(wrapperSpec.executable, "powershell.exe");
+  assert.deepEqual(wrapperSpec.args.slice(0, 4), [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+  ]);
+  assert.equal(wrapperSpec.args.at(-1), "& 'fake-wrapper' '--version'");
 
-  const tempRoot = await mkdtemp(
-    join(tmpdir(), "agent-harness-preflight-wrapper-"),
+  assert.deepEqual(
+    preflightInternals.buildRuntimeCommandSpawnSpec({
+      args: ["--version"],
+      executable: "node",
+      platform: "linux",
+      resolvedExecutable: "/usr/bin/node",
+    }),
+    { executable: "/usr/bin/node", args: ["--version"] },
   );
+  assert.deepEqual(
+    preflightInternals.buildRuntimeCommandSpawnSpec({
+      args: ["--version"],
+      executable: "node",
+      resolvedExecutable: "/usr/bin/node",
+    }),
+    { executable: "/usr/bin/node", args: ["--version"] },
+  );
+});
+
+void test("executable preflight handles empty PATH and default Windows extensions", async () => {
+  const originalPath = process.env.PATH;
+  const originalPathext = process.env.PATHEXT;
 
   try {
-    await t.test("cmd wrapper resolves and executes", async () => {
-      const wrapperPath = join(tempRoot, "fake-wrapper.cmd");
-      await writeFile(
-        wrapperPath,
-        [
-          "@echo off",
-          'if "%~1"=="--version" echo fake-wrapper 1.0.0',
-          'if "%~1"=="--version" exit /b 0',
-          "echo unexpected args",
-          "exit /b 1",
-        ].join("\r\n"),
-        "utf8",
-      );
+    delete process.env.PATH;
+    const missing = await checkExecutableOnPath(
+      "definitely-missing-agent-harness-host",
+      "missing-host",
+    );
+    assert.equal(missing.severity, "warning");
+    assert.equal(missing.action?.startsWith("Install the host CLI"), true);
 
-      const originalPath = process.env.PATH ?? "";
-      const originalPathext = process.env.PATHEXT;
-      process.env.PATH = `${tempRoot};${originalPath}`;
-      process.env.PATHEXT = ".CMD;.EXE;.BAT;.COM";
-
-      try {
-        const diagnostics = await runAdapterPreflight({
-          ...buildFakeAdapter(),
-          runtime: {
-            executable: "fake-wrapper",
-            versionArgs: ["--version"],
-            guidance: "Install the fake host CLI.",
-          },
-        });
-
-        assert.equal(diagnostics.length, 2);
-        assert.equal(diagnostics[0]?.severity, "info");
-        assert.equal(diagnostics[1]?.severity, "info");
-        assert.equal(diagnostics[1]?.code, "fake-host-version");
-      } finally {
-        process.env.PATH = originalPath;
-        if (originalPathext === undefined) {
-          delete process.env.PATHEXT;
-        } else {
-          process.env.PATHEXT = originalPathext;
+    const found = await preflightInternals.findExecutableOnPath("default-ext", {
+      accessPath: async (candidate) => {
+        if (String(candidate).endsWith("default-ext.CMD")) {
+          return;
         }
-      }
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      },
+      env: { PATH: "C:\\Tools" } as NodeJS.ProcessEnv,
+      platform: "win32",
     });
+    assert.equal(found, "C:\\Tools\\default-ext.CMD");
   } finally {
-    await rm(tempRoot, { recursive: true, force: true });
+    if (originalPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
+    if (originalPathext === undefined) {
+      delete process.env.PATHEXT;
+    } else {
+      process.env.PATHEXT = originalPathext;
+    }
   }
 });
 

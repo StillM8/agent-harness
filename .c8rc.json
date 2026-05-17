@@ -1,10 +1,10 @@
 {
   "reporter": ["text-summary", "lcov", "json-summary"],
   "check-coverage": true,
-  "statements": 71,
-  "branches": 75,
-  "functions": 74,
-  "lines": 71,
+  "statements": 100,
+  "branches": 100,
+  "functions": 100,
+  "lines": 100,
   "exclude": [
     "dist/tests/**",
     "dist/types/**",

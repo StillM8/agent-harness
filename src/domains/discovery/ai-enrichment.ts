@@ -247,7 +247,7 @@ export async function orchestrateAiEnrichment(
   if (!options.force) {
     const reusedArtifact = buildCachedAiEnrichmentArtifact(
       requestContext,
-      config.allowCacheInCi || !ci,
+      shouldAllowAiEnrichmentCache(config.allowCacheInCi, ci),
     );
     if (reusedArtifact) {
       await writeJsonFileAtomically(outputPath, reusedArtifact);
@@ -313,7 +313,7 @@ export async function orchestrateAiEnrichment(
       input,
       enabled: true,
       status: "failed",
-      error: error instanceof Error ? error.message : String(error),
+      error: toAiEnrichmentErrorMessage(error),
     });
     await writeJsonFileAtomically(outputPath, artifact);
     return {
@@ -573,7 +573,7 @@ function evaluateAutomaticPolicySkip(
         status: "skipped",
         reason:
           "Automatic AI enrichment did not run because deterministic selection did not meet the on-ambiguity trigger.",
-        warnings: ambiguity.reasons.length > 0 ? ambiguity.reasons : undefined,
+        warnings: undefined,
       });
     }
   }
@@ -1118,6 +1118,51 @@ function asJsonObject(value: unknown): Record<string, unknown> | null {
     ? (value as Record<string, unknown>)
     : null;
 }
+
+function toAiEnrichmentErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function shouldAllowAiEnrichmentCache(
+  allowCacheInCi: boolean,
+  ci: boolean,
+): boolean {
+  return allowCacheInCi || !ci;
+}
+
+/**
+ * Narrow internal surface for deterministic helper coverage.
+ *
+ * These helpers stay module-local implementation details for production flows,
+ * but are exported so tests can exercise parser/sanitizer branches without
+ * having to tunnel every case through the network orchestration path.
+ */
+export const aiEnrichmentInternals = {
+  buildDemandProfileFingerprint,
+  buildAiEnrichmentMessages,
+  buildCachedAiEnrichmentArtifact,
+  buildMissingAiEnrichmentConfigMessage,
+  buildAiEnrichmentSuggestion,
+  evaluateAutomaticPolicySkip,
+  extractAiEnrichmentMessageContent,
+  extractProviderOrigin,
+  fetchAiEnrichmentResponse,
+  hasAiEnrichmentConfig,
+  isCiEnvironment,
+  isInteractiveTerminal,
+  normalizeConfiguredUrl,
+  parseAiEnrichmentContent,
+  parseAiEnrichmentResponse,
+  sanitizeAiEnrichmentContent,
+  sanitizeStringList,
+  sanitizeSummary,
+  shouldAutomaticallyRunAiEnrichment,
+  sleep,
+  shouldAllowAiEnrichmentCache,
+  toAiEnrichmentErrorMessage,
+  asJsonObject,
+  asUnknownArray,
+};
 
 /**
  * Preserves the original low-level explicit enrichment entrypoint for programmatic callers.

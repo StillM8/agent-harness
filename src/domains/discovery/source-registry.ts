@@ -87,7 +87,7 @@ export async function loadSourceRegistry(
         kind: "repo",
         authorityTier: entry.authorityTier ?? "trusted-community",
         publisher: {
-          name: entry.publisher ?? repoOwner ?? entry.id,
+          name: entry.publisher ?? repoOwner,
           verified: entry.publisherVerified ?? false,
           owner: repoOwner,
         },
@@ -169,8 +169,11 @@ function assertSourcePackShape(
   assertNumber(record.schemaVersion, `${context}.schemaVersion`);
   assertArray(record.entries, `${context}.entries`).forEach((entry, index) => {
     const entryRecord = assertRecord(entry, `${context}.entries[${index}]`);
-    assertString(entryRecord.id, `${context}.entries[${index}].id`);
-    assertString(entryRecord.repo, `${context}.entries[${index}].repo`);
+    assertNonEmptyString(entryRecord.id, `${context}.entries[${index}].id`);
+    assertRepositoryString(
+      entryRecord.repo,
+      `${context}.entries[${index}].repo`,
+    );
     assertOptionalEnum(
       entryRecord.authorityTier,
       AUTHORITY_TIERS,
@@ -240,6 +243,33 @@ function assertString(value: unknown, context: string): string {
   return value;
 }
 
+function assertNonEmptyString(value: unknown, context: string): string {
+  const stringValue = assertString(value, context);
+  if (stringValue.trim().length === 0) {
+    throw new Error(`${context} must not be empty`);
+  }
+
+  return stringValue;
+}
+
+function assertRepositoryString(value: unknown, context: string): string {
+  const stringValue = assertNonEmptyString(value, context);
+  const normalizedValue = stringValue.trim().replace(/\.git\/?$/u, "");
+  const sshMatch = /^git@[^:]+:(.+)$/u.exec(normalizedValue);
+  const repositoryPath = sshMatch
+    ? sshMatch[1]!
+    : (extractUrlPath(normalizedValue) ?? normalizedValue);
+  const segments = repositoryPath
+    .replace(/^\/+|\/+$/gu, "")
+    .split(/[/\\]/u)
+    .filter((segment) => segment.trim().length > 0);
+  if (segments.length < 2) {
+    throw new Error(`${context} must include repository owner and name`);
+  }
+
+  return stringValue;
+}
+
 function assertNumber(value: unknown, context: string): number {
   if (typeof value !== "number") {
     throw new Error(`${context} must be a number`);
@@ -299,38 +329,36 @@ function normalizeRepoIdentity(repo: string | undefined): string | undefined {
 
   const normalizedRepo = repo.trim().replace(/\.git$/u, "");
   const sshMatch = /^git@([^:]+):(.+)$/u.exec(normalizedRepo);
-  if (sshMatch?.[1] && sshMatch[2]) {
-    return `${sshMatch[1]}/${sshMatch[2]}`
+  if (sshMatch) {
+    return `${sshMatch[1]!}/${sshMatch[2]!}`
       .replace(/^\/+|\/+$/gu, "")
       .toLowerCase();
   }
 
   const urlPath = extractUrlPath(normalizedRepo);
   if (urlPath) {
-    try {
-      const parsedUrl = new URL(normalizedRepo);
-      return `${parsedUrl.hostname}/${urlPath}`
-        .replace(/^\/+|\/+$/gu, "")
-        .toLowerCase();
-    } catch {
-      return urlPath.replace(/^\/+|\/+$/gu, "").toLowerCase();
-    }
+    const parsedUrl = new URL(normalizedRepo);
+    return `${parsedUrl.hostname}/${urlPath}`
+      .replace(/\/+/gu, "/")
+      .replace(/^\/+|\/+$/gu, "")
+      .toLowerCase();
   }
 
   return normalizedRepo.replace(/^\/+|\/+$/gu, "").toLowerCase();
 }
 
-function getRepoOwner(repo: string): string | undefined {
+function getRepoOwner(repo: string): string {
   const normalizedRepo = repo.trim().replace(/\.git$/u, "");
   const sshMatch = /^git@[^:]+:(.+)$/u.exec(normalizedRepo);
-  const pathLikeRepo =
-    sshMatch?.[1] ?? extractUrlPath(normalizedRepo) ?? normalizedRepo;
+  const pathLikeRepo = sshMatch
+    ? sshMatch[1]!
+    : (extractUrlPath(normalizedRepo) ?? normalizedRepo);
   const segments = pathLikeRepo
     .replace(/^\/+|\/+$/gu, "")
-    .split("/")
+    .split(/[/\\]/u)
     .filter((segment) => segment.length > 0);
 
-  return segments.length >= 2 ? segments[segments.length - 2] : undefined;
+  return segments[segments.length - 2]!;
 }
 
 function extractUrlPath(value: string): string | undefined {
@@ -344,11 +372,10 @@ function extractUrlPath(value: string): string | undefined {
 function lastPathSegment(value: string): string {
   const normalizedValue = value.replace(/\/+$/u, "");
   const segments = normalizedValue
-    .split(/[\\/]/u)
+    .split(/[/\\]/u)
     .map((segment) => segment.trim())
     .filter((segment) => segment.length > 0);
-  const lastSegment = segments.at(-1);
-  return lastSegment ?? value;
+  return segments[segments.length - 1]!;
 }
 
 function humanizeSlug(value: string): string {

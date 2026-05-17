@@ -70,6 +70,120 @@ void test("missing and present environment prerequisites produce actionable diag
   assert.equal(readyDiagnostics[0]?.severity, "info");
 });
 
+void test("manual, host-login mismatch, and oauth prerequisites produce actionable diagnostics", (context) => {
+  const previousGithubToken = process.env.GITHUB_TOKEN;
+  const previousPat = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+  context.after(() => {
+    if (previousGithubToken === undefined) {
+      delete process.env.GITHUB_TOKEN;
+    } else {
+      process.env.GITHUB_TOKEN = previousGithubToken;
+    }
+    if (previousPat === undefined) {
+      delete process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+    } else {
+      process.env.GITHUB_PERSONAL_ACCESS_TOKEN = previousPat;
+    }
+    clearRuntimeConfigForTests();
+  });
+
+  delete process.env.GITHUB_TOKEN;
+  delete process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+  clearRuntimeConfigForTests();
+
+  const diagnostics = buildPrerequisiteDiagnostics(
+    {
+      ...buildAssetWithPrerequisites(),
+      install: {
+        ...buildAssetWithPrerequisites().install,
+        prerequisites: [
+          {
+            id: "manual:review-docs",
+            kind: "manual",
+            required: true,
+            description: "Read the setup docs.",
+          },
+          {
+            id: "host-login:opencode",
+            kind: "host-login",
+            required: true,
+            host: "opencode",
+            description: "Sign in to opencode.",
+          },
+          {
+            id: "oauth:github",
+            kind: "oauth",
+            required: true,
+            provider: "github",
+            description: "Authorize GitHub.",
+          },
+        ],
+      },
+    },
+    { adapter: resolveHostAdapter("vscode") ?? undefined },
+  );
+
+  assert.equal(diagnostics[0]?.severity, "error");
+  assert.match(
+    diagnostics[0]?.action ?? "",
+    /Complete the provider setup described by the asset/u,
+  );
+  assert.equal(diagnostics[1]?.severity, "info");
+  assert.match(
+    diagnostics[1]?.message ?? "",
+    /current host is copilot-vscode/u,
+  );
+  assert.equal(diagnostics[2]?.severity, "error");
+  assert.match(
+    diagnostics[2]?.action ?? "",
+    /Run setup login --provider github/u,
+  );
+
+  process.env.GITHUB_TOKEN = "fixture-token";
+  clearRuntimeConfigForTests();
+  const readyOauth = buildPrerequisiteDiagnostics(
+    {
+      ...buildAssetWithPrerequisites(),
+      install: {
+        ...buildAssetWithPrerequisites().install,
+        prerequisites: [
+          {
+            id: "oauth:github",
+            kind: "oauth",
+            required: true,
+            provider: "github",
+            description: "Authorize GitHub.",
+          },
+        ],
+      },
+    },
+    { adapter: resolveHostAdapter("vscode") ?? undefined },
+  );
+  assert.equal(readyOauth[0]?.severity, "info");
+  assert.equal(readyOauth[0]?.action, undefined);
+});
+
+void test("manual prerequisite actions include setup urls when provided", () => {
+  const diagnostics = buildPrerequisiteDiagnostics({
+    ...buildAssetWithPrerequisites(),
+    install: {
+      ...buildAssetWithPrerequisites().install,
+      prerequisites: [
+        {
+          id: "manual:hosted-setup",
+          kind: "manual",
+          required: true,
+          description: "Follow the hosted setup flow.",
+          setupUrl: "https://example.com/setup",
+        },
+      ],
+    },
+  });
+
+  assert.equal(diagnostics[0]?.severity, "error");
+  assert.equal(diagnostics[0]?.action, "See https://example.com/setup");
+});
+
 void test("activated asset prerequisite collection reads activation state", async () => {
   const projectRoot = await mkdtemp(join(tmpdir(), "agent-harness-prereq-"));
   try {
@@ -105,6 +219,50 @@ void test("activated asset prerequisite collection reads activation state", asyn
   } finally {
     await rm(projectRoot, { force: true, recursive: true });
   }
+});
+
+void test("host-login prerequisites warn for matching or unspecified host contexts", () => {
+  const baseAsset = buildAssetWithPrerequisites();
+  const matchingDiagnostics = buildPrerequisiteDiagnostics(
+    {
+      ...baseAsset,
+      install: {
+        ...baseAsset.install,
+        prerequisites: [
+          {
+            id: "host-login:copilot-vscode",
+            kind: "host-login",
+            required: true,
+            host: "copilot-vscode",
+            description: "Sign in to VS Code.",
+          },
+          {
+            id: "host-login:any",
+            kind: "host-login",
+            required: false,
+            description: "Sign in to the active host if needed.",
+          },
+        ],
+      },
+    },
+    { adapter: resolveHostAdapter("vscode") ?? undefined },
+  );
+
+  assert.deepEqual(
+    matchingDiagnostics.map((diagnostic) => diagnostic.severity),
+    ["warning", "info"],
+  );
+  assert.match(
+    matchingDiagnostics[0]?.message ?? "",
+    /signed-in copilot-vscode/u,
+  );
+  assert.match(matchingDiagnostics[1]?.message ?? "", /signed-in host/u);
+
+  const noPrerequisiteDiagnostics = buildPrerequisiteDiagnostics({
+    ...baseAsset,
+    install: { ...baseAsset.install, prerequisites: undefined },
+  });
+  assert.deepEqual(noPrerequisiteDiagnostics, []);
 });
 
 function buildAssetWithPrerequisites(): AssetCatalogEntry {

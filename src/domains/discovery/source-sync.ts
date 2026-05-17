@@ -1621,13 +1621,13 @@ async function resolveSitemapLeafUrls(
 
 function parseSitemapIndex(content: string, baseUrl: string): URL[] {
   return [...content.matchAll(/<sitemap>\s*<loc>([^<]+)<\/loc>/giu)].flatMap(
-    (match) => toSameOriginUrl(match[1] ?? "", baseUrl),
+    (match) => toSameOriginUrl(match[1]!, baseUrl),
   );
 }
 
 function parseUrlSet(content: string, baseUrl: string): URL[] {
   return [...content.matchAll(/<url>\s*<loc>([^<]+)<\/loc>/giu)].flatMap(
-    (match) => toSameOriginUrl(match[1] ?? "", baseUrl),
+    (match) => toSameOriginUrl(match[1]!, baseUrl),
   );
 }
 
@@ -1638,7 +1638,7 @@ function extractNormalizedLinks(
   pattern: RegExp,
 ): URL[] {
   const matches = [...content.matchAll(pattern)]
-    .flatMap((match) => toSameOriginUrl(match[0] ?? "", baseUrl))
+    .flatMap((match) => toSameOriginUrl(match[0]!, baseUrl))
     .filter((url) => isAllowedOriginUrl(url, allowedOrigins))
     .map(stripUrlQueryAndHash);
   return dedupeUrls(matches);
@@ -1769,7 +1769,7 @@ function buildDisplayNameFromUrl(url: URL): string {
     return url.hostname;
   }
 
-  return segments[segments.length - 1] ?? url.hostname;
+  return segments[segments.length - 1]!;
 }
 
 function buildManifestEntryFromUrl(url: URL): string | undefined {
@@ -1850,3 +1850,59 @@ function stringifyUnknown(value: unknown): string | undefined {
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/**
+ * Narrow helper exports for deterministic source-sync coverage.
+ *
+ * These helpers are intentionally pure and production-safe; exporting them lets
+ * tests cover structural equality and cursor restoration behavior without
+ * overfitting large end-to-end fixtures for every branch.
+ */
+export const sourceSyncInternals = {
+  areIndexedCatalogEntriesEqual,
+  stableStringify,
+  sortJsonValue,
+  classifyNonIndexedSource,
+  resolveNuGetSearchQueryServiceUrl,
+  syncSitemapPackageRegistrySource,
+  syncHtmlPackageRegistrySource,
+  syncMcpRegistrySource,
+  syncNpmRegistrySource,
+  syncCargoRegistrySource,
+  syncGoRegistrySource,
+  syncMavenRegistrySource,
+  syncNuGetRegistrySource,
+  buildMcpRegistryCatalogEntry,
+  isLatestMcpRegistryEntry,
+  getMcpRegistryUpdatedAt,
+  buildMcpRegistryOriginUrl,
+  extractMcpRegistryRemoteTypes,
+  fetchRequiredText,
+  fetchRequiredJson,
+  resolveSitemapLeafUrls,
+  parseSitemapIndex,
+  parseUrlSet,
+  toSameOriginUrl,
+  stripUrlQueryAndHash,
+  isAllowedOriginUrl,
+  dedupeUrls,
+  getAllowedOrigins,
+  getAllowedOrigin,
+  getPreviousCursorStates,
+  restoreFiniteCursorState,
+  parsePositiveIntegerToken,
+  parseNonNegativeIntegerToken,
+  countEntriesForSource,
+  buildDisplayNameFromUrl,
+  buildIndexedReferenceItem,
+  buildManifestEntryFromUrl,
+  decodePathSegments,
+  extractPypiPackageNameFromUrl,
+  extractSwiftPackageNameFromUrl,
+  normalizeStringArray,
+  asRecord,
+  getString,
+  getNumber,
+  stringifyUnknown,
+  getErrorMessage,
+};

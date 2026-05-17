@@ -79,22 +79,25 @@ export async function manageInstallRefresh(
   const refreshIntervalMs = installConfig.refreshIntervalMs;
   const applyRequested = args.includes("--apply");
   const dueOnly = args.includes("--due-only");
-  const refreshedMirrorState = !args.includes("--no-mirror-refresh");
+  const refreshedMirrorState = shouldRefreshMirrorState(args);
   const previousRefreshState = await loadInstallRefreshState(projectRoot);
 
   if (
     dueOnly &&
+    previousRefreshState &&
     !isInstallRefreshDue(previousRefreshState, refreshPolicy, refreshIntervalMs)
   ) {
     console.log(
-      `Install refresh is not due until ${previousRefreshState?.nextCheckAt ?? "the configured interval elapses"}.`,
+      `Install refresh is not due until ${previousRefreshState.nextCheckAt}.`,
     );
     return;
   }
 
-  if (refreshedMirrorState) {
-    await refreshMirrorState(projectRoot, workingDirectory);
-  }
+  await refreshMirrorStateIfRequested(
+    refreshedMirrorState,
+    projectRoot,
+    workingDirectory,
+  );
 
   let report = await buildInstallRefreshReport(
     projectRoot,
@@ -231,22 +234,56 @@ function parseInstallHost(value: string | undefined): (typeof INSTALL_HOSTS)[num
   return value as (typeof INSTALL_HOSTS)[number];
 }
 
+interface RefreshMirrorStateOptions {
+  acquire?: typeof acquireMirrorArtifacts;
+  maxBatches?: number;
+  readAcquireState?: () => Promise<MirrorAcquireState | null>;
+}
+
+interface ApplyBundleRefreshesOptions {
+  install?: typeof installBundles;
+  maxBatches?: number;
+  readProgressState?: () => Promise<InstallProgressState | null>;
+}
+
+function shouldRefreshMirrorState(args: readonly string[]): boolean {
+  return !args.includes("--no-mirror-refresh");
+}
+
+async function refreshMirrorStateIfRequested(
+  shouldRefresh: boolean,
+  projectRoot: string,
+  workingDirectory: string,
+  refresh: typeof refreshMirrorState = refreshMirrorState,
+): Promise<void> {
+  if (shouldRefresh) {
+    await refresh(projectRoot, workingDirectory);
+  }
+}
+
 async function refreshMirrorState(
   projectRoot: string,
   workingDirectory: string,
+  options: RefreshMirrorStateOptions = {},
 ): Promise<void> {
   const batchSize = String(getRuntimeConfig().batches.mirrorAcquire);
+  const acquire = options.acquire ?? acquireMirrorArtifacts;
+  const maxBatches = options.maxBatches ?? MAX_REFRESH_BATCHES;
+  const readAcquireState =
+    options.readAcquireState ??
+    (() =>
+      readJsonFileOrNull<MirrorAcquireState>(
+        join(projectRoot, ...MIRROR_ACQUIRE_STATE_OUTPUT_PATH),
+        assertMirrorAcquireState,
+      ));
 
-  for (let batchIndex = 0; batchIndex < MAX_REFRESH_BATCHES; batchIndex += 1) {
-    await acquireMirrorArtifacts(projectRoot, workingDirectory, [
+  for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
+    await acquire(projectRoot, workingDirectory, [
       "--refresh",
       "--batch-size",
       batchSize,
     ]);
-    const acquireState = await readJsonFileOrNull<MirrorAcquireState>(
-      join(projectRoot, ...MIRROR_ACQUIRE_STATE_OUTPUT_PATH),
-      assertMirrorAcquireState,
-    );
+    const acquireState = await readAcquireState();
     if (acquireState?.terminal) {
       return;
     }
@@ -583,21 +620,28 @@ async function applyNativeRefreshes(
 async function applyBundleRefreshes(
   projectRoot: string,
   bundleIds: readonly string[],
+  options: ApplyBundleRefreshesOptions = {},
 ): Promise<void> {
   const batchSize = String(getRuntimeConfig().batches.installBundle);
-
-  for (const bundleId of bundleIds) {
-    for (let batchIndex = 0; batchIndex < MAX_REFRESH_BATCHES; batchIndex += 1) {
-      await installBundles(projectRoot, ["--bundle", bundleId, "--batch-size", batchSize]);
-      const progressState = await readJsonFileOrNull<InstallProgressState>(
+  const install = options.install ?? installBundles;
+  const maxBatches = options.maxBatches ?? MAX_REFRESH_BATCHES;
+  const readProgressState =
+    options.readProgressState ??
+    (() =>
+      readJsonFileOrNull<InstallProgressState>(
         join(projectRoot, ...INSTALL_PROGRESS_STATE_OUTPUT_PATH),
         assertInstallProgressState,
-      );
+      ));
+
+  for (const bundleId of bundleIds) {
+    for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
+      await install(projectRoot, ["--bundle", bundleId, "--batch-size", batchSize]);
+      const progressState = await readProgressState();
       const bundleState = progressState?.bundles[bundleId];
       if (bundleState && bundleState.remainingAssets <= 0) {
         break;
       }
-      if (batchIndex === MAX_REFRESH_BATCHES - 1) {
+      if (batchIndex === maxBatches - 1) {
         throw new Error(
           `install refresh did not complete bundle '${bundleId}' within the maximum batch count`,
         );
@@ -621,6 +665,21 @@ function printInstallRefreshReport(
     );
   }
 }
+
+/**
+ * Exposes narrow install refresh internals for focused scheduling and apply tests.
+ */
+export const installRefreshInternals = {
+  isInstallRefreshDue,
+  parseInstallHost,
+  shouldRefreshMirrorState,
+  refreshMirrorStateIfRequested,
+  refreshMirrorState,
+  decideInstallRefreshPolicy,
+  collectNativeRefreshExtensionIds,
+  applyNativeRefreshes,
+  applyBundleRefreshes,
+};
 
 /**
  * Exposes the supported install refresh policy values for CLI/config validation.

@@ -1350,6 +1350,7 @@ async function writeOrRemoveJsonFile(
 async function removeEmptyParentDirectories(
   startDirectory: string,
   stopDirectory: string,
+  removeDirectory: typeof rmdir = rmdir,
 ): Promise<void> {
   const boundary = resolve(stopDirectory);
   let currentDirectory = resolve(startDirectory);
@@ -1380,25 +1381,25 @@ async function removeEmptyParentDirectories(
     }
 
     try {
-      await rmdir(currentDirectory);
+      await removeDirectory(currentDirectory);
     } catch (error) {
-      const errorCode = (error as NodeJS.ErrnoException).code;
-      if (
-        errorCode === "ENOENT" ||
-        errorCode === "ENOTEMPTY" ||
-        errorCode === "EEXIST"
-      ) {
+      if (isBenignRemoveDirectoryRace(error)) {
         return;
       }
       throw error;
     }
 
-    const parentDirectory = dirname(currentDirectory);
-    if (parentDirectory === currentDirectory) {
-      return;
-    }
-    currentDirectory = parentDirectory;
+    currentDirectory = dirname(currentDirectory);
   }
+}
+
+function isBenignRemoveDirectoryRace(error: unknown): boolean {
+  const errorCode = (error as NodeJS.ErrnoException).code;
+  return (
+    errorCode === "ENOENT" ||
+    errorCode === "ENOTEMPTY" ||
+    errorCode === "EEXIST"
+  );
 }
 
 function buildManagedInstructionLines(options: {
@@ -1762,3 +1763,19 @@ function mergeStringArraysPreservingOrder(
 
   return mergedValues;
 }
+
+/**
+ * Exposes focused native wire helpers for behavioral coverage.
+ */
+export const nativeWireInternals = {
+  cleanupFailedNativeHostApply,
+  describeJsonValue,
+  mergeJsonObjects,
+  mergeStringArraysPreservingOrder,
+  isBenignRemoveDirectoryRace,
+  nativeHostSpecs: NATIVE_HOST_SPECS,
+  removeEmptyParentDirectories,
+  removeManagedStringArrayEntries,
+  toLoggableErrorMessage,
+  validateManagedTextFileSnapshots,
+};

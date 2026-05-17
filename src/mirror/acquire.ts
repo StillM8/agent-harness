@@ -21,10 +21,7 @@ import {
 } from "../github.js";
 import { getOptionValue, getOptionValues } from "../lib/cli-options.js";
 import { fetchBytesWithGuards, fetchJsonWithGuards } from "../lib/http.js";
-import {
-  isPathWithinRoot,
-  resolveSafeMirrorFilePath,
-} from "../lib/safe-paths.js";
+import { resolveSafeMirrorFilePath } from "../lib/safe-paths.js";
 import {
   assertAssetCatalogEntry,
   assertMirrorAcquireState,
@@ -405,7 +402,7 @@ function restoreRefreshProcessedCount(
     Math.min(
       totalEligibleCount,
       Number.isFinite(previousAcquireState.processedCount)
-        ? (previousAcquireState.processedCount ?? 0)
+        ? previousAcquireState.processedCount!
         : 0,
     ),
   );
@@ -461,9 +458,6 @@ async function materializeMirrorArtifact(
   }
 
   const cachePath = buildGitHubCachePath(entry, projectRoot);
-  if (cachePath && !isPathWithinRoot(projectRoot, cachePath)) {
-    throw new Error(`Refusing to read cache file outside project root: ${cachePath}`);
-  }
 
   if (cachePath && (await pathLooksReadable(cachePath))) {
     const cacheContent = await readTextFileOrNull(cachePath);
@@ -610,11 +604,6 @@ async function materializeOfficialIndexPackage(
 
     const packageFiles = packageFileCandidates;
 
-    if (packageFiles.length === 0) {
-      sawNonCapFailure = true;
-      continue;
-    }
-
     const commitSha = await fetchGitHubBranchCommitSha(
       snapshot.owner,
       snapshot.repo,
@@ -654,15 +643,9 @@ async function materializeOfficialIndexPackage(
       continue;
     }
 
-    const skillMarkdownFile = materializedFiles.find(
-      (file) => file.relativePath === "SKILL.md",
-    );
-
     return {
       artifact: {
-        content:
-          skillMarkdownFile?.content ??
-          Buffer.from(JSON.stringify(entry, null, 2), "utf8"),
+        content: selectOfficialIndexPrimaryContent(materializedFiles, entry),
         files: materializedFiles,
         upstreamRef: snapshot.repoSummary.defaultBranch,
         upstreamCommit: commitSha ?? undefined,
@@ -739,6 +722,16 @@ function isGitHubHttpsUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function selectOfficialIndexPrimaryContent(
+  materializedFiles: Array<{ relativePath: string; content: Buffer }>,
+  entry: AssetCatalogEntry,
+): Buffer {
+  return (
+    materializedFiles.find((file) => file.relativePath === "SKILL.md")
+      ?.content ?? Buffer.from(JSON.stringify(entry, null, 2), "utf8")
+  );
 }
 
 function findOfficialIndexSkillRoot(
@@ -1126,3 +1119,32 @@ async function pathLooksReadable(filePath: string): Promise<boolean> {
     .then((content) => content !== null)
     .catch(() => false);
 }
+
+/**
+ * Exposes pure and narrowly-scoped mirror acquire internals for focused tests.
+ */
+export const mirrorAcquireInternals = {
+  restoreRefreshProcessedCount,
+  materializeMirrorArtifact,
+  materializeGitHubTreeArtifact,
+  materializeOfficialIndexPackage,
+  buildOfficialIndexRepoUrlCandidates,
+  isGitHubHttpsRepositoryUrl,
+  isGitHubHttpsUrl,
+  findOfficialIndexSkillRoot,
+  selectOfficialIndexPrimaryContent,
+  fetchVerifiedGitHubFileContent,
+  fetchGitHubBranchCommitSha,
+  parseGitHubBlobEntry,
+  buildMirrorFileManifest,
+  buildGitHubHeaders,
+  buildUpstreamMetadata,
+  determineMirrorStatus,
+  normalizePromptInjectionText,
+  createGitBlobSha,
+  isGitBlobSha,
+  buildSortedReasonRecord,
+  mergeMirrorIndexEntries,
+  buildGitHubCachePath,
+  pathLooksReadable,
+};

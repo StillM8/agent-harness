@@ -274,6 +274,307 @@ void test("selection relevance rejects generic trusted-local skills for a real F
   ]);
 });
 
+void test("selection relevance ignores detector-only demand noise", () => {
+  const entries = [
+    createEntry("general-docs", ["documentation", "workflow"]),
+    createEntry("general-testing", ["testing", "workflow"]),
+  ];
+  const demandProfile = createDemandProfile({
+    languages: [],
+    packageManagers: [],
+    frameworks: [],
+    concerns: ["detector:base"],
+    tooling: [],
+  });
+
+  const { selectedEntries, rejectedEntries } =
+    filterCatalogEntriesByDemandRelevance(entries, demandProfile);
+
+  assert.deepEqual(
+    selectedEntries.map((entry) => entry.id),
+    ["general-docs", "general-testing"],
+  );
+  assert.deepEqual(rejectedEntries, []);
+});
+
+void test("selection relevance treats mixed generic and uncommon stack names as phrases", () => {
+  const demandProfile = createDemandProfile({
+    languages: [],
+    packageManagers: [],
+    frameworks: ["react native"],
+    concerns: [],
+    tooling: [],
+  });
+  const reactNativeEntry = createEntry("react-native-mobile", [
+    "react",
+    "native",
+    "mobile",
+  ]);
+  const reactOnlyEntry = createEntry("react-web", ["react", "frontend"]);
+
+  const { selectedEntries, rejectedEntries } =
+    filterCatalogEntriesByDemandRelevance(
+      [reactNativeEntry, reactOnlyEntry],
+      demandProfile,
+    );
+
+  assert.deepEqual(
+    selectedEntries.map((entry) => entry.id),
+    ["react-native-mobile"],
+  );
+  assert.deepEqual(
+    rejectedEntries.map((entry) => entry.id),
+    ["react-web"],
+  );
+});
+
+void test("selection relevance treats catalog-wide terms as low signal", () => {
+  const entries = Array.from({ length: 210 }, (_, index) =>
+    createEntry(`popular-sveltekit-${index}`, ["sveltekit", "generic"]),
+  );
+  const demandProfile = createDemandProfile({
+    languages: [],
+    packageManagers: [],
+    frameworks: ["sveltekit"],
+    concerns: [],
+    tooling: [],
+  });
+
+  const { selectedEntries, rejectedEntries } =
+    filterCatalogEntriesByDemandRelevance(entries, demandProfile);
+
+  assert.deepEqual(selectedEntries, []);
+  assert.equal(rejectedEntries.length, entries.length);
+});
+
+void test("selection relevance rejects trusted-local generic overlap without stack alignment", () => {
+  const demandProfile = createDemandProfile({
+    languages: ["dart"],
+    packageManagers: ["pub"],
+    frameworks: ["flutter"],
+    concerns: ["frontend", "mobile", "testing", "integration"],
+    tooling: [],
+  });
+  const genericLocalSkill = createEntry(
+    "generic-mobile-testing",
+    ["frontend", "mobile", "testing", "integration"],
+    {
+      authorityTier: "trusted-local",
+      sourceKind: "local-directory",
+    },
+  );
+
+  const { selectedEntries, rejectedEntries } =
+    filterCatalogEntriesByDemandRelevance([genericLocalSkill], demandProfile);
+
+  assert.deepEqual(selectedEntries, []);
+  assert.deepEqual(
+    rejectedEntries.map((entry) => entry.id),
+    ["generic-mobile-testing"],
+  );
+});
+
+void test("selection relevance uses low-signal overlap without treating concern phrases as stack anchors", () => {
+  const demandProfile = createDemandProfile({
+    languages: [],
+    packageManagers: [],
+    frameworks: [],
+    concerns: ["api testing", "backend", "integration"],
+    tooling: [],
+  });
+  const matchingEntry = createEntry("platform-testing-workflow", [
+    "api",
+    "testing",
+    "backend",
+    "integration",
+  ]);
+  const weakEntry = createEntry("api-only-note", ["api", "documentation"]);
+
+  const { selectedEntries, rejectedEntries } =
+    filterCatalogEntriesByDemandRelevance(
+      [matchingEntry, weakEntry],
+      demandProfile,
+    );
+
+  assert.deepEqual(
+    selectedEntries.map((entry) => entry.id),
+    ["platform-testing-workflow"],
+  );
+  assert.deepEqual(
+    rejectedEntries.map((entry) => entry.id),
+    ["api-only-note"],
+  );
+});
+
+void test("selection relevance rejects trusted-local generic overlap when detector stack evidence is weak", () => {
+  const demandProfile = createDemandProfile({
+    languages: [],
+    packageManagers: [],
+    frameworks: [],
+    concerns: ["frontend", "mobile", "testing", "integration"],
+    tooling: ["storybook"],
+  });
+  const genericLocalSkill = createEntry(
+    "generic-frontend-mobile-testing",
+    ["frontend", "mobile", "testing", "integration"],
+    {
+      authorityTier: "trusted-local",
+      sourceKind: "local-directory",
+    },
+  );
+
+  const { selectedEntries, rejectedEntries } =
+    filterCatalogEntriesByDemandRelevance([genericLocalSkill], demandProfile);
+
+  assert.deepEqual(selectedEntries, []);
+  assert.deepEqual(
+    rejectedEntries.map((entry) => entry.id),
+    ["generic-frontend-mobile-testing"],
+  );
+});
+
+void test("selection relevance admits detector phrases without stack anchoring", () => {
+  const demandProfile = createDemandProfile({
+    languages: [],
+    packageManagers: [],
+    frameworks: [],
+    concerns: [],
+    tooling: ["detector:quantum flux"],
+  });
+  const matchingEntry = createEntry("detector-quantum-flux", [
+    "quantum",
+    "flux",
+    "workflow",
+  ]);
+
+  const { selectedEntries } = filterCatalogEntriesByDemandRelevance(
+    [matchingEntry],
+    demandProfile,
+  );
+
+  assert.deepEqual(
+    selectedEntries.map((entry) => entry.id),
+    ["detector-quantum-flux"],
+  );
+});
+
+void test("selection relevance supports uncommon concern phrases without stack anchoring", () => {
+  const demandProfile = createDemandProfile({
+    languages: [],
+    packageManagers: [],
+    frameworks: [],
+    concerns: ["quantum flux"],
+    tooling: [],
+  });
+  const matchingEntry = createEntry("quantum-flux-reference", [
+    "quantum",
+    "flux",
+    "reference",
+  ]);
+
+  const { selectedEntries } = filterCatalogEntriesByDemandRelevance(
+    [matchingEntry],
+    demandProfile,
+  );
+
+  assert.deepEqual(
+    selectedEntries.map((entry) => entry.id),
+    ["quantum-flux-reference"],
+  );
+});
+
+void test("selection relevance keeps absent catalog-wide terms specific", () => {
+  const entries = Array.from({ length: 210 }, (_, index) =>
+    createEntry(`popular-sveltekit-without-astro-${index}`, [
+      "sveltekit",
+      "generic",
+    ]),
+  );
+  const demandProfile = createDemandProfile({
+    languages: [],
+    packageManagers: [],
+    frameworks: ["astro"],
+    concerns: [],
+    tooling: [],
+  });
+
+  const { selectedEntries, rejectedEntries } =
+    filterCatalogEntriesByDemandRelevance(entries, demandProfile);
+
+  assert.deepEqual(selectedEntries, []);
+  assert.equal(rejectedEntries.length, entries.length);
+});
+
+void test("selection relevance demotes catalog-common high-signal terms at large scale", () => {
+  const entries = Array.from({ length: 210 }, (_, index) =>
+    createEntry(`common-astro-${index}`, [
+      "astro",
+      index % 2 === 0 ? "frontend" : "documentation",
+    ]),
+  );
+  const demandProfile = createDemandProfile({
+    languages: [],
+    packageManagers: [],
+    frameworks: ["astro"],
+    concerns: [],
+    tooling: [],
+  });
+
+  const { selectedEntries, rejectedEntries } =
+    filterCatalogEntriesByDemandRelevance(entries, demandProfile);
+
+  assert.deepEqual(selectedEntries, []);
+  assert.equal(rejectedEntries.length, entries.length);
+});
+
+void test("selection relevance admits executable MCP metadata paths only", () => {
+  const demandProfile = createDemandProfile({
+    concerns: ["unrelated-domain"],
+    tooling: [],
+  });
+  const executableMcp = createEntry("metadata-mcp", ["unrelated"], {
+    sourceKind: "repo",
+  });
+  executableMcp.assetKind = "mcp-server";
+  executableMcp.hosts = ["shared"];
+  executableMcp.install = {
+    method: "github-tree-metadata",
+    nativeHosts: ["shared"],
+  };
+  executableMcp.evidence = {
+    ...executableMcp.evidence,
+    filePath: "servers/metadata-mcp/server.ts",
+  };
+  const metadataOnlyMcp = createEntry("metadata-docs", ["unrelated"], {
+    sourceKind: "repo",
+  });
+  metadataOnlyMcp.assetKind = "mcp-server";
+  metadataOnlyMcp.hosts = ["shared"];
+  metadataOnlyMcp.install = {
+    method: "github-tree-metadata",
+    nativeHosts: ["shared"],
+  };
+  metadataOnlyMcp.evidence = {
+    ...metadataOnlyMcp.evidence,
+    filePath: "servers/metadata-mcp/README.md",
+  };
+
+  const { selectedEntries, rejectedEntries } =
+    filterCatalogEntriesByDemandRelevance(
+      [executableMcp, metadataOnlyMcp],
+      demandProfile,
+    );
+
+  assert.deepEqual(
+    selectedEntries.map((entry) => entry.id),
+    ["metadata-mcp"],
+  );
+  assert.deepEqual(
+    rejectedEntries.map((entry) => entry.id),
+    ["metadata-docs"],
+  );
+});
+
 function createDemandProfile(
   overrides: Partial<DemandProfile["signals"]>,
 ): DemandProfile {

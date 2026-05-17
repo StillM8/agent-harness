@@ -116,15 +116,9 @@ export async function ensureDirectory(directoryPath: string): Promise<void> {
   try {
     await mkdir(directoryPath, { recursive: true });
   } catch (error) {
-    const errorCode = (error as NodeJS.ErrnoException).code;
-    if (
-      (errorCode === "EEXIST" || errorCode === "EINVAL") &&
-      (await isUsableDirectoryPath(directoryPath))
-    ) {
-      return;
+    if (!(await shouldIgnoreEnsureDirectoryError(directoryPath, error))) {
+      throw error;
     }
-
-    throw error;
   }
 }
 
@@ -412,11 +406,7 @@ export async function createDirectoryLink(
   }
 
   await ensureDirectory(dirname(linkPath));
-  await symlink(
-    targetPath,
-    linkPath,
-    process.platform === "win32" ? "junction" : "dir",
-  );
+  await symlink(targetPath, linkPath, getDirectorySymlinkType());
 }
 
 /**
@@ -517,6 +507,52 @@ export function removeManagedSection(options: {
   return originalContent.replace(sectionPattern, "\n").trimEnd() + "\n";
 }
 
+type DirectorySymlinkType = "dir" | "junction";
+
+interface PendingFileEntry {
+  entryPath: string;
+  relativeEntryPath: string;
+}
+
+interface CollectedFileStat extends PendingFileEntry {
+  size: number;
+}
+
+interface FileLikeStats {
+  isFile(): boolean;
+  size: number;
+}
+
+function getDirectorySymlinkType(
+  platform: NodeJS.Platform = process.platform,
+): DirectorySymlinkType {
+  return platform === "win32" ? "junction" : "dir";
+}
+
+function toCollectedFileStat(
+  fileEntry: PendingFileEntry,
+  stats: FileLikeStats | null,
+): CollectedFileStat | null {
+  return stats?.isFile() ? { ...fileEntry, size: stats.size } : null;
+}
+
+function compactCollectedFileStats(
+  fileStats: Array<CollectedFileStat | null>,
+): CollectedFileStat[] {
+  return fileStats.flatMap((fileStat) => (fileStat ? [fileStat] : []));
+}
+
+async function shouldIgnoreEnsureDirectoryError(
+  directoryPath: string,
+  error: unknown,
+): Promise<boolean> {
+  const errorCode = (error as NodeJS.ErrnoException).code;
+  return (
+    (errorCode === "EEXIST" || errorCode === "EINVAL") &&
+    (await isUsableDirectoryPath(directoryPath))
+  );
+}
+
 async function isUsableDirectoryPath(directoryPath: string): Promise<boolean> {
   try {
     const entry = await lstat(directoryPath);
@@ -558,7 +594,7 @@ function isFileNotFoundError(error: unknown): boolean {
  * Provides to posix path for the lifecycle pipeline.
  */
 export function toPosixPath(filePath: string): string {
-  return filePath.split(sep).join("/");
+  return filePath.replace(/\\/gu, "/").split(sep).join("/");
 }
 
 /**
@@ -679,8 +715,7 @@ async function collectFilesFromDirectory(
 
   const entries = await readdir(directoryPath, { withFileTypes: true });
   const collectedFiles: string[] = [];
-  const fileEntries: Array<{ entryPath: string; relativeEntryPath: string }> =
-    [];
+  const fileEntries: PendingFileEntry[] = [];
   const directoryEntries: Array<{ entryPath: string }> = [];
 
   for (const entry of entries) {
@@ -722,27 +757,22 @@ async function collectFilesFromDirectory(
     }
   }
 
-  const fileStats = await mapWithConcurrency(
-    fileEntries,
-    FILE_STAT_CONCURRENCY,
-    async (fileEntry) => {
-      if (telemetry.truncated) {
-        return null;
-      }
+  const fileStats = compactCollectedFileStats(
+    await mapWithConcurrency(
+      fileEntries,
+      FILE_STAT_CONCURRENCY,
+      async (fileEntry) => {
+        if (telemetry.truncated) {
+          return null;
+        }
 
-      const stats = await lstat(fileEntry.entryPath).catch(() => null);
-      return stats?.isFile() ? { ...fileEntry, size: stats.size } : null;
-    },
+        const stats = await lstat(fileEntry.entryPath).catch(() => null);
+        return toCollectedFileStat(fileEntry, stats);
+      },
+    ),
   );
 
   for (const fileStat of fileStats) {
-    if (telemetry.truncated) {
-      break;
-    }
-    if (fileStat === null) {
-      continue;
-    }
-
     telemetry.visitedFiles += 1;
     telemetry.visitedBytes += fileStat.size;
 
@@ -960,3 +990,17 @@ function globPatternToRegExp(pattern: string): RegExp {
 
   return new RegExp(`${expression}$`, "u");
 }
+
+/**
+ * Exposes narrow file-module internals for focused behavioral coverage.
+ */
+export const filesInternals = {
+  shouldIgnoreEnsureDirectoryError,
+  isUsableDirectoryPath,
+  getDirectorySymlinkType,
+  getErrorMessage,
+  collectFilesFromDirectory,
+  globPatternToRegExp,
+  compactCollectedFileStats,
+  toCollectedFileStat,
+};

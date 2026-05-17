@@ -49,6 +49,16 @@ export interface FetchWithGuardsOptions {
 }
 
 const DEFAULT_FETCH = globalThis.fetch;
+type HttpsRequest = typeof request;
+let httpsRequest: HttpsRequest = request;
+
+function setHttpsRequestForTests(nextRequest: HttpsRequest): () => void {
+  const previousRequest = httpsRequest;
+  httpsRequest = nextRequest;
+  return () => {
+    httpsRequest = previousRequest;
+  };
+}
 
 /**
  * Performs an HTTP(S) fetch with a timeout. Origin allowlists are enforced by
@@ -401,7 +411,7 @@ async function requestWithPinnedAddress(
   const pinnedLookup = createPinnedLookup(address);
 
   return new Promise((resolve, reject) => {
-    const requestMessage = request(
+    const requestMessage = httpsRequest(
       parsedUrl,
       {
         headers,
@@ -413,7 +423,7 @@ async function requestWithPinnedAddress(
         resolve(
           new Response(Readable.toWeb(responseMessage) as ReadableStream, {
             headers: buildResponseHeaders(responseMessage.headers),
-            status: responseMessage.statusCode ?? 0,
+            status: responseMessage.statusCode ?? 502,
             statusText: responseMessage.statusMessage,
           }),
         );
@@ -519,6 +529,12 @@ async function resolveHostnameWithDns(
   hostname: string,
 ): Promise<ResolvedHostnameAddress[]> {
   const addresses = await lookup(hostname, { all: true, verbatim: true });
+  return normalizeResolvedHostnameAddresses(addresses);
+}
+
+function normalizeResolvedHostnameAddresses(
+  addresses: readonly { address: string; family: number }[],
+): ResolvedHostnameAddress[] {
   return addresses.flatMap((address) =>
     address.family === 4 || address.family === 6
       ? [{ address: address.address, family: address.family }]
@@ -581,7 +597,7 @@ function isPrivateIpv6Address(hostname: string): boolean {
     );
   }
 
-  const firstGroup = normalizedHostname.split(":")[0] ?? "";
+  const firstGroup = normalizedHostname.split(":")[0]!;
   const firstGroupValue = Number.parseInt(firstGroup, 16);
 
   return (
@@ -742,3 +758,18 @@ function concatenateChunks(
 
   return output;
 }
+
+/**
+ * Exposes narrow HTTP internals for focused behavioral coverage.
+ */
+export const httpInternals = {
+  fetchWithPinnedResolution,
+  requestWithPinnedAddress,
+  serializeRequestBody,
+  buildResponseHeaders,
+  isPrivateIpv4Address,
+  isPrivateIpv6Address,
+  withBodyReadTimeout,
+  setHttpsRequestForTests,
+  normalizeResolvedHostnameAddresses,
+};

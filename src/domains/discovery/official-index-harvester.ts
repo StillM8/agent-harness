@@ -6,7 +6,6 @@ import type {
   CompatibilityMode,
   DemandProfile,
   HostTarget,
-  SelectionRegistry,
 } from "../../types.js";
 import { getRuntimeConfig } from "../../config/runtime.js";
 import { readJsonFileOrNull } from "../../files.js";
@@ -20,7 +19,6 @@ import {
   computeHostFit,
   computePortfolioFit,
   computeTrustScore,
-  findDuplicateGroup,
   GENERIC_CAPABILITY_TOKENS,
   splitIntoKeywords,
   uniqueStrings,
@@ -54,7 +52,6 @@ const OFFICIAL_INDEX_ALLOWED_ORIGINS = [
 export async function harvestOfficialSkillIndexes(
   projectRoot: string,
   demandProfile: DemandProfile | null,
-  selectionRegistry: SelectionRegistry,
 ): Promise<AssetCatalogEntry[]> {
   const indexConfigPath = join(
     projectRoot,
@@ -87,15 +84,13 @@ export async function harvestOfficialSkillIndexes(
     for (const parsedEntry of parseOfficialIndexEntries(
       content,
       demandProfile,
-      selectionRegistry,
     )) {
       const sourceIdParts = parsedEntry.source.sourceId.split(":");
-      const owner = sourceIdParts[1];
-      const manifestEntry = parsedEntry.install.manifestEntry;
-      const officialRepoUrl =
-        owner && manifestEntry
-          ? officialSkillRepoUrlsByOwnerAndSlug.get(`${owner}:${manifestEntry}`)
-          : undefined;
+      const owner = sourceIdParts[1]!;
+      const manifestEntry = parsedEntry.install.manifestEntry!;
+      const officialRepoUrl = officialSkillRepoUrlsByOwnerAndSlug.get(
+        `${owner}:${manifestEntry}`,
+      );
       const entry = officialRepoUrl
         ? {
             ...parsedEntry,
@@ -113,18 +108,16 @@ export async function harvestOfficialSkillIndexes(
       seenIds.add(entry.id);
       entries.push(entry);
 
-      if (owner && manifestEntry) {
-        const resolvedRepoSource = await resolveOfficialIndexEntryToRepoSource(
-          owner,
-          manifestEntry,
-          entry,
-          projectRoot,
-          officialRepoUrl,
-        );
-        if (resolvedRepoSource && !seenIds.has(resolvedRepoSource.id)) {
-          seenIds.add(resolvedRepoSource.id);
-          entries.push(resolvedRepoSource);
-        }
+      const resolvedRepoSource = await resolveOfficialIndexEntryToRepoSource(
+        owner,
+        manifestEntry,
+        entry,
+        projectRoot,
+        officialRepoUrl,
+      );
+      if (resolvedRepoSource && !seenIds.has(resolvedRepoSource.id)) {
+        seenIds.add(resolvedRepoSource.id);
+        entries.push(resolvedRepoSource);
       }
     }
   }
@@ -156,7 +149,6 @@ function buildOfficialIndexHeaders(): HeadersInit {
 function parseOfficialIndexEntries(
   content: string,
   demandProfile: DemandProfile | null,
-  selectionRegistry: SelectionRegistry,
 ): AssetCatalogEntry[] {
   const matches = [
     ...content.matchAll(
@@ -166,11 +158,11 @@ function parseOfficialIndexEntries(
   const entries: AssetCatalogEntry[] = [];
 
   for (const match of matches) {
-    const displayName = match[1]?.trim();
-    const originUrl = match[2]?.trim();
-    const owner = match[3]?.trim();
-    const slug = match[4]?.trim();
-    const description = match[5]?.trim() ?? "";
+    const displayName = match[1]!.trim();
+    const originUrl = match[2]!.trim();
+    const owner = match[3]!.trim();
+    const slug = match[4]!.trim();
+    const description = match[5]!.trim();
 
     if (!displayName || !originUrl || !owner || !slug) {
       continue;
@@ -256,9 +248,7 @@ function parseOfficialIndexEntries(
         hostFit: computeHostFit(hosts, compatibilityMode),
       },
       dedupe: {
-        duplicateGroup:
-          buildOfficialIndexDuplicateGroup(owner, slug) ??
-          findDuplicateGroup(capabilities, selectionRegistry),
+        duplicateGroup: buildOfficialIndexDuplicateGroup(owner, slug),
         candidateRankHint: buildCandidateRankHint(authorityTier),
       },
       status: buildOfficialIndexAssetStatus(authorityTier),
@@ -323,11 +313,11 @@ function normalizeGitHubRepoIdentity(
     );
   const match = httpsMatch ?? scpMatch ?? sshMatch;
 
-  if (!match?.[1] || !match[2]) {
+  if (!match) {
     return null;
   }
 
-  return `${match[1]}/${match[2].replace(/\.git$/iu, "")}`.toLowerCase();
+  return `${match[1]!}/${match[2]!.replace(/\.git$/iu, "")}`.toLowerCase();
 }
 
 function isOfficialIndexOwner(owner: string): boolean {
@@ -408,7 +398,7 @@ async function resolveOfficialIndexEntryToRepoSource(
       authorityTier: matchingSource.authorityTier,
       sourceKind: matchingSource.kind,
       sourcePriority: matchingSource.priority,
-      originUrl: matchingSource.endpoints.repo ?? entry.source.originUrl,
+      originUrl: matchingSource.endpoints.repo!,
       publisher: matchingSource.publisher?.name ?? entry.source.publisher,
       publisherVerified:
         matchingSource.publisher?.verified ?? entry.source.publisherVerified,
@@ -437,7 +427,7 @@ async function resolveOfficialIndexEntryToRepoSource(
     },
     evidence: {
       ...entry.evidence,
-      rootPath: matchingSource.endpoints.repo ?? entry.evidence.rootPath,
+      rootPath: matchingSource.endpoints.repo!,
     },
     maintenance: {
       ...entry.maintenance,
@@ -488,13 +478,14 @@ function extractOfficialSkillRepoUrls(
       continue;
     }
 
-    const officialOwner = officialEntryMatch[1].trim().toLowerCase();
-    const slug = officialEntryMatch[2]
+    const officialOwner = officialEntryMatch[1]!.trim().toLowerCase();
+    const slug = officialEntryMatch[2]!
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9-]+/gu, "-")
       .replace(/^-+|-+$/gu, "");
-    const repoOwner = repoMatch[1].split("/")[0]?.toLowerCase();
+    const repoIdentity = repoMatch[1]!;
+    const repoOwner = repoIdentity.split("/")[0]!.toLowerCase();
     if (
       !repoOwner ||
       !isAllowedOfficialRepoOwner(officialOwner, repoOwner, allowlist)
@@ -504,7 +495,7 @@ function extractOfficialSkillRepoUrls(
 
     repoUrls.set(
       `${officialOwner}:${slug}`,
-      `https://github.com/${repoMatch[1]}`,
+      `https://github.com/${repoIdentity}`,
     );
   }
 

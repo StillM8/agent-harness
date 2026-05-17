@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, win32 } from "node:path";
 
 import { getRuntimeConfig } from "../config/runtime.js";
 import type {
@@ -276,24 +276,47 @@ export async function checkExecutableOnPath(
 /**
  * Searches PATH for an executable, honoring PATHEXT on Windows.
  */
+interface FindExecutableOptions {
+  accessPath?: typeof access;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+}
+
+function getExecutableSearchExtensions(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  return platform === "win32"
+    ? (env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+        .split(";")
+        .filter((entry) => entry.length > 0)
+    : [""];
+}
+
+function getExecutableAccessMode(platform: NodeJS.Platform): number {
+  return platform === "win32" ? constants.F_OK : constants.X_OK;
+}
+
 async function findExecutableOnPath(
   executableName: string,
+  options: FindExecutableOptions = {},
 ): Promise<string | null> {
-  const pathEntries = (process.env.PATH ?? "")
-    .split(delimiter)
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const accessPath = options.accessPath ?? access;
+  const pathDelimiter = platform === "win32" ? win32.delimiter : delimiter;
+  const joinPath = platform === "win32" ? win32.join : join;
+  const pathEntries = (env.PATH ?? "")
+    .split(pathDelimiter)
     .filter((entry) => entry.length > 0);
-  const extensions =
-    process.platform === "win32"
-      ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
-          .split(";")
-          .filter((entry) => entry.length > 0)
-      : [""];
+  const extensions = getExecutableSearchExtensions(platform, env);
+  const accessMode = getExecutableAccessMode(platform);
 
   for (const pathEntry of pathEntries) {
     for (const extension of extensions) {
-      const candidate = join(pathEntry, `${executableName}${extension}`);
+      const candidate = joinPath(pathEntry, `${executableName}${extension}`);
       try {
-        await access(candidate, constants.X_OK);
+        await accessPath(candidate, accessMode);
         return candidate;
       } catch {
         continue;
@@ -341,41 +364,20 @@ async function runRuntimeCommand(
   args: string[],
 ): Promise<{ exitCode: number | null; message: string }> {
   const timeoutMs = getRuntimeConfig().hostCommands.preflightTimeoutMs;
-  const resolvedExecutable =
-    process.platform === "win32"
-      ? ((await findExecutableOnPath(executable)) ?? executable)
-      : executable;
-  const isWindowsShellWrapper =
-    process.platform === "win32" && /\.(?:cmd|bat)$/iu.test(resolvedExecutable);
+  const resolvedExecutable = await resolveRuntimeExecutable(executable);
+  const spawnSpec = buildRuntimeCommandSpawnSpec({
+    args,
+    executable,
+    platform: process.platform,
+    resolvedExecutable,
+  });
 
   return new Promise((resolve) => {
-    const child = isWindowsShellWrapper
-      ? spawn(
-          // We intentionally avoid `shell: true` here because Windows wrapper
-          // paths with spaces (notably VS Code's `code.cmd`) were misparsed
-          // during real-host validation. PowerShell preserves the executable
-          // path and argv boundaries while still invoking `.cmd` / `.bat`
-          // wrappers reliably.
-          "powershell.exe",
-          [
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            buildWindowsPowerShellCommand(executable, args),
-          ],
-          {
-            shell: false,
-            stdio: ["ignore", "ignore", "pipe"],
-            windowsHide: true,
-          },
-        )
-      : spawn(resolvedExecutable, args, {
-          shell: false,
-          stdio: ["ignore", "ignore", "pipe"],
-          windowsHide: true,
-        });
+    const child = spawn(spawnSpec.executable, spawnSpec.args, {
+      shell: false,
+      stdio: ["ignore", "ignore", "pipe"],
+      windowsHide: true,
+    });
     let settled = false;
     let stderr = "";
     const finish = (exitCode: number | null, message: string): void => {
@@ -401,6 +403,66 @@ async function runRuntimeCommand(
       finish(exitCode, stderr.trim() || `exit code ${String(exitCode)}`);
     });
   });
+}
+
+async function resolveRuntimeExecutable(
+  executable: string,
+  platform: NodeJS.Platform = process.platform,
+  findExecutable: typeof findExecutableOnPath = findExecutableOnPath,
+): Promise<string> {
+  if (platform !== "win32") {
+    return executable;
+  }
+
+  return resolveFoundExecutable(
+    executable,
+    await findExecutable(executable, { platform }),
+  );
+}
+
+function resolveFoundExecutable(
+  executable: string,
+  foundExecutable: string | null,
+): string {
+  return foundExecutable ?? executable;
+}
+
+interface RuntimeCommandSpawnSpecOptions {
+  executable: string;
+  args: string[];
+  resolvedExecutable: string;
+  platform?: NodeJS.Platform;
+}
+
+function buildRuntimeCommandSpawnSpec(
+  options: RuntimeCommandSpawnSpecOptions,
+): { executable: string; args: string[] } {
+  const platform = options.platform ?? process.platform;
+  const isWindowsShellWrapper =
+    platform === "win32" && /\.(?:cmd|bat)$/iu.test(options.resolvedExecutable);
+
+  if (!isWindowsShellWrapper) {
+    return {
+      executable: options.resolvedExecutable,
+      args: options.args,
+    };
+  }
+
+  // We intentionally avoid `shell: true` here because Windows wrapper paths
+  // with spaces (notably VS Code's `code.cmd`) were misparsed during real-host
+  // validation. PowerShell preserves the executable path and argv boundaries
+  // while still invoking `.cmd` / `.bat` wrappers reliably.
+  return {
+    executable: "powershell.exe",
+    args: [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      buildWindowsPowerShellCommand(options.executable, options.args),
+    ],
+  };
 }
 
 function buildWindowsPowerShellCommand(
@@ -452,3 +514,17 @@ export async function checkPathExists(
     };
   }
 }
+
+/**
+ * Exposes focused preflight helpers for deterministic platform-branch tests.
+ */
+export const preflightInternals = {
+  buildRuntimeCommandSpawnSpec,
+  buildWindowsPowerShellCommand,
+  findExecutableOnPath,
+  getExecutableAccessMode,
+  getExecutableSearchExtensions,
+  quotePowerShellLiteral,
+  resolveFoundExecutable,
+  resolveRuntimeExecutable,
+};

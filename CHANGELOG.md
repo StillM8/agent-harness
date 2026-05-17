@@ -4,7 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- coverage hardening roadmap and reproducible `coverage:gaps` reporting for #207, plus broad behavioral tests across recommendation, discovery, host-adapter, install, mirror, GitHub, HTTP, release-script, manifest-validation, and utility edge paths
+- branch-residual coverage suites for AI enrichment, discovery harvesters, recommendation review/policy/selection, host wiring, install refresh, mirror acquisition, HTTP/preflight utilities, and source-sync helpers, raising the latest verified local run to 100% statements, branches, functions, and lines
+- native-host recommendation fixture coverage for Cursor, Zed, Claude Code, and Pi defaults for #208
+- demand-detection coverage matrix, targeted stack/vertical signatures, and false-positive fixtures for monorepos, serverless/edge, cross-platform mobile, AI-agent frameworks, commerce/CMS, workflow orchestration, desktop, infrastructure, and related project types for #209
+- scenario-based recommendation-limit scaling guidance and copy-paste `preserve` / `scale` examples for #210
+
+### Changed
+
+- default workspace troubleshooting docs now include a diagnostic ladder, artifact checklist, anti-vibes evidence requirements, and clearer playbook handoffs for #211
+- coverage thresholds were raised to the verified 100% release floor while keeping runtime exclusions narrow instead of masking uncovered code
+- recommendation policy maps now recognize the newly emitted demand/stack terms so detection, policy quality, and recommendation validation stay aligned
+
+### Fixed
+
+- improved release synchronization, version-check, GitHub resilience, guarded HTTP, path/file, native wire, install refresh, mirror acquisition, and recommendation validation regression coverage with deterministic tests
 
 ## [1.0.7] - 2026-05-14
 

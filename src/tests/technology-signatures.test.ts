@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createEmptySignalSet } from "../domains/discovery/signals.js";
-import { applyTechnologySignatures } from "../domains/discovery/technology-signatures.js";
+import {
+  applyTechnologySignatures,
+  TECHNOLOGY_SIGNATURES,
+} from "../domains/discovery/technology-signatures.js";
 
 void test("technology signatures detect third-party vendors without bespoke code paths", () => {
   const signals = createEmptySignalSet();
@@ -176,6 +179,54 @@ void test("technology signatures avoid over-classifying common technical package
   assert.ok(!signals.concerns.includes("data-mining"));
 });
 
+void test("technology signatures detect modern workspace platforms", () => {
+  const signals = createEmptySignalSet();
+
+  applyTechnologySignatures(signals, {
+    dependencyNames: [
+      "nx",
+      "wrangler",
+      "react-native",
+      "expo",
+      "mastra",
+      "@shopify/shopify-api",
+      "@temporalio/client",
+      "electron",
+    ],
+    ecosystem: "npm",
+    text: "cloudflare workers vercel edge ai agent workflow orchestration desktop app",
+  });
+
+  assert.ok(signals.concerns.includes("monorepo"));
+  assert.ok(signals.concerns.includes("build-orchestration"));
+  assert.ok(signals.concerns.includes("serverless"));
+  assert.ok(signals.concerns.includes("edge"));
+  assert.ok(signals.concerns.includes("mobile"));
+  assert.ok(signals.concerns.includes("ai-agent"));
+  assert.ok(signals.concerns.includes("commerce"));
+  assert.ok(signals.concerns.includes("workflow-orchestration"));
+  assert.ok(signals.concerns.includes("desktop"));
+  assert.ok(signals.tooling.includes("cloudflare"));
+  assert.ok(signals.tooling.includes("react-native"));
+  assert.ok(signals.tooling.includes("shopify"));
+  assert.ok(signals.tooling.includes("temporal"));
+});
+
+void test("technology signatures reuse delimited text marker patterns across calls", () => {
+  const firstSignals = createEmptySignalSet();
+  const secondSignals = createEmptySignalSet();
+
+  applyTechnologySignatures(firstSignals, {
+    text: "apify actor webhook-debugger-logger pipeline",
+  });
+  applyTechnologySignatures(secondSignals, {
+    text: "another webhook-debugger-logger automation",
+  });
+
+  assert.ok(firstSignals.frameworks.includes("apify"));
+  assert.ok(secondSignals.frameworks.includes("apify"));
+});
+
 void test("technology signatures detect MLOps, creative, security, and content stacks", () => {
   const signals = createEmptySignalSet();
 
@@ -202,4 +253,29 @@ void test("technology signatures detect MLOps, creative, security, and content s
   assert.ok(signals.concerns.includes("malware-analysis"));
   assert.ok(signals.concerns.includes("content-marketing"));
   assert.ok(signals.concerns.includes("video-production"));
+});
+
+void test("technology signatures ignore blank text markers and tolerate sparse signal groups", () => {
+  const signals = createEmptySignalSet();
+  const signature = {
+    id: "test-blank-marker",
+    textMarkers: ["   "],
+    signals: { tooling: ["blank-marker-ignored"] },
+  } satisfies (typeof TECHNOLOGY_SIGNATURES)[number];
+  const sparseSignalSignature = {
+    id: "test-sparse-signals",
+    textMarkers: ["sparse-platform"],
+    signals: { tooling: ["sparse-platform"] },
+  } satisfies (typeof TECHNOLOGY_SIGNATURES)[number];
+
+  TECHNOLOGY_SIGNATURES.push(signature, sparseSignalSignature);
+  try {
+    applyTechnologySignatures(signals, { text: "anything sparse-platform" });
+  } finally {
+    TECHNOLOGY_SIGNATURES.pop();
+    TECHNOLOGY_SIGNATURES.pop();
+  }
+
+  assert.deepEqual(signals.tooling, ["sparse-platform"]);
+  assert.deepEqual(signals.concerns, []);
 });

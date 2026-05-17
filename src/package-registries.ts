@@ -142,7 +142,10 @@ export async function fetchPypiPackageMetadata(
   }
 }
 
-function normalizeNpmPackageSearchResults(
+/**
+ * Normalizes npm search API responses into package search result records.
+ */
+export function normalizeNpmPackageSearchResults(
   data: unknown,
 ): NpmPackageSearchResult[] {
   if (!isRecord(data) || !Array.isArray(data.objects)) {
@@ -176,7 +179,10 @@ function normalizeNpmPackageSearchResults(
   });
 }
 
-function normalizeNpmPackageMetadata(
+/**
+ * Normalizes npm package metadata responses for discovery scoring.
+ */
+export function normalizeNpmPackageMetadata(
   data: Record<string, unknown>,
   packageName: string,
 ): NpmPackageMetadata {
@@ -188,9 +194,7 @@ function normalizeNpmPackageMetadata(
     repository: normalizeNpmRepository(data.repository),
     distTags: normalizeStringRecord(data["dist-tags"]),
     keywords: Array.isArray(data.keywords)
-      ? data.keywords.filter(
-          (value): value is string => typeof value === "string",
-        )
+      ? normalizeStringArray(data.keywords)
       : undefined,
     versions: isRecord(data.versions) ? data.versions : undefined,
     lastUpdated: normalizeStringRecord(data.time)?.modified,
@@ -217,7 +221,10 @@ function normalizeNpmRepository(
     : undefined;
 }
 
-function normalizePypiPackageMetadata(
+/**
+ * Normalizes PyPI package metadata responses for discovery scoring.
+ */
+export function normalizePypiPackageMetadata(
   data: unknown,
   packageName: string,
 ): PypiPackageMetadata | null {
@@ -388,7 +395,10 @@ function isGitHubRepositoryUrl(value: string): boolean {
   }
 }
 
-function sanitizeRepositoryUrl(value: string): string {
+/**
+ * Sanitizes package registry repository URL values into HTTPS GitHub URLs when possible.
+ */
+export function sanitizeRepositoryUrl(value: string): string {
   const trimmedValue = stripUrlSuffix(value.trim());
   const githubShorthand = /^github:([^/\s]+)\/(.+)$/iu.exec(trimmedValue);
   if (githubShorthand?.[1] && githubShorthand[2]) {
@@ -438,5 +448,16 @@ function buildGitHubRepositoryUrl(owner: string, repo: string): string {
 }
 
 function stripUrlSuffix(value: string): string {
-  return value.split(/[?#]/u)[0] ?? value;
+  return value.split(/[?#]/u)[0] as string;
 }
+
+/**
+ * Exposes narrow package-registry internals for focused behavioral coverage.
+ */
+export const packageRegistryInternals = {
+  normalizeStringArray,
+  normalizeStringRecord,
+  isGitHubRepositoryUrl,
+  buildGitHubRepositoryUrl,
+  stripUrlSuffix,
+};
