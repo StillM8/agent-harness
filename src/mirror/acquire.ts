@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
+import { access, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { getRuntimeConfig } from "../config/runtime.js";
@@ -165,6 +167,13 @@ export async function acquireMirrorArtifacts(
     existingMirrorIndexEntries.map((entry) => [entry.assetId, entry.mirrorId]),
   );
   const fullRefreshRequested = refreshRequested && refreshAssetIds.size === 0;
+  const staleMirrorAssetIds = fullRefreshRequested
+    ? new Set<string>()
+    : await findAssetIdsMissingMirrorManifests(
+        projectRoot,
+        existingMirrorIndexEntries,
+        mirrorEligibleAssetIds,
+      );
   const refreshProcessedCount = fullRefreshRequested
     ? restoreRefreshProcessedCount(
         previousAcquireState,
@@ -175,7 +184,9 @@ export async function acquireMirrorArtifacts(
     ? mirrorEligibleEntries.slice(refreshProcessedCount)
     : mirrorEligibleEntries.filter((entry) => {
         const shouldRefreshEntry =
-          refreshRequested || refreshAssetIds.has(entry.id);
+          refreshRequested ||
+          refreshAssetIds.has(entry.id) ||
+          staleMirrorAssetIds.has(entry.id);
 
         if (shouldRefreshEntry) {
           return true;
@@ -1054,6 +1065,33 @@ async function readPersistedSkippedAssets(
   };
 }
 
+async function findAssetIdsMissingMirrorManifests(
+  projectRoot: string,
+  mirrorIndexEntries: MirrorIndexEntry[],
+  eligibleAssetIds: Set<string>,
+): Promise<Set<string>> {
+  const assetIds = new Set<string>();
+
+  for (const entry of mirrorIndexEntries) {
+    if (!eligibleAssetIds.has(entry.assetId)) {
+      continue;
+    }
+
+    const manifestPath = join(
+      projectRoot,
+      "mirror",
+      "raw",
+      sanitizeMirrorId(entry.mirrorId),
+      "manifest.json",
+    );
+    if (!(await pathLooksReadable(manifestPath))) {
+      assetIds.add(entry.assetId);
+    }
+  }
+
+  return assetIds;
+}
+
 function buildSortedReasonRecord(
   reasons: Map<string, string>,
 ): Record<string, string> {
@@ -1115,8 +1153,15 @@ function buildGitHubCachePath(
 }
 
 async function pathLooksReadable(filePath: string): Promise<boolean> {
-  return readTextFileOrNull(filePath)
-    .then((content) => content !== null)
+  return stat(filePath)
+    .then(async (stats) => {
+      if (!stats.isFile()) {
+        return false;
+      }
+
+      await access(filePath, fsConstants.R_OK);
+      return true;
+    })
     .catch(() => false);
 }
 
@@ -1143,6 +1188,7 @@ export const mirrorAcquireInternals = {
   normalizePromptInjectionText,
   createGitBlobSha,
   isGitBlobSha,
+  findAssetIdsMissingMirrorManifests,
   buildSortedReasonRecord,
   mergeMirrorIndexEntries,
   buildGitHubCachePath,
