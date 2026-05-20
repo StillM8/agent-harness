@@ -212,6 +212,42 @@ void test("technology signatures detect modern workspace platforms", () => {
   assert.ok(signals.tooling.includes("temporal"));
 });
 
+void test("technology signatures detect Penpot MRDS design-source evidence", () => {
+  const signals = createEmptySignalSet();
+
+  applyTechnologySignatures(signals, {
+    dependencyNames: ["@penpot/mcp", "style-dictionary"],
+    ecosystem: "npm",
+    text: "Penpot MRDS is the machine-readable design system and canonical design-source for frontend design work.",
+  });
+
+  assert.ok(signals.concerns.includes("design-systems"));
+  assert.ok(signals.concerns.includes("design-source"));
+  assert.ok(signals.concerns.includes("design-mcp"));
+  assert.ok(signals.concerns.includes("frontend-design"));
+  assert.ok(signals.concerns.includes("penpot"));
+  assert.ok(signals.concerns.includes("penpot-mrds"));
+  assert.ok(signals.tooling.includes("design-system"));
+});
+
+void test("technology signatures keep generic design-system evidence separate from Penpot", () => {
+  const signals = createEmptySignalSet();
+
+  applyTechnologySignatures(signals, {
+    dependencyNames: ["style-dictionary"],
+    ecosystem: "npm",
+    text: "design tokens style dictionary",
+  });
+
+  assert.ok(signals.concerns.includes("design-systems"));
+  assert.ok(signals.concerns.includes("design-source"));
+  assert.ok(!signals.concerns.includes("design-mcp"));
+  assert.ok(!signals.concerns.includes("penpot"));
+  assert.ok(!signals.concerns.includes("penpot-mrds"));
+  assert.ok(!signals.tooling.includes("penpot"));
+  assert.ok(!signals.tooling.includes("penpot-mcp"));
+});
+
 void test("technology signatures reuse delimited text marker patterns across calls", () => {
   const firstSignals = createEmptySignalSet();
   const secondSignals = createEmptySignalSet();

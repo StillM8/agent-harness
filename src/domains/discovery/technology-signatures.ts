@@ -1294,11 +1294,40 @@ export const TECHNOLOGY_SIGNATURES: TechnologySignature[] = [
     },
     textMarkers: [
       "design tokens",
+      "design-source",
       "figma plugin",
+      "machine-readable design system",
       "style dictionary",
       "design system",
     ],
-    signals: { concerns: ["design-systems", "design-assets", "frontend"] },
+    signals: {
+      concerns: [
+        "design-systems",
+        "design-assets",
+        "frontend",
+        "frontend-design",
+        "design-source",
+      ],
+      tooling: ["design-system"],
+    },
+  },
+  {
+    id: "penpot-mrds",
+    packages: { npm: ["@penpot/mcp"] },
+    textMarkers: ["penpot", "penpot mcp", "penpot mrds"],
+    signals: {
+      concerns: [
+        "design-systems",
+        "design-assets",
+        "frontend",
+        "frontend-design",
+        "design-source",
+        "design-mcp",
+        "penpot",
+        "penpot-mrds",
+      ],
+      tooling: ["design-system", "penpot", "penpot-mcp"],
+    },
   },
   {
     id: "cad-manufacturing",

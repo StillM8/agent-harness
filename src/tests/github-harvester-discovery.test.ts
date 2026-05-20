@@ -136,6 +136,216 @@ void test("github harvester classifies repository artifacts and carries reposito
   );
 });
 
+void test("github harvester classifies Penpot MCP package server sources", async (context) => {
+  const projectRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-github-harvester-"),
+  );
+  const originalFetch = globalThis.fetch;
+  const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+
+  globalThis.fetch = async (input) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+    if (url === "https://api.github.com/repos/penpot/penpot") {
+      return jsonResponse({
+        name: "penpot",
+        full_name: "penpot/penpot",
+        description: "Penpot open-source design tool with MCP server",
+        default_branch: "main",
+        updated_at: "2026-05-15T00:00:00.000Z",
+        pushed_at: "2026-05-15T00:00:00.000Z",
+        stargazers_count: 45000,
+        language: "TypeScript",
+        topics: ["penpot", "design", "mcp"],
+        archived: false,
+        html_url: "https://github.com/penpot/penpot",
+      });
+    }
+
+    if (
+      url ===
+      "https://api.github.com/repos/penpot/penpot/git/trees/main?recursive=1"
+    ) {
+      return jsonResponse({
+        sha: "tree-sha",
+        truncated: false,
+        tree: [
+          { path: "mcp/packages/server/src/index.ts", type: "blob", sha: "1" },
+          {
+            path: "mcp/packages/serverish/src/index.ts",
+            type: "blob",
+            sha: "6",
+          },
+          { path: "mcp/packages/plugin/src/plugin.ts", type: "blob", sha: "2" },
+          { path: "mcp/README.md", type: "blob", sha: "3" },
+          { path: "docs/mcp/index.md", type: "blob", sha: "5" },
+          { path: "docs/mcpx/example.md", type: "blob", sha: "7" },
+          {
+            path: ".opencode/skills/internal/SKILL.md",
+            type: "blob",
+            sha: "4",
+          },
+        ],
+      });
+    }
+
+    if (url === "https://api.github.com/repos/penpot/penpot/readme") {
+      return jsonResponse({
+        path: "README.md",
+        sha: "readme-sha",
+        size: 120,
+        html_url: "https://github.com/penpot/penpot/blob/main/README.md",
+        download_url:
+          "https://raw.githubusercontent.com/penpot/penpot/main/README.md",
+      });
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  context.after(async () => {
+    globalThis.fetch = originalFetch;
+    if (previousFetchMockFlag === undefined) {
+      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+    } else {
+      process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = previousFetchMockFlag;
+    }
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const entries = await harvestGitHubRepoSource(
+    {
+      ...buildSource(),
+      id: "penpot-mcp-pack",
+      authorityTier: "official-first-party",
+      publisher: { name: "Penpot", verified: true, owner: "penpot" },
+      hosts: ["opencode", "shared"],
+      assetKinds: ["mcp-server", "reference-pack"],
+      includePaths: [
+        "/mcp/README.md",
+        " ./mcp/packages/server/** ",
+        "docs\\mcp\\**",
+      ],
+      excludePaths: ["/mcp/packages/plugin/**"],
+      mcpServerPaths: ["mcp/packages/server/src/**"],
+      endpoints: { repo: "https://github.com/penpot/penpot" },
+    },
+    null,
+    buildSelectionRegistry(),
+    projectRoot,
+  );
+  const byPath = new Map(
+    entries.map((entry) => [entry.install.relativePath, entry]),
+  );
+
+  assert.equal(
+    byPath.get("mcp/packages/server/src/index.ts")?.assetKind,
+    "mcp-server",
+  );
+  assert.deepEqual(byPath.get("mcp/packages/server/src/index.ts")?.hosts, [
+    "shared",
+  ]);
+  assert.equal(byPath.get("mcp/README.md")?.assetKind, "reference-pack");
+  assert.equal(byPath.get("docs/mcp/index.md")?.assetKind, "reference-pack");
+  assert.equal(byPath.has("mcp/packages/serverish/src/index.ts"), false);
+  assert.equal(byPath.has("docs/mcpx/example.md"), false);
+  assert.equal(byPath.has("mcp/packages/plugin/src/plugin.ts"), false);
+  assert.equal(byPath.has(".opencode/skills/internal/SKILL.md"), false);
+});
+
+void test("github harvester does not treat generic mcp package server directories as MCP servers", async (context) => {
+  const projectRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-github-harvester-"),
+  );
+  const originalFetch = globalThis.fetch;
+  const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+
+  globalThis.fetch = async (input) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+    if (url === "https://api.github.com/repos/acme/monorepo") {
+      return jsonResponse({
+        name: "monorepo",
+        full_name: "acme/monorepo",
+        description: "Generic monorepo",
+        default_branch: "main",
+        updated_at: "2026-05-15T00:00:00.000Z",
+        pushed_at: "2026-05-15T00:00:00.000Z",
+        stargazers_count: 100,
+        language: "TypeScript",
+        topics: ["typescript"],
+        archived: false,
+        html_url: "https://github.com/acme/monorepo",
+      });
+    }
+
+    if (
+      url ===
+      "https://api.github.com/repos/acme/monorepo/git/trees/main?recursive=1"
+    ) {
+      return jsonResponse({
+        sha: "tree-sha",
+        truncated: false,
+        tree: [
+          { path: "mcp/packages/server/src/index.ts", type: "blob", sha: "1" },
+          { path: "mcp-server/index.ts", type: "blob", sha: "2" },
+        ],
+      });
+    }
+
+    if (url === "https://api.github.com/repos/acme/monorepo/readme") {
+      return jsonResponse({
+        path: "README.md",
+        sha: "readme-sha",
+        size: 120,
+        html_url: "https://github.com/acme/monorepo/blob/main/README.md",
+        download_url:
+          "https://raw.githubusercontent.com/acme/monorepo/main/README.md",
+      });
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  context.after(async () => {
+    globalThis.fetch = originalFetch;
+    if (previousFetchMockFlag === undefined) {
+      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+    } else {
+      process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = previousFetchMockFlag;
+    }
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const entries = await harvestGitHubRepoSource(
+    {
+      ...buildSource(),
+      endpoints: { repo: "https://github.com/acme/monorepo" },
+    },
+    null,
+    buildSelectionRegistry(),
+    projectRoot,
+  );
+  const byPath = new Map(
+    entries.map((entry) => [entry.install.relativePath, entry]),
+  );
+
+  assert.equal(byPath.has("mcp/packages/server/src/index.ts"), false);
+  assert.equal(byPath.get("mcp-server/index.ts")?.assetKind, "mcp-server");
+});
+
 void test("github harvester classifies adaptable multi-host assets without publisher metadata", async (context) => {
   const projectRoot = await mkdtemp(
     join(tmpdir(), "agent-harness-github-harvester-"),

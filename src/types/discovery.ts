@@ -39,6 +39,9 @@ export interface SourceDefinition {
   enabled: boolean;
   endpoints: Record<string, string>;
   rules: SourceRules;
+  includePaths?: string[];
+  excludePaths?: string[];
+  mcpServerPaths?: string[];
 }
 
 /**

@@ -12,6 +12,7 @@ import {
   assertGitHubRepoSnapshot,
   assertSelectionReport,
   assertSourceIndex,
+  assertSourceRegistry,
 } from "../manifest-validation/discovery.js";
 import { assertAiEnrichmentReport } from "../manifest-validation.js";
 
@@ -44,6 +45,42 @@ void test("assertSelectionReport rejects missing required fields", () => {
       ),
     /selectedCount/u,
   );
+});
+
+void test("assertSourceRegistry rejects blank source path filters", () => {
+  const buildRegistry = (pathField: string) => ({
+    schemaVersion: 1,
+    sources: [
+      {
+        id: "source-a",
+        name: "Source A",
+        kind: "repo",
+        authorityTier: "trusted-community",
+        hosts: ["opencode"],
+        assetKinds: ["mcp-server"],
+        discoveryMode: "catalog",
+        priority: 60,
+        enabled: true,
+        endpoints: { repo: "https://github.com/acme/source-a" },
+        [pathField]: ["   "],
+        rules: {
+          officialPreferred: true,
+          allowMirror: false,
+          allowInstall: false,
+        },
+      },
+    ],
+  });
+
+  for (const pathField of ["includePaths", "excludePaths", "mcpServerPaths"]) {
+    assert.throws(
+      () => assertSourceRegistry(buildRegistry(pathField), "registry"),
+      new RegExp(
+        `registry\\.sources\\[0\\]\\.${pathField}\\[0\\] must not be empty`,
+        "u",
+      ),
+    );
+  }
 });
 
 void test("assertGitHubRepoSnapshot accepts a complete snapshot with readme", () => {
