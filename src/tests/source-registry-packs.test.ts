@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,10 +8,178 @@ import { writeJsonFile } from "../files.js";
 import { loadSourceRegistry } from "../domains/discovery/source-registry.js";
 import type { SelectionRegistry, SourceDefinition } from "../types.js";
 
-void test("source registry includes official Penpot MCP source pack entry", async () => {
+void test("checked-in source pack entries declare taxonomy fields", async () => {
+  for (const sourcePackPath of [
+    join(process.cwd(), "discover", "source-packs", "official.json"),
+    join(process.cwd(), "discover", "source-packs", "community.json"),
+  ]) {
+    const sourcePack = JSON.parse(await readFile(sourcePackPath, "utf8")) as {
+      entries: Array<{
+        id: string;
+        kind?: string;
+        hosts?: string[];
+        assetKinds?: string[];
+      }>;
+    };
+    const incompleteEntries = sourcePack.entries
+      .filter(
+        (entry) =>
+          !entry.kind ||
+          !entry.hosts ||
+          entry.hosts.length === 0 ||
+          !entry.assetKinds ||
+          entry.assetKinds.length === 0,
+      )
+      .map((entry) => entry.id);
+
+    assert.deepEqual(
+      incompleteEntries,
+      [],
+      `${sourcePackPath} entries should declare kind, hosts, and assetKinds`,
+    );
+  }
+});
+
+void test("source registry includes Codex community source pack entries", async () => {
+  const registry = await loadSourceRegistry(process.cwd());
+  const codexSubagents = registry.sources.find(
+    (source) => source.id === "voltagent-awesome-codex-subagents",
+  );
+  const codexPlugins = registry.sources.find(
+    (source) => source.id === "hashgraph-online-awesome-codex-plugins",
+  );
+
+  assert.ok(codexSubagents);
+  assert.deepEqual(codexSubagents?.hosts, ["codex", "opencode", "claude-code"]);
+  assert.deepEqual(codexSubagents?.assetKinds, [
+    "agent",
+    "instruction",
+    "workflow",
+    "reference-pack",
+  ]);
+
+  assert.ok(codexPlugins?.publisher);
+  assert.equal(codexPlugins.publisher.name, "Hashgraph Online");
+  assert.deepEqual(codexPlugins?.hosts, ["codex"]);
+  assert.deepEqual(codexPlugins?.assetKinds, [
+    "plugin",
+    "skill",
+    "mcp-server",
+    "hook",
+    "reference-pack",
+  ]);
+  assert.deepEqual(codexPlugins?.includePaths, [
+    "README.md",
+    "**/.codex-plugin/**",
+    "**/plugin.json",
+    "**/marketplace.json",
+    "**/SKILL.md",
+    "**/hooks.json",
+    "**/.mcp.json",
+    "**/*.md",
+  ]);
+});
+
+void test("source registry includes requested Codex-compatible source pack entries", async () => {
+  const registry = await loadSourceRegistry(process.cwd());
+  const anthropicClaudeCode = registry.sources.find(
+    (source) => source.id === "anthropics-claude-code-pack",
+  );
+  const trailOfBitsSkills = registry.sources.find(
+    (source) => source.id === "trailofbits-skills-pack",
+  );
+  const trailOfBitsConfig = registry.sources.find(
+    (source) => source.id === "trailofbits-claude-code-config",
+  );
+  const gitNexus = registry.sources.find(
+    (source) => source.id === "abhigyanpatwari-gitnexus",
+  );
+  const superpowers = registry.sources.find(
+    (source) => source.id === "obra-superpowers",
+  );
+
+  assert.ok(anthropicClaudeCode);
+  assert.equal(anthropicClaudeCode?.authorityTier, "official-first-party");
+  assert.deepEqual(anthropicClaudeCode?.hosts, [
+    "claude-code",
+    "opencode",
+    "codex",
+    "cursor",
+    "copilot-vscode",
+  ]);
+  assert.deepEqual(anthropicClaudeCode?.assetKinds, [
+    "plugin",
+    "skill",
+    "agent",
+    "instruction",
+    "workflow",
+    "hook",
+    "mcp-server",
+    "reference-pack",
+  ]);
+
+  assert.ok(trailOfBitsSkills);
+  assert.equal(trailOfBitsSkills?.authorityTier, "official-first-party");
+  assert.deepEqual(trailOfBitsSkills?.hosts, [
+    "codex",
+    "claude-code",
+    "opencode",
+    "cursor",
+    "copilot-vscode",
+  ]);
+  assert.deepEqual(trailOfBitsSkills?.includePaths?.slice(0, 4), [
+    "README.md",
+    "CLAUDE.md",
+    ".codex/INSTALL.md",
+    ".codex/skills/**",
+  ]);
+
+  assert.ok(trailOfBitsConfig);
+  assert.equal(trailOfBitsConfig?.authorityTier, "trusted-community");
+  assert.deepEqual(trailOfBitsConfig?.hosts, [
+    "claude-code",
+    "codex",
+    "opencode",
+  ]);
+  assert.deepEqual(trailOfBitsConfig?.assetKinds, [
+    "instruction",
+    "workflow",
+    "hook",
+    "mcp-server",
+    "reference-pack",
+  ]);
+
+  assert.ok(gitNexus);
+  assert.deepEqual(gitNexus?.hosts, [
+    "claude-code",
+    "cursor",
+    "codex",
+    "opencode",
+    "copilot-vscode",
+  ]);
+  assert.deepEqual(gitNexus?.assetKinds, [
+    "plugin",
+    "skill",
+    "mcp-server",
+    "hook",
+    "instruction",
+    "workflow",
+    "reference-pack",
+  ]);
+
+  assert.ok(superpowers);
+  assert.ok(superpowers?.hosts.includes("codex"));
+  assert.ok(superpowers?.assetKinds.includes("plugin"));
+  assert.ok(superpowers?.includePaths?.includes(".codex-plugin/**"));
+});
+
+void test("source registry includes Penpot MCP source pack entries", async () => {
   const registry = await loadSourceRegistry(process.cwd());
   const penpotSource = registry.sources.find(
     (source) => source.id === "penpot-mcp-pack",
+  );
+  const communitySkillSource = registry.sources.find(
+    (source) => source.id === "ar27111994-penpot-mcp",
   );
 
   assert.ok(penpotSource);
@@ -25,6 +193,7 @@ void test("source registry includes official Penpot MCP source pack entry", asyn
     "claude-code",
     "pi",
     "shared",
+    "codex",
   ]);
   assert.deepEqual(penpotSource?.assetKinds, ["mcp-server", "reference-pack"]);
   assert.equal(
@@ -41,6 +210,135 @@ void test("source registry includes official Penpot MCP source pack entry", asyn
   assert.deepEqual(penpotSource?.mcpServerPaths, [
     "mcp/packages/server/src/**",
   ]);
+
+  assert.ok(communitySkillSource);
+  assert.equal(communitySkillSource?.authorityTier, "trusted-community");
+  assert.equal(communitySkillSource?.publisher?.name, "ar27111994");
+  assert.deepEqual(communitySkillSource?.hosts, [
+    "opencode",
+    "cursor",
+    "zed",
+    "claude-code",
+    "pi",
+    "shared",
+    "codex",
+    "copilot-vscode",
+  ]);
+  assert.deepEqual(communitySkillSource?.assetKinds, [
+    "skill",
+    "mcp-server",
+    "instruction",
+    "workflow",
+    "reference-pack",
+  ]);
+  assert.equal(
+    communitySkillSource?.endpoints.repo,
+    "https://github.com/ar27111994/penpot-mcp",
+  );
+  assert.deepEqual(communitySkillSource?.includePaths, [
+    "README.md",
+    "penpot-mcp/SKILL.md",
+    "penpot-mcp/references/**",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+  ]);
+});
+
+void test("source registry includes agent-scripts source pack entry", async () => {
+  const registry = await loadSourceRegistry(process.cwd());
+  const agentScripts = registry.sources.find(
+    (source) => source.id === "steipete-agent-scripts",
+  );
+
+  assert.ok(agentScripts);
+  assert.equal(agentScripts?.authorityTier, "trusted-community");
+  assert.equal(agentScripts?.publisher?.name, "steipete");
+  assert.deepEqual(agentScripts?.hosts, [
+    "claude-code",
+    "codex",
+    "opencode",
+    "cursor",
+    "copilot-vscode",
+  ]);
+  assert.deepEqual(agentScripts?.assetKinds, [
+    "skill",
+    "agent",
+    "instruction",
+    "workflow",
+    "hook",
+    "plugin",
+    "mcp-server",
+    "prompt-pack",
+    "reference-pack",
+  ]);
+  assert.equal(
+    agentScripts?.endpoints.repo,
+    "https://github.com/steipete/agent-scripts",
+  );
+  assert.deepEqual(agentScripts?.includePaths, [
+    "README.md",
+    "AGENTS.MD",
+    "tools.md",
+    ".github/copilot-instructions.md",
+    "skills/**",
+    "docs/**",
+    "hooks/**",
+    "scripts/validate-skills",
+    "scripts/committer",
+    "scripts/browser-tools.ts",
+    "scripts/trash.ts",
+  ]);
+  assert.deepEqual(agentScripts?.excludePaths, [
+    ".github/workflows/**",
+    ".vscode/**",
+    "release/**",
+  ]);
+});
+
+void test("source registry includes the v2 requested official and community sources", async () => {
+  const registry = await loadSourceRegistry(process.cwd());
+
+  const cursorPlugins = registry.sources.find(
+    (source) => source.id === "cursor-plugins-pack",
+  );
+  const scientificAgentSkills = registry.sources.find(
+    (source) => source.id === "k-dense-ai-scientific-agent-skills",
+  );
+  const agencyAgents = registry.sources.find(
+    (source) => source.id === "msitarzewski-agency-agents",
+  );
+
+  assert.ok(cursorPlugins, "cursor/plugins should be registered");
+  assert.equal(cursorPlugins?.authorityTier, "official-first-party");
+  assert.equal(cursorPlugins?.publisher?.name, "Cursor");
+  assert.equal(cursorPlugins?.publisher?.verified, true);
+  assert.equal(
+    cursorPlugins?.endpoints.repo,
+    "https://github.com/cursor/plugins",
+  );
+  assert.ok(cursorPlugins?.hosts.includes("cursor"));
+  assert.ok(cursorPlugins?.assetKinds.includes("plugin"));
+
+  assert.ok(
+    scientificAgentSkills,
+    "K-Dense-AI/scientific-agent-skills should be registered",
+  );
+  assert.equal(scientificAgentSkills?.authorityTier, "trusted-community");
+  assert.equal(scientificAgentSkills?.publisher?.name, "K-Dense-AI");
+  assert.equal(
+    scientificAgentSkills?.endpoints.repo,
+    "https://github.com/K-Dense-AI/scientific-agent-skills",
+  );
+  assert.ok(scientificAgentSkills?.assetKinds.includes("skill"));
+
+  assert.ok(agencyAgents, "msitarzewski/agency-agents should be registered");
+  assert.equal(agencyAgents?.authorityTier, "trusted-community");
+  assert.equal(agencyAgents?.publisher?.name, "msitarzewski");
+  assert.equal(
+    agencyAgents?.endpoints.repo,
+    "https://github.com/msitarzewski/agency-agents",
+  );
+  assert.ok(agencyAgents?.assetKinds.includes("agent"));
 });
 
 void test("source registry generates repo sources from packs and dedupes matching repo identities", async () => {
@@ -71,6 +369,7 @@ void test("source registry generates repo sources from packs and dedupes matchin
           {
             id: "new-toolkit",
             repo: "git@github.com:acme/new-toolkit.git",
+            kind: "registry",
             authorityTier: "official-compatible",
             publisherVerified: true,
             priority: 75,
@@ -106,6 +405,7 @@ void test("source registry generates repo sources from packs and dedupes matchin
 
     assert.ok(generated);
     assert.equal(generated?.name, "New Toolkit.Git");
+    assert.equal(generated?.kind, "registry");
     assert.equal(generated?.authorityTier, "official-compatible");
     assert.deepEqual(generated?.hosts, ["copilot-vscode", "opencode"]);
     assert.deepEqual(generated?.assetKinds, [

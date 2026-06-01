@@ -15,7 +15,13 @@ import type {
 } from "../types.js";
 
 type JsonObject = Record<string, unknown>;
-type NativeConfigHost = "opencode" | "cursor" | "zed" | "claude-code" | "pi";
+type NativeConfigHost =
+  | "opencode"
+  | "cursor"
+  | "zed"
+  | "claude-code"
+  | "pi"
+  | "codex";
 
 /**
  * Collects structured native-config file payloads for one host.
@@ -329,6 +335,19 @@ function assertAllowedHostNativePath(
         return;
       }
       break;
+    case "codex":
+      if (
+        (relativePath === ".codex/config.toml" && payload.format === "text") ||
+        (relativePath === ".codex/hooks.json" &&
+          payload.format === "json" &&
+          mergeRequired) ||
+        relativePath.startsWith(".codex/rules/") ||
+        relativePath.startsWith(".agents/plugins/") ||
+        relativePath.startsWith(".agents/skills/")
+      ) {
+        return;
+      }
+      break;
   }
 
   throw new Error(
@@ -487,5 +506,6 @@ function isJsonObject(value: unknown): value is JsonObject {
  * Exposes pure native-config helpers for focused behavioral coverage.
  */
 export const nativeConfigInternals = {
+  assertAllowedHostNativePath,
   resolveWorkspacePath,
 };

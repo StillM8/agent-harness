@@ -177,6 +177,69 @@ export interface SourceIndex {
 }
 
 /**
+ * Describes lifecycle diff bucket values shared by human and JSON reports.
+ */
+export interface LifecycleDiffBucket {
+  added: string[];
+  removed: string[];
+  changed: string[];
+}
+
+/**
+ * Describes discover diff report data exchanged by the lifecycle pipeline.
+ */
+export interface DiscoverDiffReport {
+  schemaVersion: number;
+  generatedAt: string;
+  baselineLabel: string;
+  currentLabel: string;
+  sources: LifecycleDiffBucket;
+  catalog: LifecycleDiffBucket;
+  selection: LifecycleDiffBucket;
+  counts: {
+    sources: { baseline: number; current: number };
+    catalog: { baseline: number; current: number };
+    selected: { baseline: number; current: number };
+    rejected: { baseline: number; current: number };
+  };
+  highImpactChanges: string[];
+}
+
+/**
+ * Describes one read-only experimental environment index asset.
+ */
+export interface EnvironmentIndexAsset {
+  assetId: string;
+  displayName: string;
+  assetKind: AssetKind;
+  hosts: HostTarget[];
+  symbolicHandle: string;
+  retrievalFacets: string[];
+  chunkingHints: {
+    preferredStrategy: "document" | "section" | "file";
+    maxPromptWeight: number;
+  };
+  citation: {
+    provenance: string;
+    sourceUrl: string;
+    sourceId: string;
+  };
+  safetyFlags: string[];
+}
+
+/**
+ * Describes the experimental read-only environment index artifact.
+ */
+export interface EnvironmentIndexReport {
+  schemaVersion: number;
+  generatedAt: string;
+  experimental: true;
+  selectedAssetCount: number;
+  assets: EnvironmentIndexAsset[];
+  notes: string[];
+}
+
+/**
  * Describes git hub repo snapshot data exchanged by the lifecycle pipeline.
  */
 export interface GitHubRepoSnapshot {

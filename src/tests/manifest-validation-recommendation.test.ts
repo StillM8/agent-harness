@@ -31,6 +31,9 @@ void test("recommendation manifest validation applies report defaults for option
   ).recommendationLimitOverrideModeSource;
   delete (report as { sessionIntent?: string }).sessionIntent;
 
+  report.topByHost["copilot-vscode"][0]!.classificationConfidenceLevel =
+    "strong";
+
   assert.doesNotThrow(() => assertRecommendationReport(report, "report"));
   assert.equal(report.sessionIntent, "general");
   assert.equal(report.topByHost["copilot-vscode"][0]?.availableLocally, false);
@@ -287,6 +290,7 @@ function createRecommendationReport(): RecommendationReport {
       zed: [],
       "claude-code": [],
       pi: [],
+      codex: [],
     },
     hostSummaries: Object.fromEntries(
       [
@@ -297,6 +301,7 @@ function createRecommendationReport(): RecommendationReport {
         "zed",
         "claude-code",
         "pi",
+        "codex",
       ].map((host) => [
         host,
         {
@@ -390,6 +395,7 @@ function createRecommendationPolicy(): RecommendationPolicy {
       zed: createHostPolicy("zed"),
       "claude-code": createHostPolicy("claude-code"),
       pi: createHostPolicy("pi"),
+      codex: createHostPolicy("codex"),
     },
     concernKeywordMap: {},
     taskModeKeywordMap: {},

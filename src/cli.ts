@@ -25,6 +25,7 @@ const HELP_DEFAULT_DOMAINS = new Set([
   "install",
   "stage",
   "mirror",
+  "bundle",
   "quarantine",
   "rebuild",
   "wire",
@@ -59,6 +60,19 @@ async function main(): Promise<number> {
       return runDiscover(args, workingDirectory, projectRoot);
     case "mirror":
       return runMirror(args, workingDirectory, projectRoot);
+    case "bundle":
+      if (args.length === 0) {
+        return runMirror(["help"], workingDirectory, projectRoot);
+      }
+      if (args[0] !== "explain") {
+        printHelp();
+        return 1;
+      }
+      return runMirror(
+        ["bundle-explain", ...args.slice(1)],
+        workingDirectory,
+        projectRoot,
+      );
     case "install":
     case "stage":
       return runInstall(args, workingDirectory, projectRoot);
@@ -115,6 +129,8 @@ function runHelpCommand(
     case "discover":
       return runDiscover(["help"], workingDirectory, "");
     case "mirror":
+      return runMirror(["help"], workingDirectory, "");
+    case "bundle":
       return runMirror(["help"], workingDirectory, "");
     case "install":
     case "stage":
@@ -233,12 +249,28 @@ function printHelp(): void {
         description: "Print catalog/source stats",
       },
       {
+        command: "discover diff",
+        description: "Compare discovery outputs against a baseline state root",
+      },
+      {
+        command: "discover environment-index",
+        description: "Write experimental read-only query metadata index",
+      },
+      {
         command: "mirror locks",
         description: "Generate mirror bundle locks",
       },
       {
         command: "mirror acquire",
         description: "Acquire raw mirror artifacts and resolve bundle locks",
+      },
+      {
+        command: "bundle explain <bundleId>",
+        description: "Explain why assets are present in a bundle lock",
+      },
+      {
+        command: "mirror bundle-explain",
+        description: "Alias for bundle explain",
       },
       {
         command: "stage bundle",
@@ -300,7 +332,8 @@ function printHelp(): void {
       },
       {
         command: "recommend explain",
-        description: "Explain why an asset ranked for a host",
+        description:
+          "Explain why an asset was selected, rejected, quarantined, or budget-pruned",
       },
       {
         command: "recommend evaluate",

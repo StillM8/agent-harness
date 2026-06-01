@@ -1,24 +1,72 @@
 # agent-harness
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Node >=22](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](./package.json)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](./package.json)
-[![Quality](https://github.com/ar27111994/agent-harness/actions/workflows/quality.yml/badge.svg)](https://github.com/ar27111994/agent-harness/actions/workflows/quality.yml)
-[![Latest Release](https://img.shields.io/github/v/release/ar27111994/agent-harness?display_name=tag)](https://github.com/ar27111994/agent-harness/releases)
-[![npm version](https://img.shields.io/npm/v/%40ar27111994%2Fagent-harness?logo=npm&color=CB3837)](https://www.npmjs.com/package/@ar27111994/agent-harness)
-[![npm downloads](https://img.shields.io/npm/dm/%40ar27111994%2Fagent-harness?logo=npm&color=CB3837)](https://www.npmjs.com/package/@ar27111994/agent-harness)
-[![Sponsor](https://img.shields.io/badge/Sponsor-support-ff69b4?logo=githubsponsors&logoColor=white)](#sponsor)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ar27111994/agent-harness)
+<p>
+  <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
+  <a href="./package.json"><img alt="Node >=22" src="https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white" /></a>
+  <a href="./package.json"><img alt="TypeScript 5.9" src="https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white" /></a>
+  <a href="https://github.com/ar27111994/agent-harness/actions/workflows/quality.yml"><img alt="Quality workflow" src="https://github.com/ar27111994/agent-harness/actions/workflows/quality.yml/badge.svg" /></a>
+  <a href="https://github.com/ar27111994/agent-harness/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/ar27111994/agent-harness?display_name=tag" /></a>
+  <a href="https://www.npmjs.com/package/@ar27111994/agent-harness"><img alt="npm version" src="https://img.shields.io/npm/v/%40ar27111994%2Fagent-harness?logo=npm&color=CB3837" /></a>
+  <a href="https://www.npmjs.com/package/@ar27111994/agent-harness"><img alt="npm downloads" src="https://img.shields.io/npm/dm/%40ar27111994%2Fagent-harness?logo=npm&color=CB3837" /></a>
+  <a href="#sponsor"><img alt="Sponsor" src="https://img.shields.io/badge/Sponsor-support-ff69b4?logo=githubsponsors&logoColor=white" /></a>
+  <a href="https://deepwiki.com/ar27111994/agent-harness"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg" /></a>
+</p>
 
-`agent-harness` is a Node.js 22+ TypeScript CLI, published as `@ar27111994/agent-harness`, for discovering, curating, staging, activating, and wiring reusable AI-agent assets into developer workspaces.
+<p>
+  <strong>Hosts:</strong>
+  <a href="#supported-hosts"><img alt="VS Code + Copilot" src="https://img.shields.io/badge/VS%20Code%20%2B%20Copilot-007ACC?logo=visualstudiocode&logoColor=white" /></a>
+  <a href="#supported-hosts"><img alt="OpenCode" src="https://img.shields.io/badge/OpenCode-111827" /></a>
+  <a href="#supported-hosts"><img alt="Cursor" src="https://img.shields.io/badge/Cursor-000000" /></a>
+  <a href="#supported-hosts"><img alt="Zed" src="https://img.shields.io/badge/Zed-084CCF" /></a>
+  <a href="#supported-hosts"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-D97757" /></a>
+  <a href="#supported-hosts"><img alt="Pi" src="https://img.shields.io/badge/Pi-FF4F8B" /></a>
+  <a href="#supported-hosts"><img alt="OpenAI Codex" src="https://img.shields.io/badge/OpenAI%20Codex-412991?logo=openai&logoColor=white" /></a>
+</p>
 
-It is built around one generic command surface and a host-adapter model. The lifecycle stays consistent across hosts, while each adapter owns the host-specific files, settings, and reset behavior required by VS Code / GitHub Copilot, OpenCode, Cursor, Zed, Claude Code, and Pi.
+<p>
+  <strong>Assets:</strong>
+  <a href="#discovery-and-recommendations"><img alt="skills" src="https://img.shields.io/badge/skills-5B8DEF" /></a>
+  <a href="#discovery-and-recommendations"><img alt="agents" src="https://img.shields.io/badge/agents-7C3AED" /></a>
+  <a href="#discovery-and-recommendations"><img alt="instructions" src="https://img.shields.io/badge/instructions-0F766E" /></a>
+  <a href="#discovery-and-recommendations"><img alt="workflows" src="https://img.shields.io/badge/workflows-F59E0B" /></a>
+  <a href="#discovery-and-recommendations"><img alt="prompt packs" src="https://img.shields.io/badge/prompt%20packs-DB2777" /></a>
+  <a href="#discovery-and-recommendations"><img alt="MCP servers" src="https://img.shields.io/badge/MCP%20servers-2563EB" /></a>
+  <a href="#discovery-and-recommendations"><img alt="plugins" src="https://img.shields.io/badge/plugins-16A34A" /></a>
+  <a href="#discovery-and-recommendations"><img alt="hooks" src="https://img.shields.io/badge/hooks-DC2626" /></a>
+  <a href="#discovery-and-recommendations"><img alt="extensions" src="https://img.shields.io/badge/extensions-0891B2" /></a>
+  <a href="#discovery-and-recommendations"><img alt="reference packs" src="https://img.shields.io/badge/reference%20packs-64748B" /></a>
+</p>
+
+`agent-harness` is a reviewable supply chain for reusable AI-agent assets: discover trusted sources, rank workspace-specific recommendations, mirror pinned bundles, stage local files, activate host views, and wire everything into the agent host you already use.
+
+**Proof points**
+
+- **Published CLI:** [`@ar27111994/agent-harness` on npm](https://www.npmjs.com/package/@ar27111994/agent-harness), with release artifacts on [GitHub Releases](https://github.com/ar27111994/agent-harness/releases).
+- **Quality-gated:** every release path is backed by the [quality workflow](https://github.com/ar27111994/agent-harness/actions/workflows/quality.yml).
+- **Discoverable:** listed through [GitHub Explore topic visibility](https://github.com/github/explore/pull/5175) as topic metadata, not an endorsement.
+- **Cross-host today:** VS Code/GitHub Copilot, OpenCode, Cursor, Zed, Claude Code, Pi, and OpenAI Codex.
+
+**▶️ Watch the demo:**
+
+<!-- GitHub's README sanitizer strips <video>/<iframe>, so the hero uses a committed, muted GIF from the demo-video repo and links to the full sound-on YouTube walkthrough. -->
+
+[![agent-harness autoplay demo preview — click for sound-on walkthrough](https://raw.githubusercontent.com/ar27111994/agent-harness-demo-video/main/media/readme/agent-harness-readme-preview.gif)](https://youtu.be/u1OmcS97iOg)
+
+**Sound-on walkthrough:** [youtu.be/u1OmcS97iOg](https://youtu.be/u1OmcS97iOg)
+
+- **Video source:** [`agent-harness-demo-video`](https://github.com/ar27111994/agent-harness-demo-video), rendered with Remotion and kept outside this package so npm tarballs stay lean.
+- **Terminal source:** [`docs/demo/workspace-opencode-demo.mjs`](https://github.com/ar27111994/agent-harness/blob/main/docs/demo/workspace-opencode-demo.mjs), which records the public-safe OpenCode quick-start transcript and generated-output tree.
+- **Walkthrough notes:** [`docs/demo/v2-opencode-walkthrough.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/demo/v2-opencode-walkthrough.md), covering the full v2 before/after flow.
+
+The core model is deliberately boring in the best way: one command surface, a host-adapter boundary, preview-first writes, and explicit native-install steps. The lifecycle stays consistent across hosts while each adapter owns the files, settings, apply/reset behavior, and safety boundaries required by that host.
 
 ## Table of contents
 
 - [What this project does](#what-this-project-does)
 - [Lifecycle model](#lifecycle-model)
 - [Supported hosts](#supported-hosts)
+- [Where it fits](#where-it-fits)
+- [What it produces](#what-it-produces)
 - [Quick start](#quick-start)
 - [Usage examples](#usage-examples)
 - [Key playbooks](#key-playbooks)
@@ -31,6 +79,7 @@ It is built around one generic command surface and a host-adapter model. The lif
 - [Development and validation](#development-and-validation)
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
+- [Security and trust center](#security-and-trust-center)
 - [Current boundaries](#current-boundaries)
 - [Related documentation](#related-documentation)
 - [Sponsor](#sponsor)
@@ -38,15 +87,23 @@ It is built around one generic command surface and a host-adapter model. The lif
 
 ## Key Playbooks
 
-- [Agent setup playbook](https://github.com/ar27111994/agent-harness/blob/main/AGENT-SETUP-PLAYBOOK.md)
-- [Discovery breadth playbook](https://github.com/ar27111994/agent-harness/blob/main/DISCOVERY-BREADTH-PLAYBOOK.md)
-- [Demand detection playbook](https://github.com/ar27111994/agent-harness/blob/main/DEMAND-DETECTION-PLAYBOOK.md)
-- [Demand detection coverage](https://github.com/ar27111994/agent-harness/blob/main/DEMAND-DETECTION-COVERAGE.md)
-- [Source coverage playbook](https://github.com/ar27111994/agent-harness/blob/main/SOURCE-COVERAGE-PLAYBOOK.md)
-- [AI enrichment playbook](https://github.com/ar27111994/agent-harness/blob/main/AI-ENRICHMENT-PLAYBOOK.md)
-- [Asset update playbook](https://github.com/ar27111994/agent-harness/blob/main/ASSET-UPDATE-PLAYBOOK.md)
-- [Logging strategy](https://github.com/ar27111994/agent-harness/blob/main/LOGGING-STRATEGY.md)
-- [Recommendation policy playbook](https://github.com/ar27111994/agent-harness/blob/main/RECOMMENDATION-POLICY-PLAYBOOK.md)
+- [Agent setup playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/AGENT-SETUP-PLAYBOOK.md)
+- [Discovery breadth playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DISCOVERY-BREADTH-PLAYBOOK.md)
+- [Demand detection playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DEMAND-DETECTION-PLAYBOOK.md)
+- [Demand detection coverage](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/DEMAND-DETECTION-COVERAGE.md)
+- [Source coverage playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/SOURCE-COVERAGE-PLAYBOOK.md)
+- [AI enrichment playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/AI-ENRICHMENT-PLAYBOOK.md)
+- [Asset update playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/ASSET-UPDATE-PLAYBOOK.md)
+- [Logging strategy](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/LOGGING-STRATEGY.md)
+- [Recommendation policy playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/RECOMMENDATION-POLICY-PLAYBOOK.md)
+- [Workspace evolution control-loop playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/WORKSPACE-EVOLUTION-PLAYBOOK.md)
+- [End-user harness maintenance guide](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/HARNESS-MAINTENANCE-GUIDE.md)
+- [Security and trust center](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/TRUST-CENTER.md)
+- [v2 safe defaults](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/SAFE-DEFAULTS.md)
+- [v2 CLI and report contract](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/V2-CONTRACT.md)
+- [v1 to v2 upgrade guide](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/V1-TO-V2-UPGRADE.md)
+- [Scheduled maintenance workflow](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/MAINTENANCE-WORKFLOW.md)
+- [Release process](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/RELEASE-PROCESS.md)
 
 ## What this project does
 
@@ -91,16 +148,17 @@ Some adapters intentionally reuse another lifecycle host while keeping their own
 
 ## Supported hosts
 
-`agent-harness` currently registers six host adapters in `src/host-adapters/registry.ts`.
+`agent-harness` currently registers seven host adapters in `src/host-adapters/registry.ts`.
 
-| CLI target    | Aliases                | Lifecycle host   | Recommendation host | Default bundles                                     | Wire style                                                           |
-| ------------- | ---------------------- | ---------------- | ------------------- | --------------------------------------------------- | -------------------------------------------------------------------- |
-| `vscode`      | `copilot`              | `copilot-vscode` | `copilot-vscode`    | `copilot-core`, `community-stable`, `shared-mcp`    | VS Code user settings plus workspace instructions                    |
-| `opencode`    | `open-code`            | `opencode`       | `opencode`          | `opencode-global`, `community-stable`, `shared-mcp` | project-local `.opencode` overlay and managed links                  |
-| `cursor`      | -                      | `copilot-vscode` | `cursor`            | `copilot-core`, `community-stable`, `shared-mcp`    | project-local Cursor rules and managed assets                        |
-| `zed`         | -                      | `opencode`       | `zed`               | `opencode-global`, `community-stable`, `shared-mcp` | project-local `.rules`, `.zed/settings.json`, and managed assets     |
-| `claude-code` | `claude`, `claudecode` | `opencode`       | `claude-code`       | `opencode-global`, `community-stable`, `shared-mcp` | project-local Claude context, rules, skills, and commands            |
-| `pi`          | `pi-coding-agent`      | `opencode`       | `pi`                | `opencode-global`, `community-stable`               | project-local Pi agent/system context, skills, prompts, and settings |
+| CLI target    | Aliases                     | Lifecycle host   | Recommendation host | Default bundles                                     | Wire style                                                             |
+| ------------- | --------------------------- | ---------------- | ------------------- | --------------------------------------------------- | ---------------------------------------------------------------------- |
+| `vscode`      | `copilot`                   | `copilot-vscode` | `copilot-vscode`    | `copilot-core`, `community-stable`, `shared-mcp`    | VS Code user settings plus workspace instructions                      |
+| `opencode`    | `open-code`                 | `opencode`       | `opencode`          | `opencode-global`, `community-stable`, `shared-mcp` | project-local `.opencode` overlay and managed links                    |
+| `cursor`      | -                           | `copilot-vscode` | `cursor`            | `copilot-core`, `community-stable`, `shared-mcp`    | project-local Cursor rules and managed assets                          |
+| `zed`         | -                           | `opencode`       | `zed`               | `opencode-global`, `community-stable`, `shared-mcp` | project-local `.rules`, `.zed/settings.json`, and managed assets       |
+| `claude-code` | `claude`, `claudecode`      | `opencode`       | `claude-code`       | `opencode-global`, `community-stable`, `shared-mcp` | project-local Claude context, rules, skills, and commands              |
+| `pi`          | `pi-coding-agent`           | `opencode`       | `pi`                | `opencode-global`, `community-stable`               | project-local Pi agent/system context, skills, prompts, and settings   |
+| `codex`       | `openai-codex`, `codex-app` | `opencode`       | `codex`             | `opencode-global`, `community-stable`, `shared-mcp` | project-local AGENTS.md, .agents skills/plugins, and .codex references |
 
 Use `setup hosts` to print the registered adapters from the local build:
 
@@ -108,7 +166,45 @@ Use `setup hosts` to print the registered adapters from the local build:
 agent-harness setup hosts
 ```
 
+## Where it fits
+
+`agent-harness` is the supply-chain layer that decides what reusable agent assets enter a workspace and how they are staged, activated, reviewed, and wired. It does **not** run agents. It prepares inspectable inputs for the host or harness you already use.
+
+| Tool or category               | What it does                                                                                                                                                                                                | Boundary                                                                                                                        |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Curated skill/plugin libraries | Help you find and install assets from one ecosystem or curated catalog.                                                                                                                                     | Usually focused on acquisition, not cross-host lifecycle state, pinned mirrors, quarantine, and resettable wire plans.          |
+| MCP/server lists               | Help you discover servers and integration ideas.                                                                                                                                                            | Lists are references; they do not decide what enters a workspace, stage reproducible artifacts, or manage host-specific wiring. |
+| Agent runtime harnesses        | Run agents, tasks, models, tools, and sessions.                                                                                                                                                             | `agent-harness` is not the runtime. It manages reusable assets before they enter one.                                           |
+| **agent-harness**              | **Discovers sources, ranks recommendations, mirrors pinned bundles, stages/activates assets, quarantines risky inputs, and wires selected assets into supported hosts with preview/apply/reset semantics.** | **Supply-chain and workspace integration layer for reusable AI-agent assets.**                                                  |
+
+The practical lifecycle is: `discover -> recommend -> mirror -> stage -> activate -> wire`. Official and verified sources are preferred over popularity-only signals, official-first-party sources are demoted when owner/publisher evidence fails verification, mirrored generations are pinned for review, risky candidates route through quarantine, and native/global host installs remain explicit instead of hidden inside `workspace <host>`.
+
+## What it produces
+
+When you run the installed CLI from a workspace, mutable lifecycle state is written under `.agent-harness/` by default. Repository-local development keeps the same layout at the repository root so npm scripts and checked-in policy assets continue to work.
+
+| Phase                       | Inspectable outputs                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Demand detection            | `.agent-harness/discover/output/demand-profile.json`, `.agent-harness/discover/output/unknown-signals.json`                                                                                                                                                                                                                                         |
+| Source selection            | `.agent-harness/discover/output/source-index.json`, `.agent-harness/discover/output/selection-report.json`, `.agent-harness/discover/output/source-utilization.json`, `.agent-harness/discover/output/source-health.json`, `.agent-harness/discover/output/source-drift.json`, `.agent-harness/discover/output/catalog-maintenance-candidates.json` |
+| Catalog and recommendations | `.agent-harness/discover/catalog.assets.jsonl`, `.agent-harness/discover/output/asset-fingerprints.json`, `.agent-harness/state/recommendations.json`                                                                                                                                                                                               |
+| Mirror locks and quarantine | `.agent-harness/mirror/bundles/*.lock.json`, `.agent-harness/mirror/quarantine/**`, `.agent-harness/mirror/audit/**`                                                                                                                                                                                                                                |
+| Staged generations          | `.agent-harness/install/generations/<host>/current.json`, `.agent-harness/install/<host>/packages/*/install-manifest.json`                                                                                                                                                                                                                          |
+| Activation                  | `.agent-harness/activate/<host>/activation-manifest.json`, `.agent-harness/activate/<host>/<host>-overlay-plan.json` when the adapter emits an overlay plan                                                                                                                                                                                         |
+| Wire preview/apply          | `.agent-harness/activate/<host>/wire-preview-<host>.json`, `.agent-harness/activate/<host>/wire-plan.json`, plus host-specific managed files such as `.opencode/...`, `.cursor/...`, `.zed/settings.json`, `.claude/...`, `.pi/...`, `.agents/...`, `.codex/...`, `AGENTS.md`, or `.github/copilot-instructions.md`                                 |
+
+Preview mode writes reviewable wire plans without touching host files. Apply mode writes only the selected adapter's managed project files/settings, while native/global host installs remain explicit `install native` operations where supported. See [Host wire-in details](#host-wire-in-details) for the per-host paths and reset behavior.
+
 ## Quick start
+
+### Try it in one command
+
+```bash
+npm install -g @ar27111994/agent-harness
+agent-harness workspace opencode --intent general
+```
+
+Run the command from the workspace you want to inspect. By default, the installed CLI writes lifecycle state under `.agent-harness/`, applies only the selected adapter's managed project-local wire-in, and leaves native/global host installs, MCP authentication, marketplace extensions, and executable integrations as explicit follow-up operations. Review [What it produces](#what-it-produces) for the generated files and [Host wire-in details](#host-wire-in-details) for the exact OpenCode boundaries.
 
 ### Requirements
 
@@ -158,6 +254,7 @@ agent-harness setup doctor --host cursor
 agent-harness setup doctor --host zed
 agent-harness setup doctor --host claude-code
 agent-harness setup doctor --host pi
+agent-harness setup doctor --host codex
 ```
 
 `setup doctor` prints each adapter's lifecycle host, recommendation host, default bundles, runtime executable, advertised capabilities, lifecycle preflight diagnostics, adapter-specific CLI readiness diagnostics, and activated asset prerequisite guidance. Missing optional host CLIs are reported as warnings unless the selected operation requires a writable host-native path or native installer runtime.
@@ -174,6 +271,7 @@ agent-harness workspace cursor --intent frontend --ai-enrich
 agent-harness workspace zed --intent design
 agent-harness workspace claude-code --intent research
 agent-harness workspace pi --intent product
+agent-harness workspace codex --intent research
 ```
 
 From this repository, equivalent npm scripts are available:
@@ -185,6 +283,7 @@ npm run workspace:cursor -- --intent frontend
 npm run workspace:zed -- --intent design
 npm run workspace:claude-code -- --intent research
 npm run workspace:pi -- --intent product
+npm run workspace:codex -- --intent research
 ```
 
 Use the adapter-driven `agent-harness workspace <host>` command for end-to-end host setup. For a new user, this is the straightforward default path: it runs the broad discovery/recommendation pipeline, stages and activates assets, and then performs the selected host's final wire-in. Add `--ai-enrich` when you want the bounded enrichment sidecar as part of the same run, or configure `AGENT_HARNESS_AI_ENRICHMENT_MODE` for conservative automatic behavior.
@@ -224,25 +323,25 @@ Preview output is written under `activate/<host>/` and can be reviewed before `-
 
 When you want another agent to operate `agent-harness` for you, start with a dry run before any apply/install step. This keeps workspace mutation, extension installation, and MCP/tool authentication separate from discovery and recommendation review.
 
-For the full playbook, reusable prompts, classification rules, and decision tree, see [`AGENT-SETUP-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/AGENT-SETUP-PLAYBOOK.md).
+For the full playbook, reusable prompts, classification rules, and decision tree, see [`AGENT-SETUP-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/AGENT-SETUP-PLAYBOOK.md).
 
 Available playbooks:
 
-- [`AGENT-SETUP-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/AGENT-SETUP-PLAYBOOK.md) - dry-run setup workflow, decision tree, and reusable agent prompts for workspace/host asset setup
+- [`AGENT-SETUP-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/AGENT-SETUP-PLAYBOOK.md) - dry-run setup workflow, decision tree, and reusable agent prompts for workspace/host asset setup
 
-- [`DISCOVERY-BREADTH-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/DISCOVERY-BREADTH-PLAYBOOK.md) - maximize the practical candidate pool before judging recommendation quality
+- [`DISCOVERY-BREADTH-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DISCOVERY-BREADTH-PLAYBOOK.md) - maximize the practical candidate pool before judging recommendation quality
 
-- [`DEMAND-DETECTION-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/DEMAND-DETECTION-PLAYBOOK.md) - debug false negatives, false positives, and weak evidence in `discover/output/demand-profile.json`
+- [`DEMAND-DETECTION-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DEMAND-DETECTION-PLAYBOOK.md) - debug false negatives, false positives, and weak evidence in `discover/output/demand-profile.json`
 
-- [`DEMAND-DETECTION-COVERAGE.md`](https://github.com/ar27111994/agent-harness/blob/main/DEMAND-DETECTION-COVERAGE.md) - audited project-type matrix for stack/vertical detection coverage
+- [`DEMAND-DETECTION-COVERAGE.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/DEMAND-DETECTION-COVERAGE.md) - audited project-type matrix for stack/vertical detection coverage
 
-- [`SOURCE-COVERAGE-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/SOURCE-COVERAGE-PLAYBOOK.md) - widen discovery sources cleanly when the workspace is understood but the source universe is too narrow
+- [`SOURCE-COVERAGE-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/SOURCE-COVERAGE-PLAYBOOK.md) - widen discovery sources cleanly when the workspace is understood but the source universe is too narrow
 
-- [`AI-ENRICHMENT-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/AI-ENRICHMENT-PLAYBOOK.md) - choose enrichment modes, bounded AI review, and operator workflows
+- [`AI-ENRICHMENT-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/AI-ENRICHMENT-PLAYBOOK.md) - choose enrichment modes, bounded AI review, and operator workflows
 
-- [`ASSET-UPDATE-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/ASSET-UPDATE-PLAYBOOK.md) - refresh staged assets safely with report-only, due-only, and apply-safe flows
+- [`ASSET-UPDATE-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/ASSET-UPDATE-PLAYBOOK.md) - refresh staged assets safely with report-only, due-only, and apply-safe flows
 
-- [`RECOMMENDATION-POLICY-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/RECOMMENDATION-POLICY-PLAYBOOK.md) - inspect and tune ranking only after recall looks healthy
+- [`RECOMMENDATION-POLICY-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/RECOMMENDATION-POLICY-PLAYBOOK.md) - inspect and tune ranking only after recall looks healthy
 
 Short version:
 
@@ -253,16 +352,16 @@ Short version:
 - separate staged/wired assets from native installs and manual runtime follow-up
 - only run mutating install/apply commands after the dry run looks correct
 
-If your main question is "how do I give recommendations the widest sensible candidate pool first?", use [`DISCOVERY-BREADTH-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/DISCOVERY-BREADTH-PLAYBOOK.md) before changing recommendation policy. If breadth looks wrong because stack detection is weak, continue with [`DEMAND-DETECTION-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/DEMAND-DETECTION-PLAYBOOK.md); if the stack looks right but the discovery universe is still too small, continue with [`SOURCE-COVERAGE-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/SOURCE-COVERAGE-PLAYBOOK.md).
+If your main question is "how do I give recommendations the widest sensible candidate pool first?", use [`DISCOVERY-BREADTH-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DISCOVERY-BREADTH-PLAYBOOK.md) before changing recommendation policy. If breadth looks wrong because stack detection is weak, continue with [`DEMAND-DETECTION-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DEMAND-DETECTION-PLAYBOOK.md); if the stack looks right but the discovery universe is still too small, continue with [`SOURCE-COVERAGE-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/SOURCE-COVERAGE-PLAYBOOK.md).
 
 ### Default workspace diagnostic ladder
 
 When `agent-harness workspace <host>` gives surprising output, diagnose in this order instead of jumping straight to bigger limits or host-policy edits:
 
 1. **Did the workspace command complete?** If not, inspect preflight/runtime/install/wire logs and host readiness with `agent-harness setup doctor --host <host>`.
-2. **Is `discover/output/demand-profile.json` wrong or weak?** If yes, use [`DEMAND-DETECTION-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/DEMAND-DETECTION-PLAYBOOK.md) and the matrix in [`DEMAND-DETECTION-COVERAGE.md`](https://github.com/ar27111994/agent-harness/blob/main/DEMAND-DETECTION-COVERAGE.md).
-3. **Is source utilization or selected-candidate breadth starved?** Inspect `discover/output/source-index.json`, `discover/output/source-utilization.json`, and `discover/output/selection-report.json`, then use [`SOURCE-COVERAGE-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/SOURCE-COVERAGE-PLAYBOOK.md) / [`DISCOVERY-BREADTH-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/DISCOVERY-BREADTH-PLAYBOOK.md).
-4. **Are relevant assets selected but buried?** Inspect `state/recommendations.json`, `recommend policy:print --host <host>`, and `recommend explain --host <host> --asset <asset-id>`, then use [`RECOMMENDATION-POLICY-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/RECOMMENDATION-POLICY-PLAYBOOK.md).
+2. **Is `discover/output/demand-profile.json` wrong or weak?** If yes, use [`DEMAND-DETECTION-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DEMAND-DETECTION-PLAYBOOK.md) and the matrix in [`DEMAND-DETECTION-COVERAGE.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/DEMAND-DETECTION-COVERAGE.md).
+3. **Is source utilization or selected-candidate breadth starved?** Inspect `discover/output/source-index.json`, `discover/output/source-utilization.json`, and `discover/output/selection-report.json`, then use [`SOURCE-COVERAGE-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/SOURCE-COVERAGE-PLAYBOOK.md) / [`DISCOVERY-BREADTH-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DISCOVERY-BREADTH-PLAYBOOK.md).
+4. **Are relevant assets selected but buried?** Inspect `state/recommendations.json`, `recommend policy:print --host <host>`, and `recommend explain --host <host> --asset <asset-id>`, then use [`RECOMMENDATION-POLICY-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/RECOMMENDATION-POLICY-PLAYBOOK.md).
 5. **Is the problem host-specific?** Validate the host policy with recommendation fixtures before changing defaults.
 6. **Is narrative judgment needed after deterministic output is sane?** Use bounded AI review/enrichment as an audit layer, not as a replacement for detection/source/ranking fixes.
 
@@ -297,7 +396,7 @@ Cursor reuses the Copilot-compatible lifecycle host but applies Cursor-specific 
 ### Inspect why an asset was recommended
 
 ```bash
-node ./dist/cli.js recommend explain --host claude-code --asset <asset-id>
+agent-harness recommend explain --host claude-code --asset <asset-id>
 ```
 
 Use this to inspect scoring reasons, matched demand signals, coverage tags, and score breakdowns.
@@ -305,7 +404,7 @@ Use this to inspect scoring reasons, matched demand signals, coverage tags, and 
 ### Run bounded AI review for a host
 
 ```bash
-node ./dist/cli.js recommend ai-review --host vscode --apply
+agent-harness recommend ai-review --host vscode --apply
 ```
 
 This writes bounded AI-review input/output artifacts under `recommend/output/` and, with `--apply`, folds validated suppressions and reranks back into the recommendation report.
@@ -313,7 +412,7 @@ This writes bounded AI-review input/output artifacts under `recommend/output/` a
 ### Print the effective policy for one host
 
 ```bash
-node ./dist/cli.js recommend policy:print --host pi
+agent-harness recommend policy:print --host pi
 ```
 
 This is useful when tuning host policy overrides or investigating why a host selected different assets than another host.
@@ -329,6 +428,18 @@ npm run activate:host
 Use this sequence after changing source definitions, recommendation policy, mirror bundles, or install behavior.
 
 ## Command reference
+
+### Command style convention
+
+- Use `agent-harness ...` for installed package usage and copy-pasteable user commands.
+- Use `npm run ...` for repository-development shortcuts after `npm install`.
+- Use `node ./dist/cli.js ...` only when intentionally testing the built local entrypoint from this repository.
+
+### Managed wire-in vs native/global install
+
+`workspace <host>` applies the complete managed lifecycle and final host wire-in. It stages and activates selected harness assets, then writes the host-specific project/user files owned by the adapter.
+
+It does not silently perform separate native or global installation steps. Marketplace extension installs, MCP authentication, global host package/plugin registration, executable hook/tool setup, and host logins remain explicit or manual unless an asset provides structured host-native config for a documented surface. Use `agent-harness install native --host <host> --operation <plan|verify|install|remove>` for supported native extension flows.
 
 ### Build and validation
 
@@ -352,11 +463,11 @@ npm run validate:recommendations
 ```bash
 npm run discover:demand
 npm run discover:sources
-node ./dist/cli.js discover sync
+agent-harness discover sync
 npm run discover:catalog
 npm run discover:select
 npm run discover:full
-node ./dist/cli.js discover breadth
+agent-harness discover breadth
 npm run discover:stats
 npm run discover:enrich
 ```
@@ -364,17 +475,17 @@ npm run discover:enrich
 Equivalent direct CLI examples:
 
 ```bash
-node ./dist/cli.js discover demand-profile
-node ./dist/cli.js discover sources
-node ./dist/cli.js discover sync
-node ./dist/cli.js discover catalog
-node ./dist/cli.js discover select --ai-enrich
-node ./dist/cli.js discover full --ai-enrich
-node ./dist/cli.js discover breadth
-node ./dist/cli.js discover recall
-node ./dist/cli.js discover candidate-pool
-node ./dist/cli.js discover stats
-node ./dist/cli.js discover enrich --force
+agent-harness discover demand-profile
+agent-harness discover sources
+agent-harness discover sync
+agent-harness discover catalog
+agent-harness discover select --ai-enrich
+agent-harness discover full --ai-enrich
+agent-harness discover breadth
+agent-harness discover recall
+agent-harness discover candidate-pool
+agent-harness discover stats
+agent-harness discover enrich --force
 ```
 
 `discover sync` now provides persistent indexed harvesting for the built-in marketplace and registry sources that expose trustworthy official feeds, sitemaps, or paginated APIs. That includes the VS Code and Cursor marketplaces, Zed and Pi package galleries, skills.sh, ClawHub's server-rendered plugin catalog, the official MCP registry, and the supported package registries (npm change feed, PyPI, crates.io, Go index, Maven Central, NuGet, RubyGems, Packagist, and Swift Package Index).
@@ -396,7 +507,7 @@ The discovery configuration is assembled from multiple checked-in inputs on purp
 
 `discover sources` now records those assembled configuration inputs in `discover/output/source-index.json` so the effective discovery universe is inspectable instead of implicit.
 
-If you want the widest practical candidate pool before judging recommendation quality, start with `agent-harness discover breadth`. That first-class command runs the full breadth-oriented discovery pass and prints whether the bottleneck currently looks like demand detection, source coverage, selection filtering, or ranking. For the step-by-step workflow and agent-operated version, use [`DISCOVERY-BREADTH-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/DISCOVERY-BREADTH-PLAYBOOK.md).
+If you want the widest practical candidate pool before judging recommendation quality, start with `agent-harness discover breadth`. That first-class command runs the full breadth-oriented discovery pass and prints whether the bottleneck currently looks like demand detection, source coverage, selection filtering, or ranking. For the step-by-step workflow and agent-operated version, use [`DISCOVERY-BREADTH-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DISCOVERY-BREADTH-PLAYBOOK.md).
 
 Every command group accepts `--help` or `-h` and exits before preparing lifecycle state. Examples:
 
@@ -447,15 +558,15 @@ agent-harness discover full --ai-enrich
 agent-harness workspace cursor --intent frontend --ai-enrich
 ```
 
-Use `setup login --provider ai` for configuration guidance. For scenario-based operator guidance, see [`AI-ENRICHMENT-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/AI-ENRICHMENT-PLAYBOOK.md).
+Use `setup login --provider ai` for configuration guidance. For scenario-based operator guidance, see [`AI-ENRICHMENT-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/AI-ENRICHMENT-PLAYBOOK.md).
 
 ### Recommend
 
 ```bash
 npm run recommend:report
-node ./dist/cli.js recommend
-node ./dist/cli.js recommend report --ai-review
-node ./dist/cli.js recommend ai-review --apply
+agent-harness recommend
+agent-harness recommend report --ai-review
+agent-harness recommend ai-review --apply
 npm run recommend:evaluate
 npm run recommend:update
 ```
@@ -468,16 +579,16 @@ Omitting the recommendation subcommand defaults to `report`.
 Explain a specific recommendation:
 
 ```bash
-node ./dist/cli.js recommend explain --host vscode --asset <asset-id>
+agent-harness recommend explain --host vscode --asset <asset-id>
 ```
 
 Print the merged effective policy for a host:
 
 ```bash
-node ./dist/cli.js recommend policy:print --host shared
+agent-harness recommend policy:print --host shared
 ```
 
-If the selected candidate pool already looks healthy but the final ranking still feels wrong, use [`RECOMMENDATION-POLICY-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/RECOMMENDATION-POLICY-PLAYBOOK.md).
+If the selected candidate pool already looks healthy but the final ranking still feels wrong, use [`RECOMMENDATION-POLICY-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/RECOMMENDATION-POLICY-PLAYBOOK.md). For recurring post-wire-in repository drift, use [`WORKSPACE-EVOLUTION-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/WORKSPACE-EVOLUTION-PLAYBOOK.md).
 
 ### Mirror
 
@@ -485,8 +596,8 @@ If the selected candidate pool already looks healthy but the final ranking still
 npm run mirror:plan
 npm run mirror:locks
 npm run mirror:acquire
-node ./dist/cli.js mirror diff
-node ./dist/cli.js mirror explain --asset <asset-id>
+agent-harness mirror diff
+agent-harness mirror explain --asset <asset-id>
 ```
 
 ### Quarantine review
@@ -494,56 +605,58 @@ node ./dist/cli.js mirror explain --asset <asset-id>
 ```bash
 agent-harness quarantine list
 agent-harness quarantine inspect --asset <asset-id>
+agent-harness quarantine report
 agent-harness quarantine approve --asset <asset-id> --reason "reviewed source and content"
 agent-harness quarantine reject --asset <asset-id> --reason "unsafe prompt or executable behavior"
+agent-harness quarantine pin --asset <asset-id> --reason "await ownership proof"
 ```
 
-Mirror acquisition routes high-risk or prompt-injection-like community assets into quarantine. Install and activation skip quarantined assets until an explicit review approves them as `approved-with-warning`.
+Mirror acquisition routes high-risk or prompt-injection-like community assets into quarantine. Install and activation skip quarantined assets until an explicit review approves them as `approved-with-warning`. `quarantine report` writes `state/quarantine/quarantine-state.json` with current state, reason, first seen, last reviewed, suggested action, and transition evidence. See [`QUARANTINE-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/QUARANTINE-PLAYBOOK.md) for review flow.
 
 ### Stage / install
 
 ```bash
 npm run install:bundle
-node ./dist/cli.js install native --host vscode
-node ./dist/cli.js install native --host vscode --operation verify
-node ./dist/cli.js install native --host vscode --operation install --apply
-node ./dist/cli.js install native --host vscode --operation remove --apply
-node ./dist/cli.js install native --host cursor
-node ./dist/cli.js install native --host cursor --operation verify
-node ./dist/cli.js stage refresh --host copilot-vscode
-node ./dist/cli.js stage refresh --host copilot-vscode --apply
-node ./dist/cli.js stage refresh --host copilot-vscode --due-only
+agent-harness install native --host vscode
+agent-harness install native --host vscode --operation verify
+agent-harness install native --host vscode --operation install --apply
+agent-harness install native --host vscode --operation remove --apply
+agent-harness install native --host cursor
+agent-harness install native --host cursor --operation verify
+agent-harness stage refresh --host copilot-vscode
+agent-harness stage refresh --host copilot-vscode --apply
+agent-harness stage refresh --host copilot-vscode --due-only
 npm run install:reconcile
 npm run install:reset
 ```
 
 `stage` is the preferred lifecycle term here: the harness stages a bounded mirrored bundle subset into its managed store, while `install native` remains the explicit host-facing install boundary. Mutating install/remove operations require `--apply`; verify is non-mutating. VS Code and Cursor extension assets are installed through adapter-owned VS Code-style extension providers and results are written to `state/install/native-extensions.json`.
 
-`stage refresh` writes `state/install/refresh-report.json`, persists schedule/checkpoint metadata in `state/install/refresh-state.json`, compares the installed upstream fingerprint stamped into each install manifest against the latest bundle-lock mirror, and can apply safe staged refreshes when `AGENT_HARNESS_INSTALL_REFRESH_POLICY=apply-safe` and `--apply` are both used. `--due-only` makes the command suitable for cron/background checks by skipping runs until the configured refresh interval is due. When stale VS Code-family extension assets are applied through refresh, the native extension install step is executed too so host-native installs stay in sync with the refreshed bundle state. `install refresh` remains a supported alias.
+`stage refresh` writes `state/install/refresh-report.json`, persists schedule/checkpoint metadata in `state/install/refresh-state.json`, compares the installed upstream fingerprint stamped into each install manifest against the latest bundle-lock mirror, and can apply safe staged refreshes when `AGENT_HARNESS_INSTALL_REFRESH_POLICY=apply-safe` and `--apply` are both used. `--due-only` makes the command suitable for cron/background checks by skipping runs until the configured refresh interval is due. Refresh reports include policy tiers for report-only, stage-only, low-risk apply, review-required, and quarantined decisions; executable/native assets can be staged, but host-native activation/install remains review-gated. `install refresh` remains a supported alias.
 
-For report-only vs due-only vs apply-safe update workflows, see [`ASSET-UPDATE-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/ASSET-UPDATE-PLAYBOOK.md).
+For report-only vs due-only vs apply-safe update workflows, see [`ASSET-UPDATE-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/ASSET-UPDATE-PLAYBOOK.md).
 
 ### Activate
 
 ```bash
 npm run activate:host
 npm run activate:reset
-node ./dist/cli.js activate rollback --host opencode --generation <generation-id>
+agent-harness activate rollback --host opencode --generation <generation-id>
 ```
 
 You can bias recommendation ranking and activation ordering with a validated `--intent`:
 
 ```bash
-node ./dist/cli.js activate host --intent frontend
-node ./dist/cli.js activate host --intent devops
-node ./dist/cli.js activate host --intent design
-node ./dist/cli.js activate host --intent product
+agent-harness activate host --intent frontend
+agent-harness activate host --intent devops
+agent-harness activate host --intent design
+agent-harness activate host --intent product
 ```
 
 You can also activate one lifecycle host using another recommendation policy:
 
 ```bash
-node ./dist/cli.js activate host --host copilot-vscode --recommendation-host cursor
+agent-harness activate host --host copilot-vscode --recommendation-host cursor
 ```
 
 `--recommendation-host` is validated against the supported host set. `--intent` is also validated (`general | frontend | backend | mobile | devops | security | docs | testing | research | data | design | product | marketing`), accepts common aliases such as `documentation`, `ci-cd`, `branding`, and `ba`, and can be passed repeatedly. Activation uses the first provided intent as its primary activation context so downstream views stay deterministic even when recommendation/workspace flows were built from multiple intents.
@@ -576,6 +689,10 @@ agent-harness wire claude-code --reset
 agent-harness wire pi --preview
 agent-harness wire pi --apply
 agent-harness wire pi --reset
+
+agent-harness wire codex --preview
+agent-harness wire codex --apply
+agent-harness wire codex --reset
 ```
 
 Repository scripts apply the corresponding wire-in:
@@ -587,6 +704,7 @@ npm run wire:cursor
 npm run wire:zed
 npm run wire:claude-code
 npm run wire:pi
+npm run wire:codex
 ```
 
 ### Workspace
@@ -601,6 +719,7 @@ agent-harness workspace cursor --intent frontend --ai-enrich
 agent-harness workspace zed --intent design
 agent-harness workspace claude-code --intent research
 agent-harness workspace pi --intent product
+agent-harness workspace codex --intent research
 ```
 
 `workspace <host>` also accepts `--no-ai-enrich`, `--force`, and `--require-ai-enrich` for explicit control of the bounded enrichment sidecar.
@@ -628,7 +747,7 @@ npm run rebuild:full
 
 All host-specific behavior lives behind `src/host-adapters/`. Generic orchestration lives in `src/workspace.ts`, `src/wire.ts`, `src/pipeline.ts`, `src/install.ts`, `src/activate.ts`, and related lifecycle modules.
 
-For the checked-in host-surface classification backing the current README wording, see [`HOST-SURFACE-AUDIT.md`](https://github.com/ar27111994/agent-harness/blob/main/HOST-SURFACE-AUDIT.md).
+For the checked-in host-surface classification backing the current README wording, see [`HOST-SURFACE-AUDIT.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/HOST-SURFACE-AUDIT.md).
 
 Unless noted otherwise, lifecycle file paths shown in this section are relative to the configured state root. In repository-local development that is the repository root; in packaged CLI usage the default state root is workspace-local `.agent-harness/`.
 
@@ -639,6 +758,22 @@ Preview, apply, and reset semantics are consistent across adapters:
 - **Reset** removes managed outputs created by the adapter.
 
 Most adapter previews use `activate/<host>/wire-preview-<host>.json`. VS Code uses its lifecycle root: `activate/copilot-vscode/wire-preview-vscode.json`.
+
+### v2 host support matrix
+
+This matrix is the public v2 adapter contract. It separates generic lifecycle support from host-native support so unsupported/partial capabilities are intentionally named instead of implied as complete. Every host participates in discover/recommend/stage/activate and quarantine-aware review gating; native install/verify/remove stays explicit and only appears where an adapter exposes a native install provider.
+
+| Host             | Lifecycle / recommendation          | Discover-aware signals | Stage / install                           | Activate | Wire preview / apply / reset | Native install / verify / remove | Project-local native wiring                                                                                                        | Known limitations                                                                                                                                                                                                                              |
+| ---------------- | ----------------------------------- | ---------------------- | ----------------------------------------- | -------- | ---------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `copilot-vscode` | `copilot-vscode` / `copilot-vscode` | Yes                    | Stage + explicit extension native install | Yes      | Yes / yes / yes              | `extension` via VS Code CLI      | Workspace instructions plus user-scoped settings                                                                                   | Requires a writable VS Code user settings directory for apply/reset. Marketplace extension install/verify/remove is explicit and never part of wire apply.                                                                                     |
+| `opencode`       | `opencode` / `opencode`             | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `.opencode` overlay and `AGENTS.md`                                                                                  | Uses project-local overlays and does not mutate global OpenCode packages or global MCP settings. MCP and tool config synthesis requires explicit structured native payloads.                                                                   |
+| `cursor`         | `copilot-vscode` / `cursor`         | Yes                    | Stage + explicit extension native install | Yes      | Yes / yes / yes              | `extension` via Cursor CLI       | Project-local `.cursor` rules, agents, plugin-compatible tree, and structured native config when supplied                          | Reuses the Copilot lifecycle store while applying Cursor-specific project files. Cursor extension install/verify/remove requires the Cursor CLI and explicit native-install operations. Project plugin registration remains user/host managed. |
+| `zed`            | `opencode` / `zed`                  | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `.rules`, `.zed/settings.json`, and `.zed/agent-harness` references                                                  | Extension installation remains manual through Zed unless future structured native support is added. Managed .zed/agent-harness assets are references, not a claim that every asset kind is a native Zed directory.                             |
+| `claude-code`    | `opencode` / `claude-code`          | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `CLAUDE.md`, `.claude/*`, and structured native config when supplied                                                 | MCP, hook, and settings synthesis requires explicit structured Claude-native payloads. Global Claude Code profile/configuration is not modified.                                                                                               |
+| `pi`             | `opencode` / `pi`                   | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `AGENTS.md`, `SYSTEM.md`, `.pi/skills`, `.pi/prompts`, and structured native config when supplied                    | Pi does not include shared-mcp in its default bundles. MCP assets are staged as references because Pi has no built-in MCP support in the current adapter contract.                                                                             |
+| `codex`          | `opencode` / `codex`                | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `AGENTS.md`, `.agents/skills`, `.agents/plugins`, `.codex/agent-harness`, and structured native config when supplied | Global Codex config, plugin caches, automations, remote connections, and sandbox settings are not modified. Plugin, MCP, hook, and rules activation requires structured Codex-native config and trusted-project review.                        |
+
+Adapter compliance coverage lives in `src/tests/host-adapters.test.ts`, `src/tests/native-host-wire.test.ts`, and `src/tests/host-support-matrix.test.ts`. The tests assert the registered adapter metadata, preview/apply/reset behavior, native-install boundaries, reversible managed file handling, and the README matrix rows.
 
 ### VS Code / GitHub Copilot
 
@@ -693,7 +828,7 @@ Workspace and activation outputs:
 - `activate/copilot-vscode/wire-plan.json`
 - `activate/copilot-vscode/workspace-profile-manifest.json`
 
-Current boundaries:
+Current boundaries (host-specific details only; see [Managed wire-in vs native/global install](#managed-wire-in-vs-nativeglobal-install) for the shared invariants):
 
 - Applying VS Code wire-in requires the VS Code user settings directory to exist and be writable.
 - The README treats instruction files, skills, plugins, and MCP as the primary documented public contract. Some patched settings remain implementation detail unless a current VS Code settings reference explicitly documents them.
@@ -765,7 +900,7 @@ Wire-plan outputs:
 - `activate/opencode/wire-preview-opencode.json`
 - `.opencode/context/project-intelligence/agent-harness/wire-plan.json`
 
-Current boundaries:
+Current boundaries (host-specific details only; see [Managed wire-in vs native/global install](#managed-wire-in-vs-nativeglobal-install) for the shared invariants):
 
 - The adapter links activated assets into a project-local overlay and reference tree.
 - It does not claim that every harness-managed `.opencode/*` path is a documented native OpenCode auto-discovery surface.
@@ -818,7 +953,7 @@ Agent-harness staged/plugin-compatible surfaces:
 - `.cursor/agent-harness/cursor-plugin/`
 - staged plugin `agents/`, `skills/`, `rules/`, `commands/`, and references
 
-Current boundaries:
+Current boundaries (host-specific details only; see [Managed wire-in vs native/global install](#managed-wire-in-vs-nativeglobal-install) for the shared invariants):
 
 - Cursor native extension installation is explicit through `install native --host cursor --operation <verify|install|remove>` and depends on a compatible `cursor` CLI.
 - `.cursor/agent-harness/` and `.cursor/agent-harness/cursor-plugin/` are staged project-local managed locations; `.cursor/agent-harness/cursor-plugin/` is treated as a compatible plugin bundle, and registering plugin paths remains host/user-managed.
@@ -861,7 +996,7 @@ Agent-harness managed reference surfaces:
 - `.zed/agent-harness/`
 - project-readable references for non-native asset kinds
 
-Current boundaries:
+Current boundaries (host-specific details only; see [Managed wire-in vs native/global install](#managed-wire-in-vs-nativeglobal-install) for the shared invariants):
 
 - The adapter writes project-local context and profile hints.
 - Zed extension installation remains manual through Zed's Extension Gallery or `auto_install_extensions`; extension assets are wired as managed project references unless explicit extension-install intent is provided.
@@ -901,11 +1036,41 @@ Supported behavior:
 - writes `activate/claude-code/wire-plan.json` on apply
 - avoids global Claude Code profile mutation
 
-Current boundaries:
+Current boundaries (host-specific details only; see [Managed wire-in vs native/global install](#managed-wire-in-vs-nativeglobal-install) for the shared invariants):
 
 - MCP and reference assets are still staged as project-readable references by default.
 - The adapter can synthesize Claude Code `.mcp.json` and `.claude/settings*.json` surfaces when an asset includes structured host-native config payloads.
 - Executable hook/plugin settings still require asset metadata that deliberately targets those documented Claude surfaces.
+
+### OpenAI Codex
+
+The Codex adapter uses the OpenCode-compatible lifecycle host while applying Codex-specific recommendation policy and project-local wire-in surfaces.
+
+Official references:
+
+- <https://developers.openai.com/codex>
+- <https://developers.openai.com/codex/app>
+- <https://developers.openai.com/codex/cli>
+- <https://developers.openai.com/codex/skills>
+- <https://developers.openai.com/codex/plugins>
+- <https://developers.openai.com/codex/mcp>
+- <https://developers.openai.com/codex/hooks>
+- <https://developers.openai.com/codex/guides/agents-md>
+
+What the adapter does:
+
+- writes a managed Codex section into project `AGENTS.md`
+- materializes selected skills into repo-local `.agents/skills/agent-harness/`
+- writes a repo-local `.agents/plugins/marketplace.json` and reviewable `agent-harness` plugin descriptor
+- stores reference assets under `.codex/agent-harness/`
+- applies structured Codex-native payloads only when assets explicitly provide documented host-native config
+
+What it does not do by default:
+
+- it does not write global `~/.codex` config or plugin cache entries
+- it does not silently enable plugin hooks
+- it does not perform MCP OAuth/login or create MCP server config without structured native payloads
+- it does not create automations, remote connections, browser/computer-use settings, or full-access sandbox settings
 
 ### Pi
 
@@ -947,7 +1112,7 @@ Documented Pi-native surfaces used directly:
 - `.pi/prompts/`
 - `.pi/settings.json` top-level resource arrays
 
-Current boundaries:
+Current boundaries (host-specific details only; see [Managed wire-in vs native/global install](#managed-wire-in-vs-nativeglobal-install) for the shared invariants):
 
 - Pi does not include `shared-mcp` in its default bundles.
 - `.pi/agent-harness/` remains a harness-managed reference tree for non-native assets.
@@ -1422,16 +1587,37 @@ agent-harness/
 │   ├── setup.ts
 │   ├── wire.ts
 │   └── workspace.ts
-├── AGENT-SETUP-PLAYBOOK.md
-├── AI-ENRICHMENT-PLAYBOOK.md
-├── ASSET-UPDATE-PLAYBOOK.md
+├── docs/
+│   ├── demo/
+│   ├── guides/
+│   │   ├── HARNESS-MAINTENANCE-GUIDE.md
+│   │   ├── LOGGING-STRATEGY.md
+│   │   ├── MAINTENANCE-WORKFLOW.md
+│   │   ├── RELEASE-PROCESS.md
+│   │   ├── SAFE-DEFAULTS.md
+│   │   ├── TRUST-CENTER.md
+│   │   ├── V1-TO-V2-UPGRADE.md
+│   │   └── V2-CONTRACT.md
+│   ├── playbooks/
+│   │   ├── AGENT-SETUP-PLAYBOOK.md
+│   │   ├── AI-ENRICHMENT-PLAYBOOK.md
+│   │   ├── ASSET-UPDATE-PLAYBOOK.md
+│   │   ├── DEMAND-DETECTION-PLAYBOOK.md
+│   │   ├── DISCOVERY-BREADTH-PLAYBOOK.md
+│   │   ├── QUARANTINE-PLAYBOOK.md
+│   │   ├── RECOMMENDATION-POLICY-PLAYBOOK.md
+│   │   ├── SOURCE-COVERAGE-PLAYBOOK.md
+│   │   └── WORKSPACE-EVOLUTION-PLAYBOOK.md
+│   └── reference/
+│       ├── COVERAGE-100-ROADMAP.md
+│       ├── DEMAND-DETECTION-COVERAGE.md
+│       ├── FUTURE-IMPROVEMENTS.md
+│       ├── HOST-SURFACE-AUDIT.md
+│       ├── IMPLEMENTATION-PLAN.md
+│       ├── Roadmap.md
+│       └── SOURCE-SYNC-DECOMPOSITION-PLAN.md
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
-├── DISCOVERY-BREADTH-PLAYBOOK.md
-├── HOST-SURFACE-AUDIT.md
-├── IMPLEMENTATION-PLAN.md
-├── RECOMMENDATION-POLICY-PLAYBOOK.md
-├── Roadmap.md
 ├── SECURITY.md
 ├── package.json
 └── tsconfig.json
@@ -1448,7 +1634,7 @@ npm run validate:coverage
 npm run test:self-hosting
 ```
 
-Coverage is enforced through `npm run test:coverage` using the checked-in `.c8rc.json` policy. `npm run validate:coverage` builds, runs the coverage gate, and refreshes `coverage/coverage-gaps.md` with uncovered lines/functions/branches from the latest `lcov.info`. The current gate targets the main shipped runtime surface while excluding generated types, test harness artifacts, and selected built command-entry outputs listed in `.c8rc.json`; it fails CI unless statements, branches, functions, and lines all remain at 100%. The maintained 100% coverage policy and gap-inventory workflow are documented in [`COVERAGE-100-ROADMAP.md`](https://github.com/ar27111994/agent-harness/blob/main/COVERAGE-100-ROADMAP.md).
+Coverage is enforced through `npm run test:coverage` using the checked-in `.c8rc.json` policy. `npm run validate:coverage` builds, runs the coverage gate, and refreshes `coverage/coverage-gaps.md` with uncovered lines/functions/branches from the latest `lcov.info`. The current gate targets the main shipped runtime surface while excluding generated types, test harness artifacts, and selected built command-entry outputs listed in `.c8rc.json`; it fails CI unless statements, branches, functions, and lines all remain at 100%. The maintained 100% coverage policy and gap-inventory workflow are documented in [`COVERAGE-100-ROADMAP.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/COVERAGE-100-ROADMAP.md).
 
 For release or adapter changes, also run:
 
@@ -1470,7 +1656,7 @@ npm run validate:release
 
 The CI quality workflow runs on Ubuntu, macOS, and Windows. It validates linting, formatting, types, coverage-gated unit/integration tests, the dedicated self-hosting suite, scan budgets, detection quality, policy coverage, isolated CLI smoke checks, packed artifact smoke checks, and recommendation fixtures. It also publishes a coverage summary into the GitHub Actions step summary for each run. The release workflow additionally runs production dependency audit and npm publish dry-run checks before tagged publication.
 
-For output/logging conventions and the current decision to prefer lightweight internal helpers over a full logging library, see [`LOGGING-STRATEGY.md`](https://github.com/ar27111994/agent-harness/blob/main/LOGGING-STRATEGY.md).
+For output/logging conventions and the current decision to prefer lightweight internal helpers over a full logging library, see [`LOGGING-STRATEGY.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/LOGGING-STRATEGY.md).
 
 ## Troubleshooting
 
@@ -1480,7 +1666,7 @@ Build first and run through the local `dist` entrypoint, or use npm scripts from
 
 ```bash
 npm run build
-node ./dist/cli.js setup hosts
+agent-harness setup hosts
 npm run workspace:vscode -- --intent frontend
 ```
 
@@ -1595,7 +1781,7 @@ Usually no. First confirm that demand detection found the real workspace technol
 
 ### How do I give recommendations the widest possible asset pool?
 
-Run `agent-harness discover breadth` from the real workspace root first, then inspect `discover/output/source-index.json`, `discover/output/source-utilization.json`, and `discover/output/selection-report.json` before touching policy. If the checked-in source universe is still too narrow, widen the active state-root discovery inputs (`discover/sources.json`, `discover/source-packs/*.json`, `discover/official-skills-indexes.json`, and `discover/official-upstreams.json`) and rerun `agent-harness discover breadth`. Use this recall-first path when you are diagnosing breadth specifically; for a normal new-user end-to-end setup, use `agent-harness workspace <host>` instead. For the step-by-step workflow and agent prompt, use [`DISCOVERY-BREADTH-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/DISCOVERY-BREADTH-PLAYBOOK.md).
+Run `agent-harness discover breadth` from the real workspace root first, then inspect `discover/output/source-index.json`, `discover/output/source-utilization.json`, and `discover/output/selection-report.json` before touching policy. If the checked-in source universe is still too narrow, widen the active state-root discovery inputs (`discover/sources.json`, `discover/source-packs/*.json`, `discover/official-skills-indexes.json`, and `discover/official-upstreams.json`) and rerun `agent-harness discover breadth`. Use this recall-first path when you are diagnosing breadth specifically; for a normal new-user end-to-end setup, use `agent-harness workspace <host>` instead. For the step-by-step workflow and agent prompt, use [`DISCOVERY-BREADTH-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DISCOVERY-BREADTH-PLAYBOOK.md).
 
 ### Why do Cursor, Zed, Claude Code, and Pi reuse lifecycle hosts?
 
@@ -1612,6 +1798,10 @@ No. The OpenCode adapter writes a project-local `.opencode` overlay and does not
 ### How do I know what was wired?
 
 Inspect the effective wire plan. Depending on host, it is written under `activate/<host>/wire-plan.json` or inside the host-local overlay, such as `.opencode/context/project-intelligence/agent-harness/wire-plan.json`.
+
+## Security and trust center
+
+For the v2 trust model, safe defaults, review-required paths, and security non-guarantees, see [`TRUST-CENTER.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/TRUST-CENTER.md) and [`SAFE-DEFAULTS.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/SAFE-DEFAULTS.md). The short rule is: discovery/reporting can be automated, but quarantine approval, trust-tier promotion, executable hooks/plugins/MCP/custom tools, native/global installs, and host-native credential flows require explicit review.
 
 ## Current boundaries
 
@@ -1630,17 +1820,17 @@ Known boundaries:
 ## Related documentation
 
 - [`CHANGELOG.md`](https://github.com/ar27111994/agent-harness/blob/main/CHANGELOG.md) - release notes
-- [`AGENT-SETUP-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/AGENT-SETUP-PLAYBOOK.md) - dry-run setup workflow, decision tree, and reusable agent prompts for workspace/host asset setup
-- [`DISCOVERY-BREADTH-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/DISCOVERY-BREADTH-PLAYBOOK.md) - how to maximize the practical candidate pool before judging recommendation quality
-- [`AI-ENRICHMENT-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/AI-ENRICHMENT-PLAYBOOK.md) - scenario-based guidance for enrichment modes, bounded AI review, and operator workflows
-- [`ASSET-UPDATE-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/ASSET-UPDATE-PLAYBOOK.md) - report-only, due-only, and apply-safe refresh/update workflows for installed assets
-- [`LOGGING-STRATEGY.md`](https://github.com/ar27111994/agent-harness/blob/main/LOGGING-STRATEGY.md) - current decision and guardrails for CLI output/logging vs a full logging library
-- [`RECOMMENDATION-POLICY-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/RECOMMENDATION-POLICY-PLAYBOOK.md) - how to inspect and tweak ranking policy only after recall looks healthy
-- [`HOST-SURFACE-AUDIT.md`](https://github.com/ar27111994/agent-harness/blob/main/HOST-SURFACE-AUDIT.md) - checked-in matrix mapping host-facing paths/settings to documented, compatibility, harness-managed, or implementation-detail status
+- [`AGENT-SETUP-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/AGENT-SETUP-PLAYBOOK.md) - dry-run setup workflow, decision tree, and reusable agent prompts for workspace/host asset setup
+- [`DISCOVERY-BREADTH-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DISCOVERY-BREADTH-PLAYBOOK.md) - how to maximize the practical candidate pool before judging recommendation quality
+- [`AI-ENRICHMENT-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/AI-ENRICHMENT-PLAYBOOK.md) - scenario-based guidance for enrichment modes, bounded AI review, and operator workflows
+- [`ASSET-UPDATE-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/ASSET-UPDATE-PLAYBOOK.md) - report-only, due-only, and apply-safe refresh/update workflows for installed assets
+- [`LOGGING-STRATEGY.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/LOGGING-STRATEGY.md) - current decision and guardrails for CLI output/logging vs a full logging library
+- [`RECOMMENDATION-POLICY-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/RECOMMENDATION-POLICY-PLAYBOOK.md) - how to inspect and tweak ranking policy only after recall looks healthy
+- [`HOST-SURFACE-AUDIT.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/HOST-SURFACE-AUDIT.md) - checked-in matrix mapping host-facing paths/settings to documented, compatibility, harness-managed, or implementation-detail status
 - [`SECURITY.md`](https://github.com/ar27111994/agent-harness/blob/main/SECURITY.md) - vulnerability reporting and supported-version policy
-- [`Roadmap.md`](https://github.com/ar27111994/agent-harness/blob/main/Roadmap.md) - gap analysis and long-range direction
-- [`IMPLEMENTATION-PLAN.md`](https://github.com/ar27111994/agent-harness/blob/main/IMPLEMENTATION-PLAN.md) - milestone-oriented execution plan
-- [`FUTURE-IMPROVEMENTS.md`](https://github.com/ar27111994/agent-harness/blob/main/FUTURE-IMPROVEMENTS.md) - follow-up ideas and architectural extensions
+- [`Roadmap.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/Roadmap.md) - gap analysis and long-range direction
+- [`IMPLEMENTATION-PLAN.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/IMPLEMENTATION-PLAN.md) - milestone-oriented execution plan
+- [`FUTURE-IMPROVEMENTS.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/FUTURE-IMPROVEMENTS.md) - follow-up ideas and architectural extensions
 - [`CONTRIBUTING.md`](https://github.com/ar27111994/agent-harness/blob/main/CONTRIBUTING.md) - contribution workflow and hygiene
 
 ## Sponsor

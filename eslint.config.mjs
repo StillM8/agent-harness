@@ -10,6 +10,8 @@ const cliOutputFiles = [
   "src/discover.ts",
   "src/domains/discovery/ai-enrichment.ts",
   "src/domains/discovery/catalog-inspection.ts",
+  "src/domains/discovery/diff.ts",
+  "src/domains/discovery/environment-index.ts",
   "src/domains/discovery/source-index.ts",
   "src/install.ts",
   "src/install/*.ts",
@@ -31,8 +33,16 @@ const cliOutputFiles = [
   "src/tests/workspace-smoke.ts",
 ];
 
+// Keep no-magic-numbers scoped to policy/runtime hot paths where numeric
+// thresholds directly affect user-visible safety, ranking, or resource limits.
+// Expanding it repository-wide would add noise in fixture-heavy modules; add
+// files here intentionally as they gain policy-style constants.
 const magicThresholdFiles = [
   "src/config/runtime.ts",
+  "src/domains/discovery/ai-enrichment.ts",
+  "src/domains/discovery/source-sync.ts",
+  "src/install/refresh.ts",
+  "src/mirror/acquire.ts",
   "src/recommend/selection.ts",
 ];
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -255,8 +255,8 @@ void test("Zed native wire apply/reset updates rules and settings with reversibl
   }
 });
 
-void test("Claude Code and Pi native wire apply/reset manage project-local context and host settings", async () => {
-  for (const host of ["claude-code", "pi"] as const) {
+void test("Claude Code, Pi, and Codex native wire apply/reset manage project-local context and host settings", async () => {
+  for (const host of ["claude-code", "pi", "codex"] as const) {
     const fixture = await createNativeFixture(host);
 
     try {
@@ -278,7 +278,7 @@ void test("Claude Code and Pi native wire apply/reset manage project-local conte
           join(fixture.workspaceRoot, ".claude", "settings.json"),
           { existing: true },
         );
-      } else {
+      } else if (host === "pi") {
         await writeTextFile(
           join(fixture.workspaceRoot, "AGENTS.md"),
           "Existing AGENTS\n",
@@ -293,6 +293,22 @@ void test("Claude Code and Pi native wire apply/reset manage project-local conte
             skills: ["skills/existing"],
             prompts: ["prompts/existing.md"],
             agentHarness: true,
+          },
+        );
+      } else {
+        await writeTextFile(
+          join(fixture.workspaceRoot, "AGENTS.md"),
+          "Existing AGENTS\n",
+        );
+        await writeJsonFile(
+          join(fixture.workspaceRoot, ".agents", "plugins", "marketplace.json"),
+          {
+            schemaVersion: 2,
+            plugins: [
+              { name: "existing", path: "./existing" },
+              { name: "agent-harness", path: "./stale-agent-harness" },
+              "ignored malformed entry",
+            ],
           },
         );
       }
@@ -332,7 +348,7 @@ void test("Claude Code and Pi native wire apply/reset manage project-local conte
             claudeHarness: true,
           },
         );
-      } else {
+      } else if (host === "pi") {
         assert.match(
           (await readFile(join(fixture.workspaceRoot, "AGENTS.md"), "utf8")) ??
             "",
@@ -362,6 +378,91 @@ void test("Claude Code and Pi native wire apply/reset manage project-local conte
             prompts: ["prompts/existing.md", "prompts/agent-harness.md"],
           },
         );
+      } else {
+        assert.match(
+          (await readFile(join(fixture.workspaceRoot, "AGENTS.md"), "utf8")) ??
+            "",
+          /agent-harness-codex:begin/u,
+        );
+        assert.deepEqual(
+          JSON.parse(
+            await readFile(
+              join(
+                fixture.workspaceRoot,
+                ".agents",
+                "plugins",
+                "agent-harness",
+                ".codex-plugin",
+                "plugin.json",
+              ),
+              "utf8",
+            ),
+          ),
+          {
+            name: "agent-harness",
+            version: "1.0.0",
+            description: "Project-local Agent Harness assets for OpenAI Codex.",
+            skills: "./skills",
+            hooks: "./hooks/hooks.json",
+          },
+        );
+        assert.deepEqual(
+          JSON.parse(
+            await readFile(
+              join(
+                fixture.workspaceRoot,
+                ".agents",
+                "plugins",
+                "marketplace.json",
+              ),
+              "utf8",
+            ),
+          ),
+          {
+            schemaVersion: 2,
+            plugins: [
+              { name: "existing", path: "./existing" },
+              { name: "agent-harness", path: "./agent-harness" },
+            ],
+          },
+        );
+        const codexHooksManifest = JSON.parse(
+          await readFile(
+            join(
+              fixture.workspaceRoot,
+              ".agents",
+              "plugins",
+              "agent-harness",
+              "hooks",
+              "hooks.json",
+            ),
+            "utf8",
+          ),
+        ) as {
+          schemaVersion: number;
+          hooks: Array<{ name: string; description: string; source: string }>;
+        };
+        assert.equal(codexHooksManifest.schemaVersion, 1);
+        assert.deepEqual(
+          codexHooksManifest.hooks.map(({ description, name }) => ({
+            description,
+            name,
+          })),
+          [
+            {
+              name: "cursor.hook",
+              description: "Cursor Hook",
+            },
+          ],
+        );
+        assert.match(
+          codexHooksManifest.hooks[0]?.source ?? "",
+          /^\.\.\/\.\.\/\.\.\/\.\.\/\.codex\/agent-harness\/assets\/hooks\/cursor-hook-[a-f0-9]+\/hook\.md$/u,
+        );
+        assert.equal(
+          isAbsolute(codexHooksManifest.hooks[0]?.source ?? ""),
+          false,
+        );
       }
 
       await wireNativeHost(host, {
@@ -390,7 +491,7 @@ void test("Claude Code and Pi native wire apply/reset manage project-local conte
           ),
           { existing: true },
         );
-      } else {
+      } else if (host === "pi") {
         assert.equal(
           await readTextFileOrNull(join(fixture.workspaceRoot, "AGENTS.md")),
           "Existing AGENTS\n",
@@ -423,11 +524,40 @@ void test("Claude Code and Pi native wire apply/reset manage project-local conte
           ),
           false,
         );
+      } else {
+        assert.equal(
+          await readTextFileOrNull(join(fixture.workspaceRoot, "AGENTS.md")),
+          "Existing AGENTS\n",
+        );
+        assert.equal(
+          await pathExists(join(fixture.workspaceRoot, ".codex")),
+          false,
+        );
       }
     } finally {
       await fixture.cleanup();
     }
   }
+});
+
+void test("Codex plugin manifest omits hook registration when hook assets are absent", () => {
+  assert.deepEqual(
+    nativeWireInternals.buildCodexPluginManifest([
+      {
+        assetId: "codex.skill",
+        assetKind: "skill",
+        displayName: "Codex Skill",
+        compatibilityMode: "native",
+        content: "# Codex skill\n",
+      },
+    ]),
+    {
+      name: "agent-harness",
+      version: "1.0.0",
+      description: "Project-local Agent Harness assets for OpenAI Codex.",
+      skills: "./skills",
+    },
+  );
 });
 
 void test("native wire skips missing activation assets and falls back to asset metadata when content is absent", async () => {
@@ -624,50 +754,63 @@ void test("native wire preview writes only the preview manifest", async () => {
   }
 });
 
-void test("Pi native wire reset removes managed-only files and settings", async () => {
-  const fixture = await createNativeFixture("pi");
+void test("Pi and Codex native wire reset removes managed-only files and settings", async () => {
+  for (const host of ["pi", "codex"] as const) {
+    const fixture = await createNativeFixture(host);
 
-  try {
-    await writeOpenCodeActivation(
-      fixture.projectRoot,
-      fixture.workspaceRoot,
-      fixture.assets,
-    );
+    try {
+      await writeOpenCodeActivation(
+        fixture.projectRoot,
+        fixture.workspaceRoot,
+        fixture.assets,
+      );
 
-    await wireNativeHost("pi", {
-      projectRoot: fixture.projectRoot,
-      workspaceRoot: fixture.workspaceRoot,
-      mode: "apply",
-    });
+      await wireNativeHost(host, {
+        projectRoot: fixture.projectRoot,
+        workspaceRoot: fixture.workspaceRoot,
+        mode: "apply",
+      });
 
-    assert.match(
-      (await readTextFileOrNull(join(fixture.workspaceRoot, "AGENTS.md"))) ??
-        "",
-      /agent-harness-pi:begin/u,
-    );
+      assert.match(
+        (await readTextFileOrNull(join(fixture.workspaceRoot, "AGENTS.md"))) ??
+          "",
+        new RegExp(`agent-harness-${host}:begin`, "u"),
+      );
 
-    await wireNativeHost("pi", {
-      projectRoot: fixture.projectRoot,
-      workspaceRoot: fixture.workspaceRoot,
-      mode: "reset",
-    });
+      await wireNativeHost(host, {
+        projectRoot: fixture.projectRoot,
+        workspaceRoot: fixture.workspaceRoot,
+        mode: "reset",
+      });
 
-    assert.equal(
-      await readTextFileOrNull(join(fixture.workspaceRoot, "AGENTS.md")),
-      null,
-    );
-    assert.equal(
-      await readTextFileOrNull(join(fixture.workspaceRoot, "SYSTEM.md")),
-      null,
-    );
-    assert.equal(
-      await readTextFileOrNull(
-        join(fixture.workspaceRoot, ".pi", "settings.json"),
-      ),
-      null,
-    );
-  } finally {
-    await fixture.cleanup();
+      assert.equal(
+        await readTextFileOrNull(join(fixture.workspaceRoot, "AGENTS.md")),
+        null,
+      );
+      if (host === "pi") {
+        assert.equal(
+          await readTextFileOrNull(join(fixture.workspaceRoot, "SYSTEM.md")),
+          null,
+        );
+        assert.equal(
+          await readTextFileOrNull(
+            join(fixture.workspaceRoot, ".pi", "settings.json"),
+          ),
+          null,
+        );
+      } else {
+        assert.equal(
+          await pathExists(join(fixture.workspaceRoot, ".agents")),
+          false,
+        );
+        assert.equal(
+          await pathExists(join(fixture.workspaceRoot, ".codex")),
+          false,
+        );
+      }
+    } finally {
+      await fixture.cleanup();
+    }
   }
 });
 
@@ -1025,6 +1168,26 @@ function buildHostNativeConfig(host: NativeWireHost): AssetHostNativeConfigMap {
           ],
         },
       };
+    case "codex":
+      return {
+        codex: {
+          files: [
+            {
+              path: ".codex/config.toml",
+              format: "text",
+              content: "# generated codex config\n",
+            },
+            {
+              path: ".codex/hooks.json",
+              format: "json",
+              merge: true,
+              content: {
+                hooks: [],
+              },
+            },
+          ],
+        },
+      };
   }
 }
 
@@ -1237,6 +1400,66 @@ void test("native wire internals clean failed applies and validate helper edge c
   assert.equal(
     await pathExists(
       join(workspaceRoot, ".claude", "rules", "agent-harness.md"),
+    ),
+    false,
+  );
+
+  const codexManagedRoot = join(
+    workspaceRoot,
+    ".agents",
+    "plugins",
+    "agent-harness",
+  );
+  const codexActivationRoot = join(root, "project", "activate", "codex");
+  await writeTextFile(join(codexManagedRoot, "wire-plan.json"), "{}\n");
+  await writeTextFile(join(codexActivationRoot, "wire-plan.json"), "{}\n");
+  await writeTextFile(
+    join(workspaceRoot, "AGENTS.md"),
+    managedOnlySection("agent-harness-codex"),
+  );
+  await writeTextFile(
+    join(workspaceRoot, ".agents", "skills", "agent-harness", "SKILL.md"),
+    "skill\n",
+  );
+  await writeTextFile(
+    join(
+      workspaceRoot,
+      ".agents",
+      "plugins",
+      "agent-harness",
+      ".codex-plugin",
+      "plugin.json",
+    ),
+    "{}\n",
+  );
+  await writeTextFile(
+    join(workspaceRoot, ".agents", "plugins", "marketplace.json"),
+    "{}\n",
+  );
+  await nativeWireInternals.cleanupFailedNativeHostApply(
+    nativeWireInternals.nativeHostSpecs.codex,
+    workspaceRoot,
+    codexManagedRoot,
+    codexActivationRoot,
+    [],
+  );
+  assert.equal(
+    await readTextFileOrNull(join(workspaceRoot, "AGENTS.md")),
+    null,
+  );
+  assert.equal(
+    await pathExists(join(workspaceRoot, ".agents", "skills", "agent-harness")),
+    false,
+  );
+  assert.equal(
+    await pathExists(
+      join(workspaceRoot, ".agents", "plugins", "agent-harness"),
+    ),
+    false,
+  );
+  assert.equal(
+    await pathExists(
+      join(workspaceRoot, ".agents", "plugins", "marketplace.json"),
     ),
     false,
   );

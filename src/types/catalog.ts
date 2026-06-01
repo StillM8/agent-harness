@@ -14,7 +14,8 @@ export type HostNativeConfigTarget =
   | "cursor"
   | "zed"
   | "claude-code"
-  | "pi";
+  | "pi"
+  | "codex";
 
 /**
  * Describes host-native text file payloads exchanged by the lifecycle pipeline.
@@ -58,6 +59,7 @@ export interface AssetHostNativeConfigMap {
   zed?: AssetHostNativeConfig;
   "claude-code"?: AssetHostNativeConfig;
   pi?: AssetHostNativeConfig;
+  codex?: AssetHostNativeConfig;
 }
 
 /**
@@ -126,6 +128,16 @@ export interface AssetEvidence {
   dependencies?: string[];
   filePath?: string;
   rootPath?: string;
+  classification?: {
+    assetKind: AssetKind;
+    confidence: number;
+    level: "strong" | "medium" | "weak";
+    evidence: Array<{
+      source: string;
+      strength: "strong" | "medium" | "weak";
+      detail: string;
+    }>;
+  };
 }
 
 /**
@@ -182,6 +194,24 @@ export interface AssetStatus {
 }
 
 /**
+ * Describes additive query-oriented metadata for future read-only retrieval.
+ */
+export interface AssetQueryMetadata {
+  symbolicHandle: string;
+  retrievalFacets: string[];
+  chunkingHints: {
+    preferredStrategy: "document" | "section" | "file";
+    maxPromptWeight: number;
+  };
+  citation: {
+    provenance: string;
+    sourceUrl: string;
+    sourceId: string;
+  };
+  safetyFlags: string[];
+}
+
+/**
  * Describes asset catalog entry data exchanged by the lifecycle pipeline.
  */
 export interface AssetCatalogEntry {
@@ -201,5 +231,6 @@ export interface AssetCatalogEntry {
   fit: AssetFit;
   dedupe: AssetDedupe;
   status: AssetStatus;
+  queryMetadata?: AssetQueryMetadata;
   hostNativeConfig?: AssetHostNativeConfigMap;
 }

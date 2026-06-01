@@ -310,6 +310,10 @@ void test("manifest validators enforce refresh schema versions and nested operat
             pinnedCount: 0,
             blockedCount: 0,
             currentCount: 1,
+            stageEligibleCount: 1,
+            applyEligibleCount: 1,
+            reviewRequiredCount: 0,
+            quarantinedCount: 0,
             assets: [
               {
                 assetId: "asset-a",
@@ -320,6 +324,8 @@ void test("manifest validators enforce refresh schema versions and nested operat
                 policyDecision: "apply",
                 pinned: false,
                 reason: "current",
+                refreshTier: "auto-refresh-low-risk",
+                policyReason: "low-risk current asset",
                 installedMirrorId: "mirror-a",
                 latestMirrorId: "mirror-b",
                 installedFingerprint: {
@@ -368,10 +374,58 @@ void test("manifest validators enforce refresh schema versions and nested operat
         lastAppliedAt: new Date().toISOString(),
         refreshedMirrorState: true,
         staleCount: 1,
+        stageEligibleCount: 1,
         applyEligibleCount: 1,
+        reviewRequiredCount: 0,
+        quarantinedCount: 0,
       },
       "refreshState",
     ),
+  );
+
+  assert.throws(
+    () =>
+      assertInstallRefreshReport(
+        {
+          schemaVersion: 1,
+          generatedAt: new Date().toISOString(),
+          policy: "apply-safe",
+          refreshedMirrorState: true,
+          hosts: [
+            {
+              host: "copilot-vscode",
+              pinnedGeneration: false,
+              assetCount: 1,
+              staleCount: 1,
+              pinnedCount: 0,
+              blockedCount: 0,
+              currentCount: 0,
+              stageEligibleCount: 0,
+              applyEligibleCount: 0,
+              reviewRequiredCount: 0,
+              quarantinedCount: 0,
+              assets: [
+                {
+                  assetId: "asset-a",
+                  host: "copilot-vscode",
+                  bundleIds: [],
+                  assetKind: "skill",
+                  status: "stale",
+                  policyDecision: "plan",
+                  pinned: false,
+                  reason: "fixture",
+                  refreshTier: "auto-report-only",
+                  policyReason: "fixture",
+                  lastRefreshAction: "invalid",
+                  installedMirrorId: "mirror-a",
+                },
+              ],
+            },
+          ],
+        },
+        "refreshReport",
+      ),
+    /lastRefreshAction: expected one of refreshed, staged, skipped/u,
   );
 
   assert.throws(
@@ -399,7 +453,10 @@ void test("manifest validators enforce refresh schema versions and nested operat
           nextCheckAt: new Date().toISOString(),
           refreshedMirrorState: false,
           staleCount: 0,
+          stageEligibleCount: 0,
           applyEligibleCount: 0,
+          reviewRequiredCount: 0,
+          quarantinedCount: 0,
         },
         "refreshState",
       ),

@@ -4,6 +4,7 @@ import { access, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { getRuntimeConfig } from "../config/runtime.js";
+import { shouldQuarantineCommunityAsset } from "../domains/discovery/community-scoring.js";
 import {
   createContentHash,
   ensureCleanDirectory,
@@ -40,6 +41,7 @@ import type {
   MirrorAcquireState,
   MirrorIndexEntry,
   MirrorPolicy,
+  MirrorQuarantineSignals,
 } from "../types.js";
 import { resolveBundleLocks } from "./bundles.js";
 import {
@@ -58,6 +60,15 @@ import {
   resolveAllowedMirrorEvidenceFilePathForRead,
   sanitizeMirrorId,
 } from "./paths.js";
+
+const FALLBACK_MIRROR_ACQUIRE_BATCH_SIZE = 120;
+const PRETTY_JSON_INDENT_SPACES = 2;
+const GITHUB_BLOB_OWNER_INDEX = 0;
+const GITHUB_BLOB_REPO_INDEX = 1;
+const GITHUB_BLOB_KIND_INDEX = 2;
+const GITHUB_BLOB_REF_START_INDEX = 3;
+const MIN_GITHUB_BLOB_PATH_PARTS = 5;
+const MIN_GITHUB_REPOSITORY_PATH_PARTS = 2;
 
 interface MaterializedMirrorArtifact {
   content: Buffer;
@@ -147,7 +158,7 @@ export async function acquireMirrorArtifacts(
     Number.isInteger(rawBatchSize) &&
     rawBatchSize >= 1
       ? rawBatchSize
-      : 120;
+      : FALLBACK_MIRROR_ACQUIRE_BATCH_SIZE;
   const existingMirrorIndexEntries = await readJsonLinesFile<MirrorIndexEntry>(
     join(projectRoot, ...MIRROR_INDEX_OUTPUT_PATH),
     assertMirrorIndexEntry,
@@ -267,7 +278,7 @@ export async function acquireMirrorArtifacts(
             ? `native-${entry.assetKind}`
             : `adapted-${entry.assetKind}`,
       })),
-      status: determineMirrorStatus(entry, materializedArtifact),
+      ...buildMirrorSafetyFields(entry, materializedArtifact),
     };
 
     if (
@@ -483,7 +494,10 @@ async function materializeMirrorArtifact(
 
   return {
     artifact: {
-      content: Buffer.from(JSON.stringify(entry, null, 2), "utf8"),
+      content: Buffer.from(
+        JSON.stringify(entry, null, PRETTY_JSON_INDENT_SPACES),
+        "utf8",
+      ),
     },
   };
 }
@@ -498,7 +512,10 @@ async function materializeGitHubTreeArtifact(
       ? { artifact: null }
       : {
           artifact: {
-            content: Buffer.from(JSON.stringify(entry, null, 2), "utf8"),
+            content: Buffer.from(
+              JSON.stringify(entry, null, PRETTY_JSON_INDENT_SPACES),
+              "utf8",
+            ),
           },
         };
   }
@@ -716,7 +733,8 @@ function isGitHubHttpsRepositoryUrl(value: string): boolean {
     return (
       parsedUrl.protocol === "https:" &&
       parsedUrl.hostname.toLowerCase() === "github.com" &&
-      parsedUrl.pathname.split("/").filter(Boolean).length >= 2
+      parsedUrl.pathname.split("/").filter(Boolean).length >=
+        MIN_GITHUB_REPOSITORY_PATH_PARTS
     );
   } catch {
     return false;
@@ -741,7 +759,8 @@ function selectOfficialIndexPrimaryContent(
 ): Buffer {
   return (
     materializedFiles.find((file) => file.relativePath === "SKILL.md")
-      ?.content ?? Buffer.from(JSON.stringify(entry, null, 2), "utf8")
+      ?.content ??
+    Buffer.from(JSON.stringify(entry, null, PRETTY_JSON_INDENT_SPACES), "utf8")
   );
 }
 
@@ -841,13 +860,16 @@ function parseGitHubBlobEntry(entry: AssetCatalogEntry): {
     }
 
     const pathParts = url.pathname.split("/").filter(Boolean);
-    if (pathParts.length < 5 || pathParts[2] !== "blob") {
+    if (
+      pathParts.length < MIN_GITHUB_BLOB_PATH_PARTS ||
+      pathParts[GITHUB_BLOB_KIND_INDEX] !== "blob"
+    ) {
       return null;
     }
 
-    const owner = pathParts[0];
-    const repo = pathParts[1].replace(/\.git$/u, "");
-    const blobPath = pathParts.slice(3).join("/");
+    const owner = pathParts[GITHUB_BLOB_OWNER_INDEX];
+    const repo = pathParts[GITHUB_BLOB_REPO_INDEX].replace(/\.git$/u, "");
+    const blobPath = pathParts.slice(GITHUB_BLOB_REF_START_INDEX).join("/");
     if (!blobPath.endsWith(filePath)) {
       return null;
     }
@@ -875,7 +897,10 @@ function buildMirrorFileManifest(
     { relativePath: "content.txt", content: materializedArtifact.content },
     {
       relativePath: "asset.json",
-      content: Buffer.from(`${JSON.stringify(entry, null, 2)}\n`, "utf8"),
+      content: Buffer.from(
+        `${JSON.stringify(entry, null, PRETTY_JSON_INDENT_SPACES)}\n`,
+        "utf8",
+      ),
     },
     ...(materializedArtifact.files ?? []),
   ]
@@ -948,37 +973,85 @@ function buildUpstreamMetadata(
   };
 }
 
+/**
+ * Builds the status and quarantine-signal fields for a mirror index entry from
+ * a single safety evaluation, so the persisted entry records why it landed in
+ * its status. `quarantineSignals` is only attached when at least one signal is
+ * present, keeping clean approved entries free of empty signal noise.
+ */
+function buildMirrorSafetyFields(
+  entry: AssetCatalogEntry,
+  materializedArtifact: MaterializedMirrorArtifact,
+): Pick<MirrorIndexEntry, "status" | "quarantineSignals"> {
+  const { status, signals } = evaluateMirrorSafety(entry, materializedArtifact);
+  const hasSignal =
+    signals.promptInjection ||
+    signals.executableRisk ||
+    signals.communityRisk ||
+    signals.highRisk;
+  return hasSignal ? { status, quarantineSignals: signals } : { status };
+}
+
+/**
+ * Evaluates a materialized artifact against the acquisition-time safety checks
+ * and returns both the resolved mirror status and the concrete signals that
+ * drove it. The status precedence is identical to the prior implementation;
+ * signals are captured so downstream quarantine reporting reflects real causes.
+ */
+function evaluateMirrorSafety(
+  entry: AssetCatalogEntry,
+  materializedArtifact: MaterializedMirrorArtifact,
+): {
+  status: MirrorIndexEntry["status"];
+  signals: MirrorQuarantineSignals;
+} {
+  const isOfficialFirstParty =
+    entry.source.authorityTier === "official-first-party";
+  const signals: MirrorQuarantineSignals = {
+    promptInjection: hasPromptInjectionRisk(materializedArtifact),
+    executableRisk: shouldQuarantineCommunityAsset(entry),
+    communityRisk: entry.source.authorityTier === "unverified-community",
+    highRisk: entry.risk.level === "high",
+  };
+
+  if (signals.promptInjection) {
+    return {
+      status: isOfficialFirstParty ? "approved-with-warning" : "quarantined",
+      signals,
+    };
+  }
+
+  if (signals.executableRisk) {
+    return { status: "quarantined", signals };
+  }
+
+  if (signals.communityRisk) {
+    return { status: "quarantined", signals };
+  }
+
+  if (signals.highRisk) {
+    return {
+      status: isOfficialFirstParty ? "approved-with-warning" : "quarantined",
+      signals,
+    };
+  }
+
+  if (entry.compatibilityMode === "reference-only") {
+    return { status: "reference-only", signals };
+  }
+
+  return { status: "approved", signals };
+}
+
+/**
+ * Returns only the resolved mirror status for an artifact. Retained as a stable
+ * internal test surface; delegates to {@link evaluateMirrorSafety}.
+ */
 function determineMirrorStatus(
   entry: AssetCatalogEntry,
   materializedArtifact: MaterializedMirrorArtifact,
 ): MirrorIndexEntry["status"] {
-  if (
-    hasPromptInjectionRisk(materializedArtifact) &&
-    entry.source.authorityTier !== "official-first-party"
-  ) {
-    return "quarantined";
-  }
-
-  if (hasPromptInjectionRisk(materializedArtifact)) {
-    return "approved-with-warning";
-  }
-
-  if (
-    entry.risk.level === "high" &&
-    entry.source.authorityTier !== "official-first-party"
-  ) {
-    return "quarantined";
-  }
-
-  if (entry.risk.level === "high") {
-    return "approved-with-warning";
-  }
-
-  if (entry.compatibilityMode === "reference-only") {
-    return "reference-only";
-  }
-
-  return "approved";
+  return evaluateMirrorSafety(entry, materializedArtifact).status;
 }
 
 function hasPromptInjectionRisk(

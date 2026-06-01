@@ -33,6 +33,7 @@ import {
   writeInstallGenerations,
 } from "../install/state.js";
 import { sanitizeAssetId, sanitizeMirrorId } from "../lib/safe-paths.js";
+import { clearRuntimeConfigForTests } from "../config/runtime.js";
 import { getInstallableAssets } from "../install/utils.js";
 import type {
   ActivationManifest,
@@ -799,11 +800,11 @@ void test("manageNativeInstall builds a native install plan from selected activa
 void test("manageNativeInstall rejects unsupported and invalid operations", async () => {
   await assert.rejects(
     manageNativeInstall(process.cwd(), ["--host", "not-a-host"]),
-    /Unknown host 'not-a-host' for native install/u,
+    /Unsupported host adapter/u,
   );
   await assert.rejects(
     manageNativeInstall(process.cwd(), ["--host", "zed"]),
-    /does not support host-native installation/u,
+    /Unsupported native install capability/u,
   );
   await assert.rejects(
     manageNativeInstall(process.cwd(), [
@@ -834,9 +835,16 @@ void test("manageNativeInstall reports when no selected assets are ready", async
       "plan",
     ]);
 
-    assert.deepEqual(output, [
-      "No selected extension assets are ready for native install on GitHub Copilot in VS Code.",
-    ]);
+    assert.equal(output.length, 1);
+    assert.match(output[0] ?? "", /No native-install assets selected/u);
+    assert.match(
+      output[0] ?? "",
+      /No selected extension assets are ready for native install on GitHub Copilot in VS Code\./u,
+    );
+    assert.match(
+      output[0] ?? "",
+      /agent-harness install native --host copilot-vscode --operation plan/u,
+    );
     assert.equal(
       await pathExists(join(projectRoot, ...NATIVE_INSTALL_STATE_OUTPUT_PATH)),
       false,
@@ -1525,18 +1533,57 @@ void test("writeInstallGenerations tolerates missing bundle manifests and empty 
   }
 });
 
+interface FakeCodeEnvironment {
+  binDir: string;
+  statePath: string;
+  restore: () => void;
+}
+
+// Activates the fake `code` CLI on PATH and relaxes the host-command preflight
+// timeout so the Node-based fake CLI stays reliable even under coverage
+// instrumentation, where spawning a child Node process is significantly slower.
+async function activateFakeCodeEnvironment(
+  projectRoot: string,
+): Promise<FakeCodeEnvironment> {
+  const originalPath = process.env.PATH;
+  const originalStatePath = process.env.AGENT_HARNESS_FAKE_CODE_STATE;
+  const originalPreflightTimeout =
+    process.env.AGENT_HARNESS_PREFLIGHT_COMMAND_TIMEOUT_MS;
+
+  const { binDir, statePath } = await createFakeCodeCli(projectRoot);
+  process.env.PATH = `${binDir}${process.platform === "win32" ? ";" : ":"}${originalPath ?? ""}`;
+  process.env.AGENT_HARNESS_FAKE_CODE_STATE = statePath;
+  process.env.AGENT_HARNESS_PREFLIGHT_COMMAND_TIMEOUT_MS = "60000";
+  clearRuntimeConfigForTests();
+
+  return {
+    binDir,
+    statePath,
+    restore: () => {
+      process.env.PATH = originalPath;
+      if (originalStatePath === undefined) {
+        delete process.env.AGENT_HARNESS_FAKE_CODE_STATE;
+      } else {
+        process.env.AGENT_HARNESS_FAKE_CODE_STATE = originalStatePath;
+      }
+      if (originalPreflightTimeout === undefined) {
+        delete process.env.AGENT_HARNESS_PREFLIGHT_COMMAND_TIMEOUT_MS;
+      } else {
+        process.env.AGENT_HARNESS_PREFLIGHT_COMMAND_TIMEOUT_MS =
+          originalPreflightTimeout;
+      }
+      clearRuntimeConfigForTests();
+    },
+  };
+}
+
 void test("manageNativeInstall applies installs through the host CLI and records native state", async () => {
   const projectRoot = await mkdtemp(
     join(tmpdir(), "agent-harness-native-install-"),
   );
-  const originalPath = process.env.PATH;
-  const originalStatePath = process.env.AGENT_HARNESS_FAKE_CODE_STATE;
+  const fakeCode = await activateFakeCodeEnvironment(projectRoot);
 
   try {
-    const { binDir, statePath } = await createFakeCodeCli(projectRoot);
-    process.env.PATH = `${binDir}${process.platform === "win32" ? ";" : ":"}${originalPath ?? ""}`;
-    process.env.AGENT_HARNESS_FAKE_CODE_STATE = statePath;
-
     await writeJsonFile(
       join(
         projectRoot,
@@ -1617,12 +1664,7 @@ void test("manageNativeInstall applies installs through the host CLI and records
       /fixture\.asset-b@1\.0\.0/u,
     );
   } finally {
-    process.env.PATH = originalPath;
-    if (originalStatePath === undefined) {
-      delete process.env.AGENT_HARNESS_FAKE_CODE_STATE;
-    } else {
-      process.env.AGENT_HARNESS_FAKE_CODE_STATE = originalStatePath;
-    }
+    fakeCode.restore();
     await rm(projectRoot, { force: true, recursive: true });
   }
 });
@@ -1631,14 +1673,9 @@ void test("manageNativeInstall surfaces failed verify results after writing nati
   const projectRoot = await mkdtemp(
     join(tmpdir(), "agent-harness-native-install-"),
   );
-  const originalPath = process.env.PATH;
-  const originalStatePath = process.env.AGENT_HARNESS_FAKE_CODE_STATE;
+  const fakeCode = await activateFakeCodeEnvironment(projectRoot);
 
   try {
-    const { binDir, statePath } = await createFakeCodeCli(projectRoot);
-    process.env.PATH = `${binDir}${process.platform === "win32" ? ";" : ":"}${originalPath ?? ""}`;
-    process.env.AGENT_HARNESS_FAKE_CODE_STATE = statePath;
-
     await writeJsonFile(
       join(
         projectRoot,
@@ -1713,12 +1750,7 @@ void test("manageNativeInstall surfaces failed verify results after writing nati
     assert.equal(nativeState.results[0]?.success, false);
     assert.equal(nativeState.results[0]?.installed, false);
   } finally {
-    process.env.PATH = originalPath;
-    if (originalStatePath === undefined) {
-      delete process.env.AGENT_HARNESS_FAKE_CODE_STATE;
-    } else {
-      process.env.AGENT_HARNESS_FAKE_CODE_STATE = originalStatePath;
-    }
+    fakeCode.restore();
     await rm(projectRoot, { force: true, recursive: true });
   }
 });

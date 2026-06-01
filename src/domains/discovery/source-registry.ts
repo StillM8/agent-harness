@@ -14,12 +14,17 @@ import type {
   SourceRegistry,
 } from "../../types.js";
 import { buildGeneratedLocalSources } from "./local-sources.js";
+import {
+  applySourceVerificationDemotions,
+  buildSourceVerificationReport,
+} from "./source-verification.js";
 
 interface SourcePackShape {
   schemaVersion: number;
   entries: Array<{
     id: string;
     repo: string;
+    kind?: SourceDefinition["kind"];
     authorityTier?: SourceDefinition["authorityTier"];
     publisher?: string;
     publisherVerified?: boolean;
@@ -52,7 +57,7 @@ export async function loadSourceRegistry(
   );
 
   if (!(await pathExists(sourcePackDirectory))) {
-    return registryWithLocalSeeds;
+    return applySourceVerification(projectRoot, registryWithLocalSeeds);
   }
 
   const sourcePackFiles = (await listFilesRecursive(sourcePackDirectory))
@@ -87,7 +92,7 @@ export async function loadSourceRegistry(
       generatedSources.push({
         id: entry.id,
         name: entry.name ?? humanizeSlug(lastPathSegment(entry.repo)),
-        kind: "repo",
+        kind: entry.kind ?? "repo",
         authorityTier: entry.authorityTier ?? "trusted-community",
         publisher: {
           name: entry.publisher ?? repoOwner,
@@ -126,9 +131,27 @@ export async function loadSourceRegistry(
     }
   }
 
-  return {
+  return applySourceVerification(projectRoot, {
     ...registryWithLocalSeeds,
     sources: [...registryWithLocalSeeds.sources, ...generatedSources],
+  });
+}
+
+async function applySourceVerification(
+  projectRoot: string,
+  registry: SourceRegistry,
+): Promise<SourceRegistry> {
+  const verificationReport = await buildSourceVerificationReport(
+    projectRoot,
+    registry.sources,
+  );
+
+  return {
+    ...registry,
+    sources: applySourceVerificationDemotions(
+      registry.sources,
+      verificationReport,
+    ),
   };
 }
 
@@ -179,6 +202,19 @@ function assertSourcePackShape(
     assertRepositoryString(
       entryRecord.repo,
       `${context}.entries[${index}].repo`,
+    );
+    assertOptionalEnum(
+      entryRecord.kind,
+      [
+        "repo",
+        "docs",
+        "marketplace",
+        "registry",
+        "package-registry",
+        "local-manifest",
+        "local-directory",
+      ],
+      `${context}.entries[${index}].kind`,
     );
     assertOptionalEnum(
       entryRecord.authorityTier,

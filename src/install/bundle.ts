@@ -67,6 +67,7 @@ export async function installBundles(
   );
   const allBundleIds = getRegisteredBundleIds();
   const targetBundleIds = getOptionValues(args, "--bundle");
+  const allowedAssetIds = getAllowedAssetIds(args);
   const batchSizeRaw = Number(getOptionValue(args, "--batch-size") ?? "250");
   const batchSize =
     Number.isFinite(batchSizeRaw) && batchSizeRaw >= 1
@@ -120,7 +121,9 @@ export async function installBundles(
       mirrorIndexById,
     );
     const pendingAssets = getPendingAssets(
-      installableAssets,
+      installableAssets.filter(
+        (asset) => allowedAssetIds?.has(asset.assetId) ?? true,
+      ),
       alreadyInstalledAssetIdentities,
     );
     const assetsToInstall = pendingAssets.slice(
@@ -453,12 +456,20 @@ function buildInstallIdentity(packageIdentity: {
   return `${packageIdentity.assetId}:${packageIdentity.mirrorId}`;
 }
 
-function getRegisteredBundleIds(): string[] {
+/**
+ * Returns every bundle id declared by the registered host adapters.
+ */
+export function getRegisteredBundleIds(): string[] {
   return [
     ...new Set(
       listHostAdapters().flatMap((adapter) => adapter.defaultBundleIds),
     ),
   ].sort((left, right) => left.localeCompare(right));
+}
+
+function getAllowedAssetIds(args: readonly string[]): ReadonlySet<string> | null {
+  const assetIds = getOptionValues(args, "--asset");
+  return assetIds.length > 0 ? new Set(assetIds) : null;
 }
 
 function getPendingAssets(
@@ -486,6 +497,8 @@ export const installBundleInternals = {
   assertNoUnexpectedMirrorFiles,
   debugInstallBundleSkip,
   buildInstallIdentity,
+  getRegisteredBundleIds,
+  getAllowedAssetIds,
   getPendingAssets,
   extractBundleId,
 };

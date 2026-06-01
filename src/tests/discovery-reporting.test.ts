@@ -10,7 +10,14 @@ import {
   printCatalogStats,
 } from "../domains/discovery/catalog-inspection.js";
 import {
+  buildDiscoverDiffReport,
+  writeDiscoverDiffReport,
+} from "../domains/discovery/diff.js";
+import { writeEnvironmentIndex } from "../domains/discovery/environment-index.js";
+import {
   CATALOG_OUTPUT_PATH,
+  DISCOVER_DIFF_OUTPUT_PATH,
+  ENVIRONMENT_INDEX_OUTPUT_PATH,
   SOURCE_INDEX_OUTPUT_PATH,
   SOURCE_UTILIZATION_OUTPUT_PATH,
 } from "../domains/discovery/output-paths.js";
@@ -149,6 +156,250 @@ void test("discovery reporting writes source index and source utilization artifa
   }
 });
 
+void test("discover diff reports source catalog and selection changes", async () => {
+  const baselineRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-discover-diff-base-"),
+  );
+  const currentRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-discover-diff-current-"),
+  );
+
+  try {
+    await writeDiscoverDiffFixture(baselineRoot, {
+      sourceIds: ["source-a"],
+      catalogEntries: [buildEntry("asset-a", "source-a", "skill")],
+      selectedEntries: [buildEntry("asset-a", "source-a", "skill")],
+      rejectedCount: 0,
+    });
+    await writeDiscoverDiffFixture(currentRoot, {
+      sourceIds: ["source-a", "source-b"],
+      catalogEntries: [
+        buildEntry("asset-a", "source-a", "skill", { hosts: ["cursor"] }),
+        buildEntry("asset-b", "source-b", "plugin", { hosts: ["cursor"] }),
+      ],
+      selectedEntries: [buildEntry("asset-b", "source-b", "plugin")],
+      rejectedCount: 1,
+      recommendationBundles: [
+        {
+          bundleId: "cursor-core",
+          assetIds: ["asset-b"],
+        },
+        {
+          bundleId: 42,
+          assetIds: ["asset-b"],
+        },
+      ],
+    });
+
+    const report = await buildDiscoverDiffReport({ baselineRoot, currentRoot });
+
+    assert.deepEqual(report.sources.added, ["source-b"]);
+    assert.deepEqual(report.catalog.added, ["asset-b"]);
+    assert.deepEqual(report.catalog.changed, ["asset-a"]);
+    assert.deepEqual(report.selection.added, ["asset-b"]);
+    assert.deepEqual(report.selection.removed, ["asset-a"]);
+    assert.deepEqual(report.counts.catalog, { baseline: 1, current: 2 });
+    assert.match(report.highImpactChanges.join("\n"), /selected asset added/u);
+    assert.match(
+      report.highImpactChanges.join("\n"),
+      /suggested bundle impacted: cursor-core/u,
+    );
+  } finally {
+    await rm(baselineRoot, { recursive: true, force: true });
+    await rm(currentRoot, { recursive: true, force: true });
+  }
+});
+
+void test("discover diff reports catalog-only metadata changes without recommendation impact", async () => {
+  const baselineRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-discover-diff-metadata-base-"),
+  );
+  const currentRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-discover-diff-metadata-current-"),
+  );
+
+  try {
+    await writeDiscoverDiffFixture(baselineRoot, {
+      sourceIds: ["source-a"],
+      catalogEntries: [buildEntry("asset-a", "source-a", "skill")],
+      selectedEntries: [buildEntry("asset-a", "source-a", "skill")],
+      rejectedCount: 0,
+    });
+    await writeDiscoverDiffFixture(currentRoot, {
+      sourceIds: ["source-a"],
+      catalogEntries: [
+        buildEntry("asset-a", "source-a", "skill", { hosts: ["cursor"] }),
+      ],
+      selectedEntries: [buildEntry("asset-a", "source-a", "skill")],
+      rejectedCount: 0,
+      recommendationBundles: [
+        {
+          bundleId: "impact-bundle",
+          assetIds: ["asset-a"],
+        },
+        {
+          bundleId: "ignored-bundle",
+          assetIds: [42],
+        },
+        {
+          bundleId: 42,
+          assetIds: ["asset-a"],
+        },
+      ],
+    });
+
+    const report = await buildDiscoverDiffReport({ baselineRoot, currentRoot });
+
+    assert.deepEqual(report.selection.changed, []);
+    assert.deepEqual(report.highImpactChanges, [
+      "catalog metadata changed for 1 asset(s)",
+    ]);
+  } finally {
+    await rm(baselineRoot, { recursive: true, force: true });
+    await rm(currentRoot, { recursive: true, force: true });
+  }
+});
+
+void test("discover diff writes human and JSON reports", async () => {
+  const baselineRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-discover-diff-write-base-"),
+  );
+  const currentRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-discover-diff-write-current-"),
+  );
+
+  try {
+    await writeDiscoverDiffFixture(baselineRoot, {
+      sourceIds: ["source-a", "source-removed"],
+      catalogEntries: [buildEntry("asset-a", "source-a", "skill")],
+      selectedEntries: [buildEntry("asset-a", "source-a", "skill")],
+      rejectedCount: 0,
+    });
+    await writeDiscoverDiffFixture(currentRoot, {
+      sourceIds: ["source-a", "source-b"],
+      catalogEntries: [
+        buildEntry("asset-a", "source-a", "skill", { hosts: ["cursor"] }),
+        buildEntry("asset-b", "source-b", "plugin"),
+      ],
+      selectedEntries: [
+        buildEntry("asset-a", "source-a", "skill", { hosts: ["cursor"] }),
+        buildEntry("asset-b", "source-b", "plugin"),
+      ],
+      rejectedCount: 0,
+    });
+
+    const humanOutput = await captureConsole(async () => {
+      await writeDiscoverDiffReport(currentRoot, ["--baseline", baselineRoot]);
+    });
+    assert.match(humanOutput, /Discover diff: baseline -> current/u);
+    assert.match(humanOutput, /Added: source-b/u);
+    assert.match(humanOutput, /Removed: source-removed/u);
+    assert.match(humanOutput, /selected asset added: asset-b/u);
+    const persistedDiff = (await readJsonFile(
+      join(currentRoot, ...DISCOVER_DIFF_OUTPUT_PATH),
+    )) as { schemaVersion: number };
+    assert.equal(persistedDiff.schemaVersion, 1);
+
+    const jsonOutput = await captureConsole(async () => {
+      await writeDiscoverDiffReport(currentRoot, [
+        "--baseline",
+        baselineRoot,
+        "--json",
+      ]);
+    });
+    const jsonReport = JSON.parse(jsonOutput) as {
+      catalog: { added: string[] };
+    };
+    assert.equal(jsonReport.catalog.added[0], "asset-b");
+
+    await assert.rejects(
+      () => writeDiscoverDiffReport(currentRoot, []),
+      /discover diff requires --baseline <stateRoot>/u,
+    );
+  } finally {
+    await rm(baselineRoot, { recursive: true, force: true });
+    await rm(currentRoot, { recursive: true, force: true });
+  }
+});
+
+void test("environment index writes experimental query metadata for selected assets", async () => {
+  const projectRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-environment-index-"),
+  );
+
+  try {
+    await writeJsonLinesFile(
+      join(projectRoot, "discover", "output", "catalog.selected.jsonl"),
+      [
+        buildEntry("asset-a", "source-a", "skill", {
+          queryMetadata: {
+            symbolicHandle: "custom:asset-a",
+            retrievalFacets: ["custom", "backend"],
+            chunkingHints: {
+              preferredStrategy: "section",
+              maxPromptWeight: 3,
+            },
+            citation: {
+              provenance: "custom-provenance",
+              sourceUrl: "https://example.com/custom",
+              sourceId: "source-a",
+            },
+            safetyFlags: ["network"],
+          },
+        }),
+        buildEntry("asset-b", "source-b", "plugin", {
+          hasExecScripts: true,
+          requiresNetwork: true,
+        }),
+        buildEntry("asset-c", "source-c", "skill", {
+          activationEligible: false,
+          authorityTier: "unverified-community",
+          filePath: "skills/asset-c.md",
+          hasHooks: true,
+        }),
+        buildEntry("asset-d", "source-d", "reference-pack", {
+          sizeClass: "large",
+        }),
+      ],
+    );
+
+    const output = await captureConsole(async () => {
+      await writeEnvironmentIndex(projectRoot, ["--json"]);
+    });
+    const report = JSON.parse(output) as Awaited<
+      ReturnType<typeof writeEnvironmentIndex>
+    >;
+    const persisted = (await readJsonFile(
+      join(projectRoot, ...ENVIRONMENT_INDEX_OUTPUT_PATH),
+    )) as typeof report;
+
+    assert.equal(report.experimental, true);
+    assert.equal(persisted.selectedAssetCount, 4);
+    assert.equal(report.assets[0]?.symbolicHandle, "custom:asset-a");
+    assert.deepEqual(report.assets[0]?.retrievalFacets, ["backend", "custom"]);
+    assert.equal(report.assets[1]?.symbolicHandle, "source-b:plugin:asset-b");
+    assert.deepEqual(report.assets[1]?.safetyFlags, [
+      "exec-scripts",
+      "network",
+    ]);
+    assert.equal(report.assets[2]?.chunkingHints.preferredStrategy, "file");
+    assert.deepEqual(report.assets[2]?.safetyFlags, [
+      "hooks",
+      "not-activation-eligible",
+      "unverified-community",
+    ]);
+    assert.equal(report.assets[3]?.chunkingHints.preferredStrategy, "section");
+    assert.match(report.notes.join("\n"), /does not change mirror/u);
+
+    const humanOutput = await captureConsole(async () => {
+      await writeEnvironmentIndex(projectRoot);
+    });
+    assert.match(humanOutput, /Experimental environment index written/u);
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
 void test("catalog inspection prints aggregate stats and filtered matches with limit parsing", async () => {
   const projectRoot = await mkdtemp(
     join(tmpdir(), "agent-harness-inspection-"),
@@ -255,6 +506,75 @@ async function writeRegistry(
   );
 }
 
+async function writeDiscoverDiffFixture(
+  projectRoot: string,
+  input: {
+    sourceIds: string[];
+    catalogEntries: AssetCatalogEntry[];
+    selectedEntries: AssetCatalogEntry[];
+    rejectedCount: number;
+    recommendationBundles?: Array<{
+      bundleId: unknown;
+      assetIds: unknown;
+    }>;
+  },
+): Promise<void> {
+  await writeJsonFile(join(projectRoot, ...SOURCE_INDEX_OUTPUT_PATH), {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    sourceCount: input.sourceIds.length,
+    byAuthorityTier: {},
+    byKind: {},
+    hostCoverage: {},
+    communityDefaultPolicy: "catalog-only-unless-promoted",
+    configurationInputs: {
+      checkedInRegistryPath: "discover/sources.json",
+      sourcePackFiles: [],
+      officialSkillIndexIds: [],
+      officialUpstreamNamespaces: [],
+    },
+    enabledSources: input.sourceIds.map((sourceId, index) => ({
+      id: sourceId,
+      kind: "repo",
+      authorityTier: "official-marketplace",
+      priority: 100 - index,
+      hosts: ["copilot-vscode"],
+      coverageMode: "direct",
+      syncStatus: "not-applicable",
+    })),
+  });
+  await writeJsonLinesFile(
+    join(projectRoot, ...CATALOG_OUTPUT_PATH),
+    input.catalogEntries,
+  );
+  await writeJsonLinesFile(
+    join(projectRoot, "discover", "output", "catalog.selected.jsonl"),
+    input.selectedEntries,
+  );
+  await writeJsonFile(
+    join(projectRoot, "discover", "output", "selection-report.json"),
+    {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      inputCount: input.catalogEntries.length,
+      selectedCount: input.selectedEntries.length,
+      rejectedCount: input.rejectedCount,
+      duplicateDecisions: [],
+    },
+  );
+  if (input.recommendationBundles) {
+    await writeJsonFile(join(projectRoot, "state", "recommendations.json"), {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      policyVersion: 1,
+      sessionIntent: "general",
+      topByHost: {},
+      hostSummaries: {},
+      suggestedBundles: input.recommendationBundles,
+    });
+  }
+}
+
 async function writeSourcePacks(projectRoot: string): Promise<void> {
   await writeJsonFile(
     join(projectRoot, "discover", "source-packs", "community.json"),
@@ -344,6 +664,13 @@ function buildEntry(
     mirrorEligible?: boolean;
     installEligible?: boolean;
     activationEligible?: boolean;
+    authorityTier?: AssetCatalogEntry["source"]["authorityTier"];
+    filePath?: string;
+    hasExecScripts?: boolean;
+    hasHooks?: boolean;
+    requiresNetwork?: boolean;
+    queryMetadata?: AssetCatalogEntry["queryMetadata"];
+    sizeClass?: AssetCatalogEntry["contextCost"]["sizeClass"];
   } = {},
 ): AssetCatalogEntry {
   return {
@@ -355,7 +682,7 @@ function buildEntry(
       assetKind === "reference-pack" ? "reference-only" : "native",
     source: {
       sourceId,
-      authorityTier: "official-marketplace",
+      authorityTier: overrides.authorityTier ?? "official-marketplace",
       sourceKind: assetKind === "reference-pack" ? "docs" : "repo",
       sourcePriority: 80,
       originUrl: `https://example.com/${id}`,
@@ -380,6 +707,7 @@ function buildEntry(
       readmeFound: true,
       examplesFound: false,
       docsLinked: true,
+      filePath: overrides.filePath,
     },
     maintenance: {
       lastUpdated: "2026-05-15T00:00:00.000Z",
@@ -388,12 +716,12 @@ function buildEntry(
     },
     risk: {
       level: "low",
-      hasHooks: false,
-      hasExecScripts: false,
-      requiresNetwork: false,
+      hasHooks: overrides.hasHooks ?? false,
+      hasExecScripts: overrides.hasExecScripts ?? false,
+      requiresNetwork: overrides.requiresNetwork ?? false,
     },
     contextCost: {
-      sizeClass: "tiny",
+      sizeClass: overrides.sizeClass ?? "tiny",
       estimatedPromptWeight: 1,
     },
     fit: {
@@ -409,5 +737,6 @@ function buildEntry(
       installEligible: overrides.installEligible ?? true,
       activationEligible: overrides.activationEligible ?? true,
     },
+    queryMetadata: overrides.queryMetadata,
   };
 }

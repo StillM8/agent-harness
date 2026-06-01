@@ -41,7 +41,7 @@ import type { WireMode } from "./types.js";
 /**
  * Defines the supported native wire host values.
  */
-export type NativeWireHost = "cursor" | "zed" | "claude-code" | "pi";
+export type NativeWireHost = "cursor" | "zed" | "claude-code" | "pi" | "codex";
 
 type LifecycleActivationHost = "copilot-vscode" | "opencode";
 
@@ -59,6 +59,7 @@ interface NativeAsset {
   assetId: string;
   assetKind: AssetKind;
   displayName: string;
+  compatibilityMode: AssetCatalogEntry["compatibilityMode"];
   content: string;
   extensionId?: string;
   hostNativeConfig?: AssetHostNativeConfigMap;
@@ -157,6 +158,26 @@ const NATIVE_HOST_SPECS: Record<NativeWireHost, NativeHostSpec> = {
       "Pi native wire-in writes project AGENTS.md and SYSTEM.md managed sections.",
       "Selected assets are exposed through Pi-native .pi/skills and .pi/prompts entries.",
       "MCP assets are staged as references because Pi does not ship with built-in MCP support.",
+    ],
+  },
+  codex: {
+    host: "codex",
+    displayName: "OpenAI Codex",
+    activationHost: "opencode",
+    previewHost: "opencode",
+    managedRootSegments: [".codex", "agent-harness"],
+    targetPathSegments: [
+      ["AGENTS.md"],
+      [".agents", "skills", "agent-harness", "SKILL.md"],
+      [".agents", "plugins", "agent-harness"],
+      [".codex", "agent-harness"],
+      [".codex", "config.toml"],
+      [".codex", "hooks.json"],
+    ],
+    notes: [
+      "Codex wire-in writes project AGENTS.md context and repo-local Open Agent Skills under .agents/skills.",
+      "Reference assets are materialized under .codex/agent-harness for reviewable project context.",
+      "Plugin, MCP, hook, and rules activation require structured Codex-native config and trusted-project review; global Codex config and plugin caches are not modified.",
     ],
   },
 };
@@ -352,6 +373,7 @@ async function readNativeAssetFromActivation(
     assetId,
     assetKind: asset.assetKind,
     displayName: asset.displayName,
+    compatibilityMode: asset.compatibilityMode,
     content,
     extensionId: resolveVsCodeExtensionId(asset),
     hostNativeConfig: asset.hostNativeConfig,
@@ -412,7 +434,11 @@ async function materializeNativeAssets(
         materializedAssets.skillDirs.push(assetRoot);
         break;
       case "plugin":
-        materializedAssets.pluginDirs.push(assetRoot);
+        if (nativeAsset.compatibilityMode === "reference-only") {
+          materializedAssets.referenceFiles.push(contentPath);
+        } else {
+          materializedAssets.pluginDirs.push(assetRoot);
+        }
         break;
       case "hook":
         materializedAssets.hookFiles.push(contentPath);
@@ -423,14 +449,19 @@ async function materializeNativeAssets(
         break;
       case "mcp-server":
         materializedAssets.referenceFiles.push(contentPath);
-        materializedAssets.mcpServers.push(nativeAsset.assetId);
+        if (nativeAsset.compatibilityMode !== "reference-only") {
+          materializedAssets.mcpServers.push(nativeAsset.assetId);
+        }
         break;
       case "reference-pack":
         materializedAssets.referenceFiles.push(contentPath);
         break;
       case "extension":
         materializedAssets.referenceFiles.push(contentPath);
-        if (nativeAsset.extensionId) {
+        if (
+          nativeAsset.compatibilityMode === "native" &&
+          nativeAsset.extensionId
+        ) {
           materializedAssets.extensionIds.push(nativeAsset.extensionId);
         }
         break;
@@ -457,6 +488,8 @@ async function writeHostNativeFiles(options: {
       return writeClaudeCodeNativeFiles(options);
     case "pi":
       return writePiNativeFiles(options);
+    case "codex":
+      return writeCodexNativeFiles(options);
   }
 }
 
@@ -808,9 +841,187 @@ async function writePiNativeFiles(options: {
   });
 }
 
+async function writeCodexNativeFiles(options: {
+  workspaceRoot: string;
+  managedRoot: string;
+  nativeAssets: NativeAsset[];
+  materializedAssets: MaterializedNativeAssets;
+  mcpServers: string[];
+}): Promise<NativeConfigOperation[]> {
+  const managedLines = buildManagedInstructionLines({
+    hostName: "OpenAI Codex",
+    managedRoot: options.managedRoot,
+    nativeAssets: options.nativeAssets,
+    materializedAssets: options.materializedAssets,
+    mcpServers: options.mcpServers,
+  });
+
+  await upsertManagedSectionFile(
+    join(options.workspaceRoot, "AGENTS.md"),
+    "agent-harness-codex",
+    [
+      "Use these Agent Harness assets as project-scoped Codex context.",
+      "Do not treat plugin, MCP, hook, or rules references as active integrations unless structured Codex-native config exists in the wire plan.",
+      "",
+      ...managedLines,
+    ],
+  );
+  await writeTextFile(
+    join(
+      options.workspaceRoot,
+      ".agents",
+      "skills",
+      "agent-harness",
+      "SKILL.md",
+    ),
+    buildSkillFile(
+      "agent-harness",
+      "Use curated Agent Harness assets for this Codex project.",
+      [
+        ...managedLines,
+        ...buildNativeAssetContentSections(options.nativeAssets, ["skill"]),
+      ],
+    ),
+  );
+  await mergeCodexPluginMarketplace(
+    join(options.workspaceRoot, ".agents", "plugins", "marketplace.json"),
+  );
+  const codexPluginRoot = join(
+    options.workspaceRoot,
+    ".agents",
+    "plugins",
+    "agent-harness",
+  );
+  const codexPluginManifest = buildCodexPluginManifest(options.nativeAssets);
+  await writeJsonFile(
+    join(codexPluginRoot, ".codex-plugin", "plugin.json"),
+    codexPluginManifest,
+  );
+  if (typeof codexPluginManifest.hooks === "string") {
+    await writeJsonFile(
+      join(codexPluginRoot, codexPluginManifest.hooks),
+      buildCodexHooksManifest(
+        options.nativeAssets,
+        options.materializedAssets.hookFiles,
+        join(codexPluginRoot, codexPluginManifest.hooks),
+      ),
+    );
+  }
+  await writeTextFile(
+    join(
+      options.workspaceRoot,
+      ".agents",
+      "plugins",
+      "agent-harness",
+      "skills",
+      "agent-harness",
+      "SKILL.md",
+    ),
+    buildSkillFile(
+      "agent-harness",
+      "Use curated Agent Harness assets from the Codex plugin surface.",
+      [
+        ...managedLines,
+        ...buildNativeAssetContentSections(options.nativeAssets, ["skill"]),
+      ],
+    ),
+  );
+
+  return applyStructuredNativeConfig(options.workspaceRoot, "codex", {
+    nativeAssets: options.nativeAssets,
+  });
+}
+
+async function mergeCodexPluginMarketplace(filePath: string): Promise<void> {
+  const marketplace = await readJsonFileOrNull<unknown>(filePath);
+  const marketplaceObject =
+    marketplace === null ? {} : assertJsonObject(marketplace, filePath);
+  const plugins = coerceJsonObjectArray(marketplaceObject.plugins).filter(
+    (plugin) => !isNamedJsonObject(plugin, "agent-harness"),
+  );
+  await writeJsonFile(filePath, {
+    ...marketplaceObject,
+    schemaVersion:
+      typeof marketplaceObject.schemaVersion === "number"
+        ? marketplaceObject.schemaVersion
+        : 1,
+    plugins: [
+      ...plugins,
+      {
+        name: "agent-harness",
+        path: "./agent-harness",
+      },
+    ],
+  });
+}
+
+function buildCodexPluginManifest(nativeAssets: NativeAsset[]): JsonObject {
+  const assetKinds = new Set(
+    nativeAssets.map((nativeAsset) => nativeAsset.assetKind),
+  );
+  const manifest: JsonObject = {
+    name: "agent-harness",
+    version: "1.0.0",
+    description: "Project-local Agent Harness assets for OpenAI Codex.",
+    skills: "./skills",
+  };
+
+  if (assetKinds.has("hook")) {
+    manifest.hooks = "./hooks/hooks.json";
+  }
+
+  return manifest;
+}
+
+function buildCodexHooksManifest(
+  nativeAssets: NativeAsset[],
+  hookFiles: readonly string[],
+  manifestPath?: string,
+): JsonObject {
+  const manifestDirectory = manifestPath ? dirname(manifestPath) : undefined;
+  const hookAssets = nativeAssets.filter(
+    (nativeAsset) => nativeAsset.assetKind === "hook",
+  );
+  return {
+    schemaVersion: 1,
+    hooks: hookAssets.map((nativeAsset, index) => ({
+      name: nativeAsset.assetId,
+      description: nativeAsset.displayName,
+      source: buildCodexHookSource(
+        hookFiles[index],
+        nativeAsset.assetId,
+        manifestDirectory,
+      ),
+    })),
+  };
+}
+
+function buildCodexHookSource(
+  hookFile: string | undefined,
+  fallback: string,
+  manifestDirectory: string | undefined,
+): string {
+  if (!hookFile) {
+    return fallback;
+  }
+  if (!manifestDirectory) {
+    return hookFile;
+  }
+
+  return toPosixPath(relative(manifestDirectory, hookFile));
+}
+
+function isNamedJsonObject(value: unknown, name: string): boolean {
+  return isJsonObject(value) && value.name === name;
+}
+
+function coerceJsonObjectArray(value: unknown): JsonObject[] {
+  return Array.isArray(value) ? value.filter(isJsonObject) : [];
+}
+
 async function applyStructuredNativeConfig(
   workspaceRoot: string,
-  host: "cursor" | "zed" | "claude-code" | "pi",
+  host: "cursor" | "zed" | "claude-code" | "pi" | "codex",
   options: {
     nativeAssets: NativeAsset[];
   },
@@ -993,6 +1204,12 @@ async function resetNativeHost(
         workspaceRoot,
       );
       return;
+    case "codex":
+      await cleanupCodexNativeFiles(
+        workspaceRoot,
+        previousWirePlan?.textFileSnapshots,
+      );
+      return;
   }
 }
 
@@ -1110,7 +1327,67 @@ async function cleanupFailedNativeHostApply(
         workspaceRoot,
       );
       return;
+    case "codex":
+      await cleanupCodexNativeFiles(workspaceRoot, textFileSnapshots);
+      return;
   }
+}
+
+async function removeCodexPluginMarketplaceEntry(
+  filePath: string,
+): Promise<void> {
+  const marketplace = await readJsonFileOrNull<unknown>(filePath);
+  if (marketplace === null) {
+    return;
+  }
+  const marketplaceObject = assertJsonObject(marketplace, filePath);
+  const plugins = coerceJsonObjectArray(marketplaceObject.plugins).filter(
+    (plugin) => !isNamedJsonObject(plugin, "agent-harness"),
+  );
+  if (plugins.length === 0) {
+    await removePath(filePath);
+    return;
+  }
+  await writeJsonFile(filePath, {
+    ...marketplaceObject,
+    plugins,
+  });
+}
+
+async function cleanupCodexNativeFiles(
+  workspaceRoot: string,
+  textFileSnapshots: ManagedTextFileSnapshot[] | undefined,
+): Promise<void> {
+  await restoreManagedTextFileSnapshot(
+    join(workspaceRoot, "AGENTS.md"),
+    textFileSnapshots,
+    () =>
+      removeManagedSectionFile(
+        join(workspaceRoot, "AGENTS.md"),
+        "agent-harness-codex",
+      ),
+  );
+  await removePath(join(workspaceRoot, ".agents", "skills", "agent-harness"));
+  await removePath(join(workspaceRoot, ".agents", "plugins", "agent-harness"));
+  await removeCodexPluginMarketplaceEntry(
+    join(workspaceRoot, ".agents", "plugins", "marketplace.json"),
+  );
+  await removeEmptyParentDirectories(
+    join(workspaceRoot, ".agents", "plugins"),
+    workspaceRoot,
+  );
+  await removeEmptyParentDirectories(
+    join(workspaceRoot, ".agents", "skills"),
+    workspaceRoot,
+  );
+  await removeEmptyParentDirectories(
+    join(workspaceRoot, ".agents"),
+    workspaceRoot,
+  );
+  await removeEmptyParentDirectories(
+    join(workspaceRoot, ".codex"),
+    workspaceRoot,
+  );
 }
 
 function resolveManagedTextFileSnapshotPaths(
@@ -1130,6 +1407,8 @@ function resolveManagedTextFileSnapshotPaths(
         join(workspaceRoot, "AGENTS.md"),
         join(workspaceRoot, "SYSTEM.md"),
       ];
+    case "codex":
+      return [join(workspaceRoot, "AGENTS.md")];
     default:
       return [];
   }
@@ -1778,4 +2057,6 @@ export const nativeWireInternals = {
   removeManagedStringArrayEntries,
   toLoggableErrorMessage,
   validateManagedTextFileSnapshots,
+  buildCodexPluginManifest,
+  buildCodexHooksManifest,
 };

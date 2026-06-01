@@ -2,6 +2,10 @@ import { join } from "node:path";
 
 import { getRuntimeConfig } from "../config/runtime.js";
 import {
+  formatActionableDiagnostic,
+  installRefreshPolicyDiagnostic,
+} from "../lib/diagnostics.js";
+import {
   readJsonFileOrNull,
   readJsonLinesFile,
   toPosixPath,
@@ -13,7 +17,7 @@ import {
   type NativeInstallResult,
 } from "../host-adapters/extension-installer.js";
 import { resolveHostAdapter } from "../host-adapters/registry.js";
-import { getOptionValue } from "../lib/cli-options.js";
+import { getOptionValue, hasSingleFlag } from "../lib/cli-options.js";
 import {
   assertNoPreflightErrors,
   formatPreflightDiagnostics,
@@ -31,6 +35,8 @@ import {
 } from "../manifest-validation.js";
 import type {
   AssetCatalogEntry,
+  AssetKind,
+  AuthorityTier,
   BundleLock,
   InstallGenerationManifest,
   InstallProgressState,
@@ -40,9 +46,10 @@ import type {
   InstallRefreshPolicyDecision,
   InstallRefreshReport,
   InstallRefreshState,
+  InstallRefreshTier,
+  MirrorIndexEntry,
   InstalledPackageManifest,
   MirrorAcquireState,
-  MirrorIndexEntry,
 } from "../types.js";
 import { acquireMirrorArtifacts } from "../mirror/acquire.js";
 import { MIRROR_ACQUIRE_STATE_OUTPUT_PATH } from "../mirror/constants.js";
@@ -58,6 +65,16 @@ import {
 import { INSTALL_HOSTS } from "./utils.js";
 
 const MAX_REFRESH_BATCHES = 200;
+const RISKY_EXECUTABLE_ASSET_KINDS = new Set<AssetKind>([
+  "extension",
+  "hook",
+  "mcp-server",
+  "plugin",
+]);
+const REVIEW_REQUIRED_RISKY_AUTHORITY_TIERS = new Set<AuthorityTier>([
+  "trusted-community",
+  "unverified-community",
+]);
 const INSTALL_REFRESH_POLICIES = [
   "manual",
   "report-only",
@@ -77,7 +94,7 @@ export async function manageInstallRefresh(
   const installConfig = getRuntimeConfig().install;
   const refreshPolicy = installConfig.refreshPolicy;
   const refreshIntervalMs = installConfig.refreshIntervalMs;
-  const applyRequested = args.includes("--apply");
+  const applyRequested = hasSingleFlag(args, "--apply");
   const dueOnly = args.includes("--due-only");
   const refreshedMirrorState = shouldRefreshMirrorState(args);
   const previousRefreshState = await loadInstallRefreshState(projectRoot);
@@ -108,36 +125,42 @@ export async function manageInstallRefresh(
   await writeJsonFile(join(projectRoot, ...INSTALL_REFRESH_REPORT_OUTPUT_PATH), report);
   printInstallRefreshReport(projectRoot, report, false);
 
-  const bundleIdsToRefresh = [...new Set(
-    report.hosts.flatMap((host) =>
-      host.assets
-        .filter(
-          (asset) =>
-            asset.status === "stale" && asset.policyDecision === "apply",
-        )
-        .flatMap((asset) => asset.bundleIds),
-    ),
-  )].sort((left, right) => left.localeCompare(right));
+  const bundleAssetAllowlist = collectRefreshBundleAssetAllowlist(report, [
+    "apply",
+    "stage-only",
+  ]);
   const nativeRefreshExtensionIds = collectNativeRefreshExtensionIds(report);
   let applied = false;
 
   if (applyRequested) {
+    // Warn about risky assets, but do not block applying the safe allowlist.
+    // The allowlist already excludes review-required and quarantined assets,
+    // so the diagnostic is informational only when safe work is still present.
+    const unsafeApplyDiagnostic = installRefreshPolicyDiagnostic(report);
+    if (unsafeApplyDiagnostic) {
+      console.log(formatActionableDiagnostic(unsafeApplyDiagnostic));
+      console.log(
+        "Risky assets were skipped. Safe assets in the allowlist will still be applied.",
+      );
+    }
     if (
-      bundleIdsToRefresh.length === 0 &&
+      bundleAssetAllowlist.size === 0 &&
       nativeRefreshExtensionIds.size === 0
     ) {
       console.log("No stale install bundles were eligible for refresh apply.");
     } else {
-      await applyBundleRefreshes(projectRoot, bundleIdsToRefresh);
+      await applyBundleRefreshes(projectRoot, bundleAssetAllowlist);
       await applyNativeRefreshes(projectRoot, nativeRefreshExtensionIds);
       applied = true;
 
+      const appliedAssetActions = collectAppliedAssetActions(report);
       report = await buildInstallRefreshReport(
         projectRoot,
         hosts,
         refreshPolicy,
         refreshedMirrorState,
       );
+      report = applyRefreshActionAnnotations(report, appliedAssetActions);
       await writeJsonFile(
         join(projectRoot, ...INSTALL_REFRESH_REPORT_OUTPUT_PATH),
         report,
@@ -199,10 +222,20 @@ async function writeInstallRefreshState(
 ): Promise<void> {
   const updatedAt = new Date().toISOString();
   const staleCount = report.hosts.reduce((count, host) => count + host.staleCount, 0);
+  const stageEligibleCount = report.hosts.reduce(
+    (count, host) => count + host.stageEligibleCount,
+    0,
+  );
   const applyEligibleCount = report.hosts.reduce(
-    (count, host) =>
-      count +
-      host.assets.filter((asset) => asset.policyDecision === "apply").length,
+    (count, host) => count + host.applyEligibleCount,
+    0,
+  );
+  const reviewRequiredCount = report.hosts.reduce(
+    (count, host) => count + host.reviewRequiredCount,
+    0,
+  );
+  const quarantinedCount = report.hosts.reduce(
+    (count, host) => count + host.quarantinedCount,
     0,
   );
   await writeJsonFile(join(projectRoot, ...INSTALL_REFRESH_STATE_OUTPUT_PATH), {
@@ -216,7 +249,10 @@ async function writeInstallRefreshState(
       : previousState?.lastAppliedAt,
     refreshedMirrorState: options.refreshedMirrorState,
     staleCount,
+    stageEligibleCount,
     applyEligibleCount,
+    reviewRequiredCount,
+    quarantinedCount,
   } satisfies InstallRefreshState);
 }
 
@@ -245,6 +281,8 @@ interface ApplyBundleRefreshesOptions {
   maxBatches?: number;
   readProgressState?: () => Promise<InstallProgressState | null>;
 }
+
+type BundleAssetAllowlist = ReadonlyMap<string, ReadonlySet<string>>;
 
 function shouldRefreshMirrorState(args: readonly string[]): boolean {
   return !args.includes("--no-mirror-refresh");
@@ -345,6 +383,10 @@ async function buildInstallRefreshHostSummary(
       pinnedCount: 0,
       blockedCount: 0,
       currentCount: 0,
+      stageEligibleCount: 0,
+      applyEligibleCount: 0,
+      reviewRequiredCount: 0,
+      quarantinedCount: 0,
       assets: [],
     };
   }
@@ -420,6 +462,17 @@ async function buildInstallRefreshHostSummary(
     pinnedCount: assets.filter((asset) => asset.status === "pinned").length,
     blockedCount: assets.filter((asset) => asset.status === "blocked").length,
     currentCount: assets.filter((asset) => asset.status === "current").length,
+    stageEligibleCount: assets.filter(
+      (asset) => asset.policyDecision === "stage-only",
+    ).length,
+    applyEligibleCount: assets.filter((asset) => asset.policyDecision === "apply")
+      .length,
+    reviewRequiredCount: assets.filter(
+      (asset) => asset.policyDecision === "review-required",
+    ).length,
+    quarantinedCount: assets.filter(
+      (asset) => asset.policyDecision === "blocked-quarantined",
+    ).length,
     assets,
   };
 }
@@ -467,6 +520,9 @@ async function buildInstallRefreshAssetStatus(
   } else if (hasMirrorConflict) {
     status = "blocked";
     reason = `Asset is referenced by conflicting bundle lock mirrors: ${latestBundleAsset.mirrorIds.join(", ")}.`;
+  } else if (latestMirrorEntry?.status === "quarantined") {
+    status = "blocked";
+    reason = `Latest mirror ${latestMirrorId} is quarantined and cannot be refreshed automatically.`;
   } else if (latestMirrorId !== manifest.mirrorId) {
     status = "stale";
     reason = `Installed mirror ${manifest.mirrorId} differs from latest mirror ${latestMirrorId}.`;
@@ -475,15 +531,25 @@ async function buildInstallRefreshAssetStatus(
     reason = "Installed mirror matches the latest bundle lock mirror.";
   }
 
+  const refreshPolicyDecision = decideInstallRefreshPolicy(
+    status,
+    refreshPolicy,
+    manifest,
+    latestMirrorEntry,
+    latestCatalogEntry,
+  );
+
   return {
     assetId: manifest.assetId,
     host,
     bundleIds: latestBundleAsset?.bundleIds ?? [...manifest.bundleMembership],
     assetKind: manifest.assetKind,
     status,
-    policyDecision: decideInstallRefreshPolicy(status, refreshPolicy),
+    policyDecision: refreshPolicyDecision.decision,
     pinned: pinnedGeneration,
     reason,
+    refreshTier: refreshPolicyDecision.tier,
+    policyReason: refreshPolicyDecision.reason,
     installedMirrorId: manifest.mirrorId,
     latestMirrorId,
     installedFingerprint: manifest.upstream,
@@ -508,26 +574,208 @@ async function buildInstallRefreshAssetStatus(
   };
 }
 
+interface InstallRefreshPolicyResult {
+  decision: InstallRefreshPolicyDecision;
+  tier: InstallRefreshTier;
+  reason: string;
+}
+
 function decideInstallRefreshPolicy(
   status: InstallRefreshAssetStatus["status"],
   refreshPolicy: InstallRefreshPolicy,
-): InstallRefreshPolicyDecision {
+  manifest?: InstalledPackageManifest,
+  latestMirrorEntry?: MirrorIndexEntry,
+  latestCatalogEntry?: AssetCatalogEntry | null,
+): InstallRefreshPolicyResult {
   if (status === "current") {
-    return "ignore";
+    return {
+      decision: "ignore",
+      tier: "auto-report-only",
+      reason: "Installed asset is current.",
+    };
   }
   if (status === "pinned") {
-    return "ignore";
+    return {
+      decision: "ignore",
+      tier: "auto-report-only",
+      reason: "Pinned install generations are never refreshed automatically.",
+    };
+  }
+  if (latestMirrorEntry?.status === "quarantined") {
+    return {
+      decision: "blocked-quarantined",
+      tier: "blocked-quarantined",
+      reason: "Latest mirror is quarantined and requires review before refresh.",
+    };
   }
   if (status === "blocked" || status === "unknown") {
-    return "notify";
+    return {
+      decision: "review-required",
+      tier: "review-required",
+      reason: "Refresh cannot prove a single safe replacement.",
+    };
   }
   if (refreshPolicy === "manual") {
-    return "notify";
+    return {
+      decision: "notify",
+      tier: "auto-report-only",
+      reason: "Manual policy reports stale assets without staging or applying.",
+    };
   }
   if (refreshPolicy === "report-only") {
-    return "plan";
+    return {
+      decision: "plan",
+      tier: "auto-report-only",
+      reason: "Report-only policy plans refresh work without mutating install state.",
+    };
   }
-  return "apply";
+  if (requiresRefreshReview(manifest, latestMirrorEntry, latestCatalogEntry)) {
+    return {
+      decision: "review-required",
+      tier: "review-required",
+      reason:
+        "Trust, risk, host compatibility, or executable behavior requires review before refresh.",
+    };
+  }
+  if (isStageOnlyRefresh(manifest, latestCatalogEntry)) {
+    return {
+      decision: "stage-only",
+      tier: "auto-stage",
+      reason:
+        "Asset can be staged safely, but activation/native install remains review-gated.",
+    };
+  }
+  return {
+    decision: "apply",
+    tier: "auto-refresh-low-risk",
+    reason: "Low-risk refresh is eligible for apply-safe updates.",
+  };
+}
+
+function requiresRefreshReview(
+  manifest: InstalledPackageManifest | undefined,
+  latestMirrorEntry: MirrorIndexEntry | undefined,
+  latestCatalogEntry: AssetCatalogEntry | null | undefined,
+): boolean {
+  if (!manifest || !latestMirrorEntry || !latestCatalogEntry) {
+    return true;
+  }
+  if (latestMirrorEntry.status !== "approved") {
+    return true;
+  }
+  if (manifest.sourceAuthorityTier !== latestMirrorEntry.source.authorityTier) {
+    return true;
+  }
+  if (!latestMirrorEntry.source.publisherVerified) {
+    return true;
+  }
+  if (!latestCatalogEntry.hosts.includes(manifest.host)) {
+    return true;
+  }
+  if (!latestCatalogEntry.status.installEligible) {
+    return true;
+  }
+  if (
+    RISKY_EXECUTABLE_ASSET_KINDS.has(latestCatalogEntry.assetKind) &&
+    REVIEW_REQUIRED_RISKY_AUTHORITY_TIERS.has(latestMirrorEntry.source.authorityTier)
+  ) {
+    return true;
+  }
+  if (latestCatalogEntry.risk.level !== "low") {
+    return true;
+  }
+  if (latestCatalogEntry.risk.hasHooks || latestCatalogEntry.risk.hasExecScripts) {
+    return true;
+  }
+  if (manifest.assetKind !== latestCatalogEntry.assetKind) {
+    return true;
+  }
+  return false;
+}
+
+function isStageOnlyRefresh(
+  manifest: InstalledPackageManifest | undefined,
+  latestCatalogEntry: AssetCatalogEntry | null | undefined,
+): boolean {
+  if (!manifest || !latestCatalogEntry) {
+    return false;
+  }
+  if (RISKY_EXECUTABLE_ASSET_KINDS.has(latestCatalogEntry.assetKind)) {
+    return true;
+  }
+  if (manifest.activationEligible || latestCatalogEntry.status.activationEligible) {
+    return true;
+  }
+  return false;
+}
+
+function collectRefreshBundleAssetAllowlist(
+  report: InstallRefreshReport,
+  decisions: readonly InstallRefreshPolicyDecision[],
+): Map<string, Set<string>> {
+  const decisionSet = new Set(decisions);
+  const bundleAssetAllowlist = new Map<string, Set<string>>();
+
+  for (const host of report.hosts) {
+    for (const asset of host.assets) {
+      if (asset.status !== "stale" || !decisionSet.has(asset.policyDecision)) {
+        continue;
+      }
+      for (const bundleId of asset.bundleIds) {
+        const assetIds = bundleAssetAllowlist.get(bundleId) ?? new Set<string>();
+        assetIds.add(asset.assetId);
+        bundleAssetAllowlist.set(bundleId, assetIds);
+      }
+    }
+  }
+
+  return new Map(
+    [...bundleAssetAllowlist.entries()].sort(([left], [right]) =>
+      left.localeCompare(right),
+    ),
+  );
+}
+
+function collectRefreshBundleIds(
+  report: InstallRefreshReport,
+  decisions: readonly InstallRefreshPolicyDecision[],
+): string[] {
+  return [...collectRefreshBundleAssetAllowlist(report, decisions).keys()];
+}
+
+function collectAppliedAssetActions(
+  report: InstallRefreshReport,
+): Map<string, "refreshed" | "staged"> {
+  const actions = new Map<string, "refreshed" | "staged">();
+  for (const host of report.hosts) {
+    for (const asset of host.assets) {
+      if (asset.status !== "stale") {
+        continue;
+      }
+      if (asset.policyDecision === "apply") {
+        actions.set(`${host.host}\0${asset.assetId}`, "refreshed");
+      } else if (asset.policyDecision === "stage-only") {
+        actions.set(`${host.host}\0${asset.assetId}`, "staged");
+      }
+    }
+  }
+  return actions;
+}
+
+function applyRefreshActionAnnotations(
+  report: InstallRefreshReport,
+  actions: Map<string, "refreshed" | "staged">,
+): InstallRefreshReport {
+  return {
+    ...report,
+    hosts: report.hosts.map((host) => ({
+      ...host,
+      assets: host.assets.map((asset) => ({
+        ...asset,
+        lastRefreshAction: actions.get(`${host.host}\0${asset.assetId}`) ?? "skipped",
+      })),
+    })),
+  };
 }
 
 function collectNativeRefreshExtensionIds(
@@ -619,7 +867,7 @@ async function applyNativeRefreshes(
 
 async function applyBundleRefreshes(
   projectRoot: string,
-  bundleIds: readonly string[],
+  bundleAssetAllowlist: BundleAssetAllowlist | readonly string[],
   options: ApplyBundleRefreshesOptions = {},
 ): Promise<void> {
   const batchSize = String(getRuntimeConfig().batches.installBundle);
@@ -633,9 +881,17 @@ async function applyBundleRefreshes(
         assertInstallProgressState,
       ));
 
-  for (const bundleId of bundleIds) {
+  const allowlistByBundleId = normalizeBundleAssetAllowlist(bundleAssetAllowlist);
+
+  for (const [bundleId, assetIds] of allowlistByBundleId) {
     for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
-      await install(projectRoot, ["--bundle", bundleId, "--batch-size", batchSize]);
+      await install(projectRoot, [
+        "--bundle",
+        bundleId,
+        "--batch-size",
+        batchSize,
+        ...[...assetIds].flatMap((assetId) => ["--asset", assetId]),
+      ]);
       const progressState = await readProgressState();
       const bundleState = progressState?.bundles[bundleId];
       if (bundleState && bundleState.remainingAssets <= 0) {
@@ -650,6 +906,25 @@ async function applyBundleRefreshes(
   }
 }
 
+function normalizeBundleAssetAllowlist(
+  bundleAssetAllowlist: BundleAssetAllowlist | readonly string[],
+): Map<string, ReadonlySet<string>> {
+  if (isBundleIdList(bundleAssetAllowlist)) {
+    return new Map<string, ReadonlySet<string>>(
+      bundleAssetAllowlist.map((bundleId) => [bundleId, new Set<string>()]),
+    );
+  }
+  return new Map<string, ReadonlySet<string>>([
+    ...bundleAssetAllowlist.entries(),
+  ]);
+}
+
+function isBundleIdList(
+  bundleAssetAllowlist: BundleAssetAllowlist | readonly string[],
+): bundleAssetAllowlist is readonly string[] {
+  return Array.isArray(bundleAssetAllowlist);
+}
+
 function printInstallRefreshReport(
   projectRoot: string,
   report: InstallRefreshReport,
@@ -661,8 +936,13 @@ function printInstallRefreshReport(
   );
   for (const host of report.hosts) {
     console.log(
-      `  ${host.host}: assets=${host.assetCount} stale=${host.staleCount} pinned=${host.pinnedCount} blocked=${host.blockedCount} current=${host.currentCount}`,
+      `  ${host.host}: assets=${host.assetCount} stale=${host.staleCount} pinned=${host.pinnedCount} blocked=${host.blockedCount} current=${host.currentCount} stage=${host.stageEligibleCount} apply=${host.applyEligibleCount} review=${host.reviewRequiredCount} quarantined=${host.quarantinedCount}`,
     );
+  }
+
+  const policyDiagnostic = installRefreshPolicyDiagnostic(report);
+  if (policyDiagnostic) {
+    console.log(formatActionableDiagnostic(policyDiagnostic));
   }
 }
 
@@ -676,9 +956,19 @@ export const installRefreshInternals = {
   refreshMirrorStateIfRequested,
   refreshMirrorState,
   decideInstallRefreshPolicy,
+  requiresRefreshReview,
+  isStageOnlyRefresh,
+  collectRefreshBundleAssetAllowlist,
+  collectRefreshBundleIds,
   collectNativeRefreshExtensionIds,
+  collectAppliedAssetActions,
+  applyRefreshActionAnnotations,
   applyNativeRefreshes,
   applyBundleRefreshes,
+  normalizeBundleAssetAllowlist,
+  buildInstallRefreshReport,
+  writeInstallRefreshState,
+  printInstallRefreshReport,
 };
 
 /**

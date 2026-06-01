@@ -127,7 +127,7 @@ void test("install refresh reports stale assets when bundle locks move to a new 
       source: {
         authorityTier: "trusted-community",
         publisher: "fixture",
-        publisherVerified: false,
+        publisherVerified: true,
       },
       mirroredAt: new Date().toISOString(),
       contentHash: "hash-new",
@@ -153,7 +153,7 @@ void test("install refresh reports stale assets when bundle locks move to a new 
         originUrl:
           "https://marketplace.visualstudio.com/items?itemName=pub.flutter-skill",
         publisher: "fixture",
-        publisherVerified: false,
+        publisherVerified: true,
       },
       trust: {
         score: 80,
@@ -256,9 +256,15 @@ void test("install refresh reports stale assets when bundle locks move to a new 
     assert.equal(assetReport?.status, "stale");
     assert.equal(assetReport?.latestMirrorId, "sha256-new");
     assert.equal(assetReport?.nativeInstall?.extensionId, "pub.flutter-skill");
-    assert.equal(refreshState.policy, "manual");
+    assert.equal(assetReport?.refreshTier, "auto-report-only");
+    assert.equal(assetReport?.policyDecision, "plan");
+    assert.match(assetReport?.policyReason ?? "", /Report-only policy/u);
+    assert.equal(refreshState.policy, "report-only");
     assert.equal(refreshState.staleCount, 1);
+    assert.equal(refreshState.stageEligibleCount, 0);
     assert.equal(refreshState.applyEligibleCount, 0);
+    assert.equal(refreshState.reviewRequiredCount, 0);
+    assert.equal(refreshState.quarantinedCount, 0);
     assert.ok(
       Date.parse(refreshState.nextCheckAt) > Date.parse(refreshState.updatedAt),
     );
@@ -379,6 +385,8 @@ void test("install refresh blocks assets when bundle locks disagree on mirror id
     assert.equal(hostReport?.blockedCount, 1);
     assert.equal(assetReport?.status, "blocked");
     assert.equal(assetReport?.latestMirrorId, undefined);
+    assert.equal(assetReport?.refreshTier, "review-required");
+    assert.equal(assetReport?.policyDecision, "review-required");
     assert.match(assetReport?.reason ?? "", /conflicting bundle lock mirrors/u);
   } finally {
     await rm(projectRoot, { force: true, recursive: true });
@@ -401,12 +409,15 @@ void test("install refresh due-only skips runs before the next scheduled check",
     await writeJsonFile(refreshStatePath, {
       schemaVersion: 1,
       updatedAt: initialUpdatedAt,
-      policy: "manual",
+      policy: "report-only",
       intervalMs: 21_600_000,
       nextCheckAt: futureNextCheckAt,
       refreshedMirrorState: false,
       staleCount: 0,
+      stageEligibleCount: 0,
       applyEligibleCount: 0,
+      reviewRequiredCount: 0,
+      quarantinedCount: 0,
     } satisfies InstallRefreshState);
 
     const originalRefreshState = await readJsonFile<InstallRefreshState>(
@@ -621,7 +632,7 @@ void test("install refresh honors report-only and pinned policies", async () => 
         source: {
           authorityTier: "trusted-community",
           publisher: "fixture",
-          publisherVerified: false,
+          publisherVerified: true,
         },
         mirroredAt: new Date().toISOString(),
         contentHash: "hash-new",
@@ -645,6 +656,7 @@ void test("install refresh honors report-only and pinned policies", async () => 
     const pinnedAsset = pinnedReport.hosts[0]?.assets[0];
     assert.equal(pinnedAsset?.status, "pinned");
     assert.equal(pinnedAsset?.policyDecision, "ignore");
+    assert.equal(pinnedAsset?.refreshTier, "auto-report-only");
 
     await writeJsonFile(
       join(
@@ -677,6 +689,7 @@ void test("install refresh honors report-only and pinned policies", async () => 
     const reportOnlyAsset = reportOnlyReport.hosts[0]?.assets[0];
     assert.equal(reportOnlyAsset?.status, "stale");
     assert.equal(reportOnlyAsset?.policyDecision, "plan");
+    assert.equal(reportOnlyAsset?.refreshTier, "auto-report-only");
   } finally {
     if (originalPolicy === undefined) {
       delete process.env.AGENT_HARNESS_INSTALL_REFRESH_POLICY;
@@ -688,7 +701,345 @@ void test("install refresh honors report-only and pinned policies", async () => 
   }
 });
 
-void test("install refresh apply-safe reapplies stale bundles and native installs", async () => {
+void test("install refresh apply-safe applies low-risk stale updates", async () => {
+  const projectRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-install-refresh-apply-"),
+  );
+  const originalPolicy = process.env.AGENT_HARNESS_INSTALL_REFRESH_POLICY;
+  const originalPath = process.env.PATH;
+  const originalStatePath = process.env.AGENT_HARNESS_FAKE_CODE_STATE;
+  const installManifestPath = join(
+    projectRoot,
+    "install",
+    "copilot-vscode",
+    "packages",
+    "safe-skill",
+    "install-manifest.json",
+  );
+
+  try {
+    process.env.AGENT_HARNESS_INSTALL_REFRESH_POLICY = "apply-safe";
+    clearRuntimeConfigForTests();
+    const { binDir, statePath } = await createFakeCodeCli(projectRoot);
+    process.env.PATH = `${binDir}${process.platform === "win32" ? ";" : ":"}${originalPath ?? ""}`;
+    process.env.AGENT_HARNESS_FAKE_CODE_STATE = statePath;
+
+    const latestAsset = buildRefreshAsset("safe-skill", {
+      authorityTier: "official-first-party",
+      publisherVerified: true,
+      activationEligible: false,
+    });
+    const latestMirrorId = "sha256-safe-new";
+    const latestHash = await writeMirrorArtifact(
+      projectRoot,
+      latestMirrorId,
+      latestAsset,
+    );
+
+    await seedRefreshInstallState({
+      projectRoot,
+      assetId: "safe-skill",
+      assetKind: "skill",
+      sourceAuthorityTier: "official-first-party",
+      oldMirrorId: "sha256-safe-old",
+      latestMirrorId,
+      installManifestPath,
+      activationEligible: false,
+    });
+    await writeJsonLinesFile(join(projectRoot, "mirror", "index.jsonl"), [
+      buildRefreshMirrorIndex("safe-skill", latestMirrorId, latestHash, {
+        authorityTier: "official-first-party",
+      }),
+    ]);
+
+    await manageInstallRefresh(projectRoot, projectRoot, [
+      "--host",
+      "copilot-vscode",
+      "--apply",
+      "--no-mirror-refresh",
+    ]);
+
+    const refreshState = await readJsonFile<InstallRefreshState>(
+      join(projectRoot, ...INSTALL_REFRESH_STATE_OUTPUT_PATH),
+      assertInstallRefreshState,
+    );
+    assert.equal(refreshState.lastAppliedAt, refreshState.updatedAt);
+    assert.equal(refreshState.applyEligibleCount, 1);
+    const report = await readJsonFile<InstallRefreshReport>(
+      join(projectRoot, ...INSTALL_REFRESH_REPORT_OUTPUT_PATH),
+      assertInstallRefreshReport,
+    );
+    assert.equal(report.hosts[0]?.assets[0]?.status, "stale");
+    assert.equal(report.hosts[0]?.assets[0]?.policyDecision, "apply");
+    assert.equal(report.hosts[0]?.assets[0]?.lastRefreshAction, "refreshed");
+  } finally {
+    if (originalPolicy === undefined) {
+      delete process.env.AGENT_HARNESS_INSTALL_REFRESH_POLICY;
+    } else {
+      process.env.AGENT_HARNESS_INSTALL_REFRESH_POLICY = originalPolicy;
+    }
+    if (originalStatePath === undefined) {
+      delete process.env.AGENT_HARNESS_FAKE_CODE_STATE;
+    } else {
+      process.env.AGENT_HARNESS_FAKE_CODE_STATE = originalStatePath;
+    }
+    process.env.PATH = originalPath;
+    clearRuntimeConfigForTests();
+    await rm(projectRoot, { force: true, recursive: true });
+  }
+});
+
+void test("install refresh apply-safe applies safe assets when mixed with quarantined assets", async () => {
+  const projectRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-install-refresh-mixed-"),
+  );
+  const originalPolicy = process.env.AGENT_HARNESS_INSTALL_REFRESH_POLICY;
+  const safeManifestPath = join(
+    projectRoot,
+    "install",
+    "copilot-vscode",
+    "packages",
+    "safe-skill",
+    "install-manifest.json",
+  );
+  const quarantinedManifestPath = join(
+    projectRoot,
+    "install",
+    "copilot-vscode",
+    "packages",
+    "quarantined-skill",
+    "install-manifest.json",
+  );
+
+  try {
+    process.env.AGENT_HARNESS_INSTALL_REFRESH_POLICY = "apply-safe";
+    clearRuntimeConfigForTests();
+
+    // Safe asset: official-first-party, low-risk — eligible for apply.
+    const safeAsset = buildRefreshAsset("safe-skill", {
+      authorityTier: "official-first-party",
+      publisherVerified: true,
+      activationEligible: false,
+    });
+    const safeLatestMirrorId = "sha256-safe-new";
+    const safeHash = await writeMirrorArtifact(
+      projectRoot,
+      safeLatestMirrorId,
+      safeAsset,
+    );
+
+    // Quarantined asset: latest mirror is quarantined — ineligible for apply.
+    const quarantinedAsset = buildRefreshAsset("quarantined-skill", {
+      authorityTier: "official-first-party",
+      publisherVerified: true,
+      activationEligible: false,
+    });
+    const quarantinedMirrorId = "sha256-quarantined-new";
+    const quarantinedHash = await writeMirrorArtifact(
+      projectRoot,
+      quarantinedMirrorId,
+      quarantinedAsset,
+    );
+
+    // Seed safe asset install state.
+    await writeJsonFile(safeManifestPath, {
+      schemaVersion: 1,
+      assetId: "safe-skill",
+      mirrorId: "sha256-safe-old",
+      host: "copilot-vscode",
+      installedAt: new Date().toISOString(),
+      projectionType: "native-skill",
+      assetKind: "skill",
+      sourceAuthorityTier: "official-first-party",
+      contextCost: { sizeClass: "small", estimatedPromptWeight: 2 },
+      portfolioFit: 0.9,
+      filesRoot: join(
+        projectRoot,
+        "install",
+        "copilot-vscode",
+        "packages",
+        "safe-skill",
+        "files",
+      ),
+      bundleMembership: ["copilot-core"],
+      activationEligible: false,
+      activeByDefault: false,
+      upstream: {
+        mirrorId: "sha256-safe-old",
+        mirroredAt: new Date(0).toISOString(),
+        sourceId: "fixture-source",
+        sourceOriginUrl: "https://example.com/safe-skill",
+        sourceLastUpdated: new Date(0).toISOString(),
+        upstream: { type: "docs", url: "https://example.com/safe-skill" },
+      },
+    } satisfies InstalledPackageManifest);
+
+    // Seed quarantined asset install state.
+    await writeJsonFile(quarantinedManifestPath, {
+      schemaVersion: 1,
+      assetId: "quarantined-skill",
+      mirrorId: "sha256-quarantined-old",
+      host: "copilot-vscode",
+      installedAt: new Date().toISOString(),
+      projectionType: "native-skill",
+      assetKind: "skill",
+      sourceAuthorityTier: "official-first-party",
+      contextCost: { sizeClass: "small", estimatedPromptWeight: 2 },
+      portfolioFit: 0.9,
+      filesRoot: join(
+        projectRoot,
+        "install",
+        "copilot-vscode",
+        "packages",
+        "quarantined-skill",
+        "files",
+      ),
+      bundleMembership: ["copilot-core"],
+      activationEligible: false,
+      activeByDefault: false,
+      upstream: {
+        mirrorId: "sha256-quarantined-old",
+        mirroredAt: new Date(0).toISOString(),
+        sourceId: "fixture-source",
+        sourceOriginUrl: "https://example.com/quarantined-skill",
+        sourceLastUpdated: new Date(0).toISOString(),
+        upstream: {
+          type: "docs",
+          url: "https://example.com/quarantined-skill",
+        },
+      },
+    } satisfies InstalledPackageManifest);
+
+    // Both assets share one bundle, so one bundle install handles both.
+    await writeJsonFile(
+      join(
+        projectRoot,
+        "install",
+        "copilot-vscode",
+        "bundles",
+        "copilot-core.install.json",
+      ),
+      {
+        schemaVersion: 1,
+        bundleId: "copilot-core",
+        host: "copilot-vscode",
+        installedAt: new Date().toISOString(),
+        packages: [
+          {
+            assetId: "safe-skill",
+            mirrorId: "sha256-safe-old",
+            manifestPath: safeManifestPath.replace(/\\/gu, "/"),
+          },
+          {
+            assetId: "quarantined-skill",
+            mirrorId: "sha256-quarantined-old",
+            manifestPath: quarantinedManifestPath.replace(/\\/gu, "/"),
+          },
+        ],
+      } satisfies InstalledBundleManifest,
+    );
+    await writeJsonFile(
+      join(
+        projectRoot,
+        "install",
+        "generations",
+        "copilot-vscode",
+        "current.json",
+      ),
+      {
+        schemaVersion: 1,
+        generationId: "current-gen",
+        host: "copilot-vscode",
+        generatedAt: new Date().toISOString(),
+        bundleIds: ["copilot-core"],
+        packageManifestPaths: [safeManifestPath, quarantinedManifestPath],
+      } satisfies InstallGenerationManifest,
+    );
+    await writeJsonFile(
+      join(projectRoot, "mirror", "bundles", "copilot-core.lock.json"),
+      {
+        schemaVersion: 1,
+        bundleId: "copilot-core",
+        generatedAt: new Date().toISOString(),
+        host: "copilot-vscode",
+        assets: [
+          {
+            assetId: "safe-skill",
+            mirrorId: safeLatestMirrorId,
+            projectionType: "native-skill",
+            activationEligible: false,
+          },
+          {
+            assetId: "quarantined-skill",
+            mirrorId: quarantinedMirrorId,
+            projectionType: "native-skill",
+            activationEligible: false,
+          },
+        ],
+      } satisfies BundleLock,
+    );
+    await writeJsonLinesFile(join(projectRoot, "mirror", "index.jsonl"), [
+      buildRefreshMirrorIndex("safe-skill", safeLatestMirrorId, safeHash, {
+        authorityTier: "official-first-party",
+      }),
+      buildRefreshMirrorIndex(
+        "quarantined-skill",
+        quarantinedMirrorId,
+        quarantinedHash,
+        { authorityTier: "official-first-party", status: "quarantined" },
+      ),
+    ]);
+    await writeJsonLinesFile(
+      join(projectRoot, "discover", "output", "catalog.selected.jsonl"),
+      [safeAsset, quarantinedAsset],
+    );
+
+    await manageInstallRefresh(projectRoot, projectRoot, [
+      "--host",
+      "copilot-vscode",
+      "--apply",
+      "--no-mirror-refresh",
+    ]);
+
+    const report = await readJsonFile<InstallRefreshReport>(
+      join(projectRoot, ...INSTALL_REFRESH_REPORT_OUTPUT_PATH),
+      assertInstallRefreshReport,
+    );
+    const refreshState = await readJsonFile<InstallRefreshState>(
+      join(projectRoot, ...INSTALL_REFRESH_STATE_OUTPUT_PATH),
+      assertInstallRefreshState,
+    );
+
+    const assets = report.hosts[0]?.assets ?? [];
+    const safeReport = assets.find((a) => a.assetId === "safe-skill");
+    const quarantinedReport = assets.find(
+      (a) => a.assetId === "quarantined-skill",
+    );
+
+    // Safe asset must be refreshed despite the quarantined peer.
+    assert.equal(safeReport?.policyDecision, "apply");
+    assert.equal(safeReport?.lastRefreshAction, "refreshed");
+
+    // Quarantined asset must be blocked and left unrefreshed.
+    assert.equal(quarantinedReport?.policyDecision, "blocked-quarantined");
+    assert.equal(quarantinedReport?.lastRefreshAction, "skipped");
+
+    // Apply ran, so lastAppliedAt must be set.
+    assert.notEqual(refreshState.lastAppliedAt, undefined);
+    assert.equal(refreshState.applyEligibleCount, 1);
+    assert.equal(refreshState.quarantinedCount, 1);
+  } finally {
+    if (originalPolicy === undefined) {
+      delete process.env.AGENT_HARNESS_INSTALL_REFRESH_POLICY;
+    } else {
+      process.env.AGENT_HARNESS_INSTALL_REFRESH_POLICY = originalPolicy;
+    }
+    clearRuntimeConfigForTests();
+    await rm(projectRoot, { force: true, recursive: true });
+  }
+});
+
+void test("install refresh apply-safe blocks community executable refreshes", async () => {
   const projectRoot = await mkdtemp(
     join(tmpdir(), "agent-harness-install-refresh-"),
   );
@@ -731,7 +1082,7 @@ void test("install refresh apply-safe reapplies stale bundles and native install
         sourcePriority: 90,
         originUrl: "https://example.com/flutter-skill",
         publisher: "fixture",
-        publisherVerified: false,
+        publisherVerified: true,
       },
       trust: {
         score: 80,
@@ -886,7 +1237,7 @@ void test("install refresh apply-safe reapplies stale bundles and native install
         source: {
           authorityTier: "trusted-community",
           publisher: "fixture",
-          publisherVerified: false,
+          publisherVerified: true,
         },
         mirroredAt: new Date().toISOString(),
         contentHash: latestHash,
@@ -916,29 +1267,33 @@ void test("install refresh apply-safe reapplies stale bundles and native install
       join(projectRoot, ...INSTALL_REFRESH_STATE_OUTPUT_PATH),
       assertInstallRefreshState,
     );
-    const nativeInstallState = await readJsonFile<{
-      operation: string;
-      results: Array<{ success: boolean; installed: boolean }>;
-    }>(join(projectRoot, ...NATIVE_INSTALL_STATE_OUTPUT_PATH));
+    assert.equal(
+      await pathExists(join(projectRoot, ...NATIVE_INSTALL_STATE_OUTPUT_PATH)),
+      false,
+    );
     const updatedBundleManifest =
       await readJsonFile<InstalledBundleManifest>(bundleManifestPath);
     const updatedManifest = await readJsonFile<InstalledPackageManifest>(
       updatedBundleManifest.packages[0]?.manifestPath ?? installManifestPath,
     );
 
-    assert.equal(report.hosts[0]?.staleCount, 0);
-    assert.equal(report.hosts[0]?.currentCount, 1);
-    assert.equal(updatedBundleManifest.packages[0]?.mirrorId, latestMirrorId);
-    assert.equal(updatedManifest.mirrorId, latestMirrorId);
+    assert.equal(report.hosts[0]?.staleCount, 1);
+    assert.equal(report.hosts[0]?.currentCount, 0);
+    assert.equal(report.hosts[0]?.assets[0]?.policyDecision, "review-required");
+    assert.equal(report.hosts[0]?.assets[0]?.refreshTier, "review-required");
+    assert.equal(report.hosts[0]?.assets[0]?.lastRefreshAction, undefined);
+    assert.equal(refreshState.stageEligibleCount, 0);
+    assert.equal(refreshState.applyEligibleCount, 0);
+    assert.equal(refreshState.reviewRequiredCount, 1);
+    assert.equal(refreshState.quarantinedCount, 0);
+    assert.equal(updatedBundleManifest.packages[0]?.mirrorId, "sha256-old");
+    assert.equal(updatedManifest.mirrorId, "sha256-old");
     assert.equal(
       updatedManifest.nativeInstall?.extensionId,
       "pub.flutter-skill",
     );
     assert.equal(refreshState.policy, "apply-safe");
-    assert.match(refreshState.lastAppliedAt ?? "", /^\d{4}-\d{2}-\d{2}T/u);
-    assert.equal(nativeInstallState.operation, "install");
-    assert.equal(nativeInstallState.results[0]?.success, true);
-    assert.equal(nativeInstallState.results[0]?.installed, true);
+    assert.equal(refreshState.lastAppliedAt, undefined);
   } finally {
     if (originalPolicy === undefined) {
       delete process.env.AGENT_HARNESS_INSTALL_REFRESH_POLICY;
@@ -952,6 +1307,415 @@ void test("install refresh apply-safe reapplies stale bundles and native install
     }
     process.env.PATH = originalPath;
     clearRuntimeConfigForTests();
+    await rm(projectRoot, { force: true, recursive: true });
+  }
+});
+
+function buildRefreshAsset(
+  id: string,
+  options: {
+    authorityTier: AssetCatalogEntry["source"]["authorityTier"];
+    publisherVerified: boolean;
+    activationEligible: boolean;
+  },
+): AssetCatalogEntry {
+  return {
+    id,
+    displayName: id,
+    assetKind: "skill",
+    hosts: ["copilot-vscode"],
+    compatibilityMode: "native",
+    source: {
+      sourceId: "fixture-source",
+      authorityTier: options.authorityTier,
+      sourceKind: "docs",
+      sourcePriority: 100,
+      originUrl: `https://example.com/${id}`,
+      publisher: "fixture",
+      publisherVerified: options.publisherVerified,
+    },
+    trust: { score: 100, signals: ["fixture"] },
+    capabilities: ["fixture"],
+    install: {
+      method: "local-file",
+      nativeHosts: ["copilot-vscode"],
+      manifestEntry: id,
+    },
+    evidence: {
+      manifestFound: true,
+      readmeFound: true,
+      examplesFound: false,
+      docsLinked: true,
+      filePath: "README.md",
+    },
+    maintenance: {
+      lastUpdated: new Date().toISOString(),
+      stars: 0,
+      releaseCadence: "active",
+    },
+    risk: {
+      level: "low",
+      hasHooks: false,
+      hasExecScripts: false,
+      requiresNetwork: false,
+    },
+    contextCost: { sizeClass: "small", estimatedPromptWeight: 2 },
+    fit: { portfolioFit: 0.9, hostFit: 0.9 },
+    dedupe: { candidateRankHint: "fixture" },
+    status: {
+      cataloged: true,
+      mirrorEligible: true,
+      installEligible: true,
+      activationEligible: options.activationEligible,
+    },
+  };
+}
+
+function buildRefreshMirrorIndex(
+  assetId: string,
+  mirrorId: string,
+  contentHash: string,
+  options: {
+    authorityTier: MirrorIndexEntry["source"]["authorityTier"];
+    publisherVerified?: boolean;
+    status?: MirrorIndexEntry["status"];
+  },
+): MirrorIndexEntry {
+  return {
+    mirrorId,
+    assetId,
+    upstream: {
+      type: "docs",
+      url: `https://example.com/${assetId}`,
+    },
+    source: {
+      authorityTier: options.authorityTier,
+      publisher: "fixture",
+      publisherVerified: options.publisherVerified ?? true,
+    },
+    mirroredAt: new Date().toISOString(),
+    contentHash,
+    projectionCandidates: [
+      { host: "copilot-vscode", projectionType: "native-skill" },
+    ],
+    status: options.status ?? "approved",
+  };
+}
+
+async function seedRefreshInstallState(options: {
+  projectRoot: string;
+  assetId: string;
+  assetKind: InstalledPackageManifest["assetKind"];
+  sourceAuthorityTier: InstalledPackageManifest["sourceAuthorityTier"];
+  oldMirrorId: string;
+  latestMirrorId: string;
+  installManifestPath: string;
+  activationEligible: boolean;
+}): Promise<void> {
+  await writeJsonFile(options.installManifestPath, {
+    schemaVersion: 1,
+    assetId: options.assetId,
+    mirrorId: options.oldMirrorId,
+    host: "copilot-vscode",
+    installedAt: new Date().toISOString(),
+    projectionType: "native-skill",
+    assetKind: options.assetKind,
+    sourceAuthorityTier: options.sourceAuthorityTier,
+    contextCost: { sizeClass: "small", estimatedPromptWeight: 2 },
+    portfolioFit: 0.9,
+    filesRoot: join(
+      options.projectRoot,
+      "install",
+      "copilot-vscode",
+      "packages",
+      options.assetId,
+      "files",
+    ),
+    bundleMembership: ["copilot-core"],
+    activationEligible: options.activationEligible,
+    activeByDefault: false,
+    upstream: {
+      mirrorId: options.oldMirrorId,
+      mirroredAt: new Date(0).toISOString(),
+      sourceId: "fixture-source",
+      sourceOriginUrl: `https://example.com/${options.assetId}`,
+      sourceLastUpdated: new Date(0).toISOString(),
+      upstream: {
+        type: "docs",
+        url: `https://example.com/${options.assetId}`,
+      },
+    },
+  } satisfies InstalledPackageManifest);
+  await writeJsonFile(
+    join(
+      options.projectRoot,
+      "install",
+      "copilot-vscode",
+      "bundles",
+      "copilot-core.install.json",
+    ),
+    {
+      schemaVersion: 1,
+      bundleId: "copilot-core",
+      host: "copilot-vscode",
+      installedAt: new Date().toISOString(),
+      packages: [
+        {
+          assetId: options.assetId,
+          mirrorId: options.oldMirrorId,
+          manifestPath: options.installManifestPath.replace(/\\/gu, "/"),
+        },
+      ],
+    } satisfies InstalledBundleManifest,
+  );
+  await writeJsonFile(
+    join(
+      options.projectRoot,
+      "install",
+      "generations",
+      "copilot-vscode",
+      "current.json",
+    ),
+    {
+      schemaVersion: 1,
+      generationId: "current-gen",
+      host: "copilot-vscode",
+      generatedAt: new Date().toISOString(),
+      bundleIds: ["copilot-core"],
+      packageManifestPaths: [options.installManifestPath],
+    } satisfies InstallGenerationManifest,
+  );
+  await writeJsonFile(
+    join(options.projectRoot, "mirror", "bundles", "copilot-core.lock.json"),
+    {
+      schemaVersion: 1,
+      bundleId: "copilot-core",
+      generatedAt: new Date().toISOString(),
+      host: "copilot-vscode",
+      assets: [
+        {
+          assetId: options.assetId,
+          mirrorId: options.latestMirrorId,
+          projectionType: "native-skill",
+          activationEligible: options.activationEligible,
+        },
+      ],
+    } satisfies BundleLock,
+  );
+}
+
+void test("install refresh report marks quarantined and current assets explicitly", async () => {
+  const projectRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-install-refresh-current-"),
+  );
+  const installManifestPath = join(
+    projectRoot,
+    "install",
+    "copilot-vscode",
+    "packages",
+    "safe-skill",
+    "install-manifest.json",
+  );
+
+  try {
+    const currentAsset = buildRefreshAsset("safe-skill", {
+      authorityTier: "official-first-party",
+      publisherVerified: true,
+      activationEligible: false,
+    });
+    const currentMirrorId = "sha256-safe-current";
+    const currentHash = await writeMirrorArtifact(
+      projectRoot,
+      currentMirrorId,
+      currentAsset,
+    );
+    await seedRefreshInstallState({
+      projectRoot,
+      assetId: "safe-skill",
+      assetKind: "skill",
+      sourceAuthorityTier: "official-first-party",
+      oldMirrorId: currentMirrorId,
+      latestMirrorId: currentMirrorId,
+      installManifestPath,
+      activationEligible: false,
+    });
+    await writeJsonLinesFile(join(projectRoot, "mirror", "index.jsonl"), [
+      buildRefreshMirrorIndex("safe-skill", currentMirrorId, currentHash, {
+        authorityTier: "official-first-party",
+      }),
+    ]);
+
+    const report = await installRefreshInternals.buildInstallRefreshReport(
+      projectRoot,
+      ["copilot-vscode"],
+      "apply-safe",
+      false,
+    );
+    assert.equal(report.hosts[0]?.assets[0]?.status, "current");
+    assert.equal(
+      report.hosts[0]?.assets[0]?.reason,
+      "Installed mirror matches the latest bundle lock mirror.",
+    );
+
+    const quarantinedMirrorId = "sha256-safe-quarantined";
+    await writeJsonFile(
+      join(projectRoot, "mirror", "bundles", "copilot-core.lock.json"),
+      {
+        schemaVersion: 1,
+        bundleId: "copilot-core",
+        generatedAt: new Date().toISOString(),
+        host: "copilot-vscode",
+        assets: [
+          {
+            assetId: "safe-skill",
+            mirrorId: quarantinedMirrorId,
+            projectionType: "native-skill",
+            activationEligible: false,
+          },
+        ],
+      } satisfies BundleLock,
+    );
+    await writeJsonLinesFile(join(projectRoot, "mirror", "index.jsonl"), [
+      buildRefreshMirrorIndex("safe-skill", quarantinedMirrorId, currentHash, {
+        authorityTier: "official-first-party",
+        status: "quarantined",
+      }),
+    ]);
+
+    const quarantinedReport =
+      await installRefreshInternals.buildInstallRefreshReport(
+        projectRoot,
+        ["copilot-vscode"],
+        "apply-safe",
+        false,
+      );
+    assert.equal(quarantinedReport.hosts[0]?.assets[0]?.status, "blocked");
+    assert.match(
+      quarantinedReport.hosts[0]?.assets[0]?.reason ?? "",
+      /is quarantined/u,
+    );
+
+    const reviewRequiredMirrorId = "sha256-safe-review-required";
+    await writeJsonFile(
+      join(projectRoot, "mirror", "bundles", "copilot-core.lock.json"),
+      {
+        schemaVersion: 1,
+        bundleId: "copilot-core",
+        generatedAt: new Date().toISOString(),
+        host: "copilot-vscode",
+        assets: [
+          {
+            assetId: "safe-skill",
+            mirrorId: reviewRequiredMirrorId,
+            projectionType: "native-skill",
+            activationEligible: false,
+          },
+        ],
+      } satisfies BundleLock,
+    );
+    await writeJsonLinesFile(join(projectRoot, "mirror", "index.jsonl"), [
+      buildRefreshMirrorIndex(
+        "safe-skill",
+        reviewRequiredMirrorId,
+        currentHash,
+        {
+          authorityTier: "unverified-community",
+        },
+      ),
+    ]);
+    const reviewRequiredReport =
+      await installRefreshInternals.buildInstallRefreshReport(
+        projectRoot,
+        ["copilot-vscode"],
+        "apply-safe",
+        false,
+      );
+    assert.equal(reviewRequiredReport.hosts[0]?.assets[0]?.status, "stale");
+    assert.equal(
+      reviewRequiredReport.hosts[0]?.assets[0]?.policyDecision,
+      "review-required",
+    );
+
+    await seedRefreshInstallState({
+      projectRoot,
+      assetId: "safe-skill",
+      assetKind: "skill",
+      sourceAuthorityTier: "official-first-party",
+      oldMirrorId: "sha256-safe-old",
+      latestMirrorId: reviewRequiredMirrorId,
+      installManifestPath,
+      activationEligible: false,
+    });
+    await writeJsonLinesFile(join(projectRoot, "mirror", "index.jsonl"), [
+      buildRefreshMirrorIndex(
+        "safe-skill",
+        reviewRequiredMirrorId,
+        currentHash,
+        {
+          authorityTier: "official-first-party",
+          publisherVerified: false,
+        },
+      ),
+    ]);
+    const unverifiedPublisherReport =
+      await installRefreshInternals.buildInstallRefreshReport(
+        projectRoot,
+        ["copilot-vscode"],
+        "apply-safe",
+        false,
+      );
+    assert.equal(
+      unverifiedPublisherReport.hosts[0]?.assets[0]?.status,
+      "stale",
+    );
+    assert.equal(
+      unverifiedPublisherReport.hosts[0]?.assets[0]?.policyDecision,
+      "review-required",
+    );
+
+    const riskyExecutableAsset = buildRefreshAsset("safe-skill", {
+      authorityTier: "trusted-community",
+      publisherVerified: true,
+      activationEligible: false,
+    });
+    riskyExecutableAsset.assetKind = "plugin";
+    const riskyMirrorId = "sha256-safe-risky";
+    const riskyHash = await writeMirrorArtifact(
+      projectRoot,
+      riskyMirrorId,
+      riskyExecutableAsset,
+    );
+    await seedRefreshInstallState({
+      projectRoot,
+      assetId: "safe-skill",
+      assetKind: "plugin",
+      sourceAuthorityTier: "trusted-community",
+      oldMirrorId: "sha256-safe-old",
+      latestMirrorId: riskyMirrorId,
+      installManifestPath,
+      activationEligible: false,
+    });
+    await writeJsonLinesFile(
+      join(projectRoot, "discover", "output", "catalog.selected.jsonl"),
+      [riskyExecutableAsset],
+    );
+    await writeJsonLinesFile(join(projectRoot, "mirror", "index.jsonl"), [
+      buildRefreshMirrorIndex("safe-skill", riskyMirrorId, riskyHash, {
+        authorityTier: "trusted-community",
+      }),
+    ]);
+    const riskyExecutableReport =
+      await installRefreshInternals.buildInstallRefreshReport(
+        projectRoot,
+        ["copilot-vscode"],
+        "apply-safe",
+        false,
+      );
+    assert.equal(
+      riskyExecutableReport.hosts[0]?.assets[0]?.policyDecision,
+      "review-required",
+    );
+  } finally {
     await rm(projectRoot, { force: true, recursive: true });
   }
 });
@@ -975,6 +1739,15 @@ void test("install refresh native apply rejects invalid ids and failed host inst
       ),
       /one or more extension ids were invalid/u,
     );
+
+    await installRefreshInternals.applyNativeRefreshes(
+      projectRoot,
+      new Map([["copilot-vscode", ["fixture.pass-install"]]]),
+    );
+    const nativeState = await readJsonFile<Record<string, unknown>>(
+      join(projectRoot, ...NATIVE_INSTALL_STATE_OUTPUT_PATH),
+    );
+    assert.equal(nativeState.operation, "install");
 
     await writeTextFile(
       join(binDir, "fake-code.mjs"),

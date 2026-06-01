@@ -8,12 +8,102 @@ export const DEMAND_PROFILE_OUTPUT_PATH = [
 ];
 
 /**
+ * Defines the unknown-signal backlog output path location used by persisted project state.
+ */
+export const UNKNOWN_SIGNALS_OUTPUT_PATH = [
+  "discover",
+  "output",
+  "unknown-signals.json",
+];
+
+/**
+ * Defines the asset lifecycle fingerprint output path location used by persisted project state.
+ */
+export const ASSET_FINGERPRINTS_OUTPUT_PATH = [
+  "discover",
+  "output",
+  "asset-fingerprints.json",
+];
+
+/**
+ * Defines the source health report output path location used by persisted project state.
+ */
+export const SOURCE_HEALTH_OUTPUT_PATH = [
+  "discover",
+  "output",
+  "source-health.json",
+];
+
+/**
+ * Defines the source drift report output path location used by persisted project state.
+ */
+export const SOURCE_DRIFT_OUTPUT_PATH = [
+  "discover",
+  "output",
+  "source-drift.json",
+];
+
+/**
+ * Defines the catalog maintenance candidate output path location used by persisted project state.
+ */
+export const CATALOG_MAINTENANCE_CANDIDATES_OUTPUT_PATH = [
+  "discover",
+  "output",
+  "catalog-maintenance-candidates.json",
+];
+
+/**
+ * Defines the source candidate queue output path location used by persisted project state.
+ */
+export const SOURCE_CANDIDATES_OUTPUT_PATH = [
+  "discover",
+  "output",
+  "source-candidates.json",
+];
+
+/**
+ * Defines the official upstream resolution report output path location used by persisted project state.
+ */
+export const OFFICIAL_UPSTREAM_RESOLUTION_OUTPUT_PATH = [
+  "discover",
+  "output",
+  "official-upstream-resolution.json",
+];
+
+/**
+ * Defines the official upstream resolver cache path location used by persisted project state.
+ */
+export const OFFICIAL_UPSTREAM_CACHE_STATE_PATH = [
+  "state",
+  "discover",
+  "official-upstream-cache.json",
+];
+
+/**
  * Defines the source index output path location used by persisted project state.
  */
 export const SOURCE_INDEX_OUTPUT_PATH = [
   "discover",
   "output",
   "source-index.json",
+];
+
+/**
+ * Defines the discover diff output path location used by persisted project state.
+ */
+export const DISCOVER_DIFF_OUTPUT_PATH = [
+  "discover",
+  "output",
+  "discover-diff.json",
+];
+
+/**
+ * Defines the experimental environment index output path location used by persisted project state.
+ */
+export const ENVIRONMENT_INDEX_OUTPUT_PATH = [
+  "discover",
+  "output",
+  "environment-index.json",
 ];
 
 /**

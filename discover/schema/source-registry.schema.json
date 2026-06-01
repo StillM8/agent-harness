@@ -90,7 +90,8 @@
                 "cursor",
                 "zed",
                 "claude-code",
-                "pi"
+                "pi",
+                "codex"
               ]
             }
           },

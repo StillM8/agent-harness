@@ -32,7 +32,11 @@ import {
   orchestrateAiEnrichment,
   type AiEnrichmentOrchestrationResult,
 } from "./domains/discovery/ai-enrichment.js";
+import { writeAssetLifecycleFingerprintReport } from "./domains/discovery/asset-fingerprints.js";
+import { writeSourceCandidateQueue } from "./domains/discovery/candidate-queue.js";
 import { buildDemandProfile } from "./domains/discovery/demand-profile.js";
+import { writeDiscoverDiffReport } from "./domains/discovery/diff.js";
+import { writeEnvironmentIndex } from "./domains/discovery/environment-index.js";
 import { harvestGitHubRepoSource } from "./domains/discovery/github-harvester.js";
 import { generateSourceIndex } from "./domains/discovery/source-index.js";
 import {
@@ -51,6 +55,7 @@ import {
   CATALOG_OUTPUT_PATH,
   DEMAND_PROFILE_OUTPUT_PATH,
   REJECTED_CATALOG_OUTPUT_PATH,
+  UNKNOWN_SIGNALS_OUTPUT_PATH,
   REMOTE_CATALOG_STATE_OUTPUT_PATH,
   SELECTED_CATALOG_OUTPUT_PATH,
   SELECTION_REPORT_OUTPUT_PATH,
@@ -62,7 +67,10 @@ import {
   loadRemoteHarvestState,
   writeRemoteHarvestState,
 } from "./domains/discovery/remote-state.js";
+import { writeSourceHealthReports } from "./domains/discovery/source-health.js";
 import { writeSourceUtilizationReport } from "./domains/discovery/source-utilization.js";
+import { writeSourceVerificationReport } from "./domains/discovery/source-verification.js";
+import { writeUnknownSignalReport } from "./domains/discovery/unknown-signals.js";
 import {
   assertAssetCatalogEntry,
   assertDemandProfile,
@@ -167,6 +175,12 @@ export async function runDiscover(
     case "stats":
       await printCatalogStats(projectRoot);
       return 0;
+    case "diff":
+      await writeDiscoverDiffReport(projectRoot, rest);
+      return 0;
+    case "environment-index":
+      await writeEnvironmentIndex(projectRoot, rest);
+      return 0;
     case "inspect":
       await inspectCatalog(projectRoot, rest);
       return 0;
@@ -187,7 +201,19 @@ async function generateDemandProfile(
   const outputPath = join(projectRoot, ...DEMAND_PROFILE_OUTPUT_PATH);
   await writeJsonFile(outputPath, demandProfile);
 
+  const unknownSignalsOutputPath = join(
+    projectRoot,
+    ...UNKNOWN_SIGNALS_OUTPUT_PATH,
+  );
+  const unknownSignalsReport = await writeUnknownSignalReport(
+    scanRoot,
+    unknownSignalsOutputPath,
+  );
+
   console.log(`Demand profile written to ${toPosixPath(outputPath)}`);
+  console.log(
+    `Unknown signal backlog written to ${toPosixPath(unknownSignalsOutputPath)} (${unknownSignalsReport.summary.signalCount} signals)`,
+  );
   return demandProfile;
 }
 
@@ -466,9 +492,43 @@ async function generateSelectionOutputs(projectRoot: string): Promise<{
     join(projectRoot, ...SELECTION_REPORT_OUTPUT_PATH),
     selectionReport,
   );
+  const fingerprintReport =
+    await writeAssetLifecycleFingerprintReport(projectRoot);
+  const sourceRegistry = await loadSourceRegistry(projectRoot);
+  const sourceVerificationReport = await writeSourceVerificationReport(
+    projectRoot,
+    sourceRegistry.sources,
+  );
+  const sourceSyncState = await loadSourceSyncState(projectRoot);
+  const enabledSources = sourceRegistry.sources.filter(
+    (source) => source.enabled,
+  );
+  const sourceHealthReport = await writeSourceHealthReports(
+    projectRoot,
+    enabledSources,
+    sortedSelectedEntries,
+    sortedRejectedEntries,
+    sourceSyncState,
+  );
+  const sourceCandidateQueue = await writeSourceCandidateQueue(
+    projectRoot,
+    enabledSources,
+  );
 
   console.log(
     `Selection outputs written to ${toPosixPath(join(projectRoot, "discover", "output"))} (${sortedSelectedEntries.length} selected, ${sortedRejectedEntries.length} rejected)`,
+  );
+  console.log(
+    `Asset lifecycle fingerprints written (${fingerprintReport.assetCount} assets, ${fingerprintReport.duplicateGroupCount} duplicate groups)`,
+  );
+  console.log(
+    `Source verification report written (${sourceVerificationReport.demotedSourceCount} deterministic demotions)`,
+  );
+  console.log(
+    `Source health reports written (${sourceHealthReport.severeCount} severe, ${sourceHealthReport.warningCount} warnings)`,
+  );
+  console.log(
+    `Source candidate queue written (${sourceCandidateQueue.candidateCount} candidates, ${sourceCandidateQueue.reviewRequiredCount} review-required)`,
   );
 
   return {
@@ -534,9 +594,10 @@ async function runDiscoveryBreadth(
     workingDirectory,
     projectRoot,
   );
-  logDiscoverPhase("discover breadth", 2, 5, "Syncing indexed sources");
+  logDiscoverPhase("discover breadth", 2, 5, "Refreshing source index");
+  await generateSourceIndex(projectRoot);
+  logDiscoverPhase("discover breadth", 3, 5, "Syncing indexed sources");
   await syncIndexedSources(projectRoot);
-  logDiscoverPhase("discover breadth", 3, 5, "Refreshing source index");
   const sourceIndex = await generateSourceIndex(projectRoot);
   logDiscoverPhase("discover breadth", 4, 5, "Building discovery catalog");
   const { catalogEntries, enabledSources } = await generateCatalog(projectRoot);
@@ -744,6 +805,16 @@ function printDiscoverHelp(): void {
         command: "stats",
         description:
           "Print catalog summary counts grouped by source, kind, host, and authority",
+      },
+      {
+        command: "diff",
+        description:
+          "Compare discovery outputs against --baseline <stateRoot> (--json for agents)",
+      },
+      {
+        command: "environment-index",
+        description:
+          "Write experimental read-only query metadata to discover/output/environment-index.json",
       },
       {
         command: "enrich",

@@ -104,6 +104,36 @@ export function assertRecommendationReport(
           entryRecord.reasons,
           `${context}.topByHost.${host}[${index}].reasons`,
         );
+        if (Object.prototype.hasOwnProperty.call(entryRecord, "assetKind")) {
+          assertLiteral(
+            entryRecord.assetKind,
+            ASSET_KINDS,
+            `${context}.topByHost.${host}[${index}].assetKind`,
+          );
+        }
+        if (
+          Object.prototype.hasOwnProperty.call(
+            entryRecord,
+            "classificationConfidence",
+          )
+        ) {
+          assertNumber(
+            entryRecord.classificationConfidence,
+            `${context}.topByHost.${host}[${index}].classificationConfidence`,
+          );
+        }
+        if (
+          Object.prototype.hasOwnProperty.call(
+            entryRecord,
+            "classificationConfidenceLevel",
+          )
+        ) {
+          assertLiteral(
+            entryRecord.classificationConfidenceLevel,
+            ["strong", "medium", "weak"],
+            `${context}.topByHost.${host}[${index}].classificationConfidenceLevel`,
+          );
+        }
         assertString(
           entryRecord.sourceId,
           `${context}.topByHost.${host}[${index}].sourceId`,
@@ -330,6 +360,45 @@ export function assertRecommendationReport(
         bundleRecord.estimatedPromptWeight,
         `${context}.suggestedBundles[${index}].estimatedPromptWeight`,
       );
+      assertMaybeNumber(
+        bundleRecord.activationBudget,
+        `${context}.suggestedBundles[${index}].activationBudget`,
+        false,
+      );
+      assertMaybeStringArray(
+        bundleRecord.budgetPrunedAssetIds,
+        `${context}.suggestedBundles[${index}].budgetPrunedAssetIds`,
+        false,
+      );
+      const budgetPrunedAssets = assertMaybeArray(
+        bundleRecord.budgetPrunedAssets,
+        `${context}.suggestedBundles[${index}].budgetPrunedAssets`,
+        false,
+      );
+      if (budgetPrunedAssets) {
+        budgetPrunedAssets.forEach((asset, assetIndex) => {
+          const assetRecord = assertRecord(
+            asset,
+            `${context}.suggestedBundles[${index}].budgetPrunedAssets[${assetIndex}]`,
+          );
+          assertString(
+            assetRecord.assetId,
+            `${context}.suggestedBundles[${index}].budgetPrunedAssets[${assetIndex}].assetId`,
+          );
+          assertNumber(
+            assetRecord.estimatedPromptWeight,
+            `${context}.suggestedBundles[${index}].budgetPrunedAssets[${assetIndex}].estimatedPromptWeight`,
+          );
+          assertNumber(
+            assetRecord.remainingBudget,
+            `${context}.suggestedBundles[${index}].budgetPrunedAssets[${assetIndex}].remainingBudget`,
+          );
+          assertString(
+            assetRecord.reason,
+            `${context}.suggestedBundles[${index}].budgetPrunedAssets[${assetIndex}].reason`,
+          );
+        });
+      }
       assertStringArrayRecord(
         bundleRecord.concernBuckets,
         `${context}.suggestedBundles[${index}].concernBuckets`,
