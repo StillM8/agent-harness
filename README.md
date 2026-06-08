@@ -14,27 +14,27 @@
 
 <p>
   <strong>Hosts:</strong>
-  <a href="#supported-hosts"><img alt="VS Code + Copilot" src="https://img.shields.io/badge/VS%20Code%20%2B%20Copilot-007ACC?logo=visualstudiocode&logoColor=white" /></a>
-  <a href="#supported-hosts"><img alt="OpenCode" src="https://img.shields.io/badge/OpenCode-111827" /></a>
-  <a href="#supported-hosts"><img alt="Cursor" src="https://img.shields.io/badge/Cursor-000000" /></a>
-  <a href="#supported-hosts"><img alt="Zed" src="https://img.shields.io/badge/Zed-084CCF" /></a>
-  <a href="#supported-hosts"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-D97757" /></a>
-  <a href="#supported-hosts"><img alt="Pi" src="https://img.shields.io/badge/Pi-FF4F8B" /></a>
-  <a href="#supported-hosts"><img alt="OpenAI Codex" src="https://img.shields.io/badge/OpenAI%20Codex-412991?logo=openai&logoColor=white" /></a>
+  <a href="#supported-hosts"><img alt="VS Code + Copilot" src="https://img.shields.io/badge/VS%20Code%20%2B%20Copilot-007ACC?logo=githubcopilot&logoColor=white" /></a>
+  <a href="#supported-hosts"><img alt="OpenCode" src="https://img.shields.io/badge/OpenCode-111827?logo=data:image/svg%2Bxml;base64,PHN2ZyBmaWxsPSJ3aGl0ZSIgcm9sZT0iaW1nIiB2aWV3Qm94PSIwIDAgMjQgMjQiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHRpdGxlPk9wZW5Db2RlPC90aXRsZT48cGF0aCBkPSJNMjIgMjRIMlYwaDIwek0xNyA0LjhIN3YxNC40aDEweiIvPjwvc3ZnPg==" /></a>
+  <a href="#supported-hosts"><img alt="Cursor" src="https://img.shields.io/badge/Cursor-000000?logo=cursor&logoColor=white" /></a>
+  <a href="#supported-hosts"><img alt="Zed" src="https://img.shields.io/badge/Zed-084CCF?logo=zedindustries&logoColor=white" /></a>
+  <a href="#supported-hosts"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-D97757?logo=claude&logoColor=white" /></a>
+  <a href="#supported-hosts"><img alt="Pi" src="https://img.shields.io/badge/Pi-FF4F8B?logo=data:image/svg%2Bxml;base64,PHN2ZyBmaWxsPSJ3aGl0ZSIgcm9sZT0iaW1nIiB2aWV3Qm94PSIwIDAgMjQgMjQiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHRpdGxlPlBpPC90aXRsZT48cGF0aCBkPSJNMCAwdjI0aDZ2LTZoNnYtNkg2VjZoNnY2aDZWMFptMTggMTJ2MTJoNlYxMloiLz48L3N2Zz4=" /></a>
+  <a href="#supported-hosts"><img alt="OpenAI Codex" src="https://img.shields.io/badge/OpenAI%20Codex-412991?logo=data:image/svg%2Bxml;base64,PHN2ZyBmaWxsPSJ3aGl0ZSIgdmlld0JveD0iMCAwIDI0IDI0IiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxwYXRoIGQ9Ik05LjA2NCAzLjM0NGE0LjU3OCA0LjU3OCAwIDAxMi4yODUtLjMxMmMxIC4xMTUgMS44OTEuNTQgMi42NzMgMS4yNzUuMDEuMDEuMDI0LjAxNy4wMzcuMDIxYS4wOS4wOSAwIDAwLjA0MyAwIDQuNTUgNC41NSAwIDAxMy4wNDYuMjc1bC4wNDcuMDIyLjExNi4wNTdhNC41ODEgNC41ODEgMCAwMTIuMTg4IDIuMzk5Yy4yMDkuNTEuMzEzIDEuMDQxLjMxNSAxLjU5NWE0LjI0IDQuMjQgMCAwMS0uMTM0IDEuMjIzLjEyMy4xMjMgMCAwMC4wMy4xMTVjLjU5NC42MDcuOTg4IDEuMzMgMS4xODMgMi4xNy4yODkgMS40MjUtLjAwNyAyLjcxLS44ODcgMy44NTRsLS4xMzYuMTY2YTQuNTQ4IDQuNTQ4IDAgMDEtMi4yMDEgMS4zODguMTIzLjEyMyAwIDAwLS4wODEuMDc2Yy0uMTkxLjU1MS0uMzgzIDEuMDIzLS43NCAxLjQ5NC0uOSAxLjE4Ny0yLjIyMiAxLjg0Ni0zLjcxMSAxLjgzOC0xLjE4Ny0uMDA2LTIuMjM5LS40NC0zLjE1Ny0xLjMwMmEuMTA3LjEwNyAwIDAwLS4xMDUtLjAyNGMtLjM4OC4xMjUtLjc4LjE0My0xLjIwNC4xMzhhNC40NDEgNC40NDEgMCAwMS0xLjk0NS0uNDY2IDQuNTQ0IDQuNTQ0IDAgMDEtMS42MS0xLjMzNWMtLjE1Mi0uMjAyLS4zMDMtLjM5Mi0uNDE0LS42MTdhNS44MSA1LjgxIDAgMDEtLjM3LS45NjEgNC41ODIgNC41ODIgMCAwMS0uMDE0LTIuMjk4LjEyNC4xMjQgMCAwMC4wMDYtLjA1Ni4wODUuMDg1IDAgMDAtLjAyNy0uMDQ4IDQuNDY3IDQuNDY3IDAgMDEtMS4wMzQtMS42NTEgMy44OTYgMy44OTYgMCAwMS0uMjUxLTEuMTkyIDUuMTg5IDUuMTg5IDAgMDEuMTQxLTEuNmMuMzM3LTEuMTEyLjk4Mi0xLjk4NSAxLjkzMy0yLjYxOC4yMTItLjE0MS40MTMtLjI1MS42MDEtLjMzLjIxNS0uMDg5LjQzLS4xNjQuNjQ2LS4yMjdhLjA5OC4wOTggMCAwMC4wNjUtLjA2NiA0LjUxIDQuNTEgMCAwMS44MjktMS42MTUgNC41MzUgNC41MzUgMCAwMTEuODM3LTEuMzg4em0zLjQ4MiAxMC41NjVhLjYzNy42MzcgMCAwMDAgMS4yNzJoMy42MzZhLjYzNy42MzcgMCAxMDAtMS4yNzJoLTMuNjM2ek04LjQ2MiA5LjIzYS42MzcuNjM3IDAgMDAtMS4xMDYuNjMxbDEuMjcyIDIuMjI0LTEuMjY2IDIuMTM2YS42MzYuNjM2IDAgMTAxLjA5NS42NDlsMS40NTQtMi40NTVhLjYzNi42MzYgMCAwMC4wMDUtLjY0TDguNDYyIDkuMjN6Ii8+PC9zdmc+" /></a>
 </p>
 
 <p>
   <strong>Assets:</strong>
-  <a href="#discovery-and-recommendations"><img alt="skills" src="https://img.shields.io/badge/skills-5B8DEF" /></a>
-  <a href="#discovery-and-recommendations"><img alt="agents" src="https://img.shields.io/badge/agents-7C3AED" /></a>
-  <a href="#discovery-and-recommendations"><img alt="instructions" src="https://img.shields.io/badge/instructions-0F766E" /></a>
-  <a href="#discovery-and-recommendations"><img alt="workflows" src="https://img.shields.io/badge/workflows-F59E0B" /></a>
-  <a href="#discovery-and-recommendations"><img alt="prompt packs" src="https://img.shields.io/badge/prompt%20packs-DB2777" /></a>
-  <a href="#discovery-and-recommendations"><img alt="MCP servers" src="https://img.shields.io/badge/MCP%20servers-2563EB" /></a>
-  <a href="#discovery-and-recommendations"><img alt="plugins" src="https://img.shields.io/badge/plugins-16A34A" /></a>
-  <a href="#discovery-and-recommendations"><img alt="hooks" src="https://img.shields.io/badge/hooks-DC2626" /></a>
-  <a href="#discovery-and-recommendations"><img alt="extensions" src="https://img.shields.io/badge/extensions-0891B2" /></a>
-  <a href="#discovery-and-recommendations"><img alt="reference packs" src="https://img.shields.io/badge/reference%20packs-64748B" /></a>
+  <a href="#discovery-and-recommendations"><img alt="skills" src="https://img.shields.io/badge/skills-5B8DEF?logo=codecademy&logoColor=white" /></a>
+  <a href="#discovery-and-recommendations"><img alt="agents" src="https://img.shields.io/badge/agents-7C3AED?logo=probot&logoColor=white" /></a>
+  <a href="#discovery-and-recommendations"><img alt="instructions" src="https://img.shields.io/badge/instructions-0F766E?logo=markdown&logoColor=white" /></a>
+  <a href="#discovery-and-recommendations"><img alt="workflows" src="https://img.shields.io/badge/workflows-F59E0B?logo=githubactions&logoColor=white" /></a>
+  <a href="#discovery-and-recommendations"><img alt="prompt packs" src="https://img.shields.io/badge/prompt%20packs-DB2777?logo=huggingface&logoColor=white" /></a>
+  <a href="#discovery-and-recommendations"><img alt="MCP servers" src="https://img.shields.io/badge/MCP%20servers-2563EB?logo=docker&logoColor=white" /></a>
+  <a href="#discovery-and-recommendations"><img alt="plugins" src="https://img.shields.io/badge/plugins-16A34A?logo=gradle&logoColor=white" /></a>
+  <a href="#discovery-and-recommendations"><img alt="hooks" src="https://img.shields.io/badge/hooks-DC2626?logo=zap&logoColor=white" /></a>
+  <a href="#discovery-and-recommendations"><img alt="extensions" src="https://img.shields.io/badge/extensions-0891B2?logo=vscodium&logoColor=white" /></a>
+  <a href="#discovery-and-recommendations"><img alt="reference packs" src="https://img.shields.io/badge/reference%20packs-64748B?logo=gitbook&logoColor=white" /></a>
 </p>
 
 `agent-harness` is a reviewable supply chain for reusable AI-agent assets: discover trusted sources, rank workspace-specific recommendations, mirror pinned bundles, stage local files, activate host views, and wire everything into the agent host you already use.
@@ -286,7 +286,9 @@ npm run workspace:pi -- --intent product
 npm run workspace:codex -- --intent research
 ```
 
-Use the adapter-driven `agent-harness workspace <host>` command for end-to-end host setup. For a new user, this is the straightforward default path: it runs the broad discovery/recommendation pipeline, stages and activates assets, and then performs the selected host's final wire-in. Add `--ai-enrich` when you want the bounded enrichment sidecar as part of the same run, or configure `AGENT_HARNESS_AI_ENRICHMENT_MODE` for conservative automatic behavior.
+Use the adapter-driven `agent-harness workspace <host>` command for end-to-end host setup. For a new user, this is the straightforward default path: it runs the broad discovery/recommendation pipeline, stages and activates assets, and then performs the selected host's final wire-in.
+
+**After the first wire-in:** copy the [end-user harness maintenance guide](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/HARNESS-MAINTENANCE-GUIDE.md) to your AI coding agent and run the weekly safe-refresh loop from there. Add `--ai-enrich` when you want the bounded enrichment sidecar as part of the same run, or configure `AGENT_HARNESS_AI_ENRICHMENT_MODE` for conservative automatic behavior.
 
 Supported canonical intents are `general`, `frontend`, `backend`, `mobile`, `devops`, `security`, `docs`, `testing`, `research`, `data`, `design`, `product`, and `marketing`. Common aliases are normalized automatically, for example `documentation` → `docs`, `ci-cd` / `infra` → `devops`, `branding` → `design`, and `ba` / `planning` / `product-research` → `product`. `--intent` accepts repeated values for additive multi-intent runs, for example `--intent frontend --intent docs`. The first provided intent remains the primary intent for backward-compatible activation/manifests. If you want to compare isolated task shapes instead of combining them, rerun the command once per intent.
 
