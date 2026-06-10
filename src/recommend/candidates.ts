@@ -216,6 +216,11 @@ export function buildCandidateRecommendationBase(
       policy,
       resolvedPolicyContext,
     ),
+    ecosystemMismatchPenalty: computeEcosystemMismatchPenalty(
+      entry,
+      demandContext,
+      policy.scoring.ecosystemMismatchPenalty,
+    ),
     redundancyPenalty: 0,
     budgetPenalty: 0,
     total: 0,
@@ -573,6 +578,96 @@ function isSuppressedBySpecializedDemandGate(
   );
 }
 
+/**
+ * Maps source-id substrings (lowercased) to the package-manager family they
+ * represent. Used to detect ecosystem mismatches between the asset's origin
+ * registry and the workspace's detected package managers.
+ *
+ * Each entry is [sourceIdSubstring, packageManagerFamily]. The first match
+ * wins. Families align with the values emitted by demand-signals.ts so that
+ * a direct set-intersection with `demandContext.packageManagers` works.
+ */
+const REGISTRY_ECOSYSTEM_MAP: ReadonlyArray<readonly [string, string]> = [
+  // JavaScript / Node.js — must match "npm", "pnpm", "yarn", "bun" signals.
+  // NOTE: "pnpm" must appear before any "npm*" entries because "pnpm" is a
+  // substring of "pnpm-registry", while "npm-registry" and "npm" are also
+  // substrings of it — first-match wins, so pnpm entries go first.
+  ["pnpm", "pnpm"],
+  ["npmjs", "npm"],
+  ["npm-registry", "npm"],
+  ["npm", "npm"],
+  ["yarn", "yarn"],
+  ["bun", "bun"],
+  // PHP
+  ["packagist", "composer"],
+  // Python
+  ["pypi", "pip"],
+  // Ruby — demand-signals emits "bundler"
+  ["rubygems", "bundler"],
+  // .NET
+  ["nuget", "nuget"],
+  // Rust
+  ["crates", "cargo"],
+  ["cargo", "cargo"],
+  // Dart / Flutter — demand-signals emits "pub"
+  ["pub.dev", "pub"],
+  ["pub-dev", "pub"],
+  // Elixir — demand-signals emits "hex"
+  ["hex.pm", "hex"],
+  ["hex", "hex"],
+  // Haskell — demand-signals emits "cabal" (rebar3 for Erlang is separate)
+  ["hackage", "cabal"],
+  // JVM — demand-signals emits "maven-gradle"
+  ["maven", "maven-gradle"],
+  ["gradle", "maven-gradle"],
+  // iOS / macOS — demand-signals emits "cocoapods"
+  ["cocoapods", "cocoapods"],
+  // Swift — demand-signals emits "swiftpm"
+  ["swift-package", "swiftpm"],
+  ["swiftpackageindex", "swiftpm"],
+  ["swift", "swiftpm"],
+  // C / C++
+  ["conan", "conan"],
+  ["vcpkg", "vcpkg"],
+] as const;
+
+/**
+ * Returns the penalty to apply when an asset's source registry belongs to a
+ * package-manager ecosystem that the workspace does not use.
+ *
+ * No penalty is applied when:
+ * - The source is not a package registry (repo, docs, local-* kinds are
+ *   ecosystem-agnostic and should not be penalised).
+ * - The workspace has no package-manager signals (brand-new workspace or
+ *   language-only project — be conservative and don't penalise).
+ * - The source's ecosystem cannot be mapped (unknown / internal registries).
+ * - The workspace uses the matching package manager.
+ */
+function computeEcosystemMismatchPenalty(
+  entry: AssetCatalogEntry,
+  demandContext: DemandContext,
+  penalty: number,
+): number {
+  if (entry.source.sourceKind !== "package-registry") {
+    return 0;
+  }
+  if (demandContext.packageManagers.size === 0) {
+    return 0;
+  }
+  const sourceIdLower = entry.source.sourceId.toLowerCase();
+  const sourceIdMatch = REGISTRY_ECOSYSTEM_MAP.find(([substring]) =>
+    sourceIdLower.includes(substring),
+  );
+  if (!sourceIdMatch) {
+    return 0;
+  }
+  const [, family] = sourceIdMatch;
+  if (demandContext.packageManagers.has(family)) {
+    return 0;
+  }
+  return penalty;
+}
+
 function isSuppressedByDependencySelfEcho(
   entry: AssetCatalogEntry,
   demandContext: DemandContext,
@@ -705,6 +800,7 @@ function calculateBreakdownTotal(
       breakdown.costPenalty -
       breakdown.riskPenalty -
       breakdown.negativePenalty -
+      breakdown.ecosystemMismatchPenalty -
       breakdown.redundancyPenalty -
       breakdown.budgetPenalty,
   );

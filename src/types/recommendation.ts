@@ -51,6 +51,7 @@ export interface RecommendationScoringPolicy {
   lowFitPenalty: number;
   weakDemandPenalty: number;
   outOfDomainGroupPenalty: number;
+  ecosystemMismatchPenalty: number;
   coverageGainWeight: number;
   sourceDiversityBonus: number;
   overlapPenalty: number;
@@ -201,6 +202,7 @@ export interface RecommendationScoreBreakdown {
   costPenalty: number;
   riskPenalty: number;
   negativePenalty: number;
+  ecosystemMismatchPenalty: number;
   redundancyPenalty: number;
   budgetPenalty: number;
   total: number;
@@ -218,7 +220,18 @@ export type RecommendationBasis = "workspace-fit" | "local-availability";
 export interface RecommendationEntry {
   assetId: string;
   host: HostTarget;
+  /**
+   * Per-host rank (1-based position within the host's sorted candidate list).
+   * For the global ordering of the flat `RecommendationReport.recommendations`
+   * array, use `globalRank` instead.
+   */
   rank: number;
+  /**
+   * Global rank (1-based position within the deduplicated, globally-sorted
+   * `RecommendationReport.recommendations` list). Only present on entries in
+   * that flat list; absent on `topByHost` entries where `rank` is authoritative.
+   */
+  globalRank?: number;
   score: number;
   reasons: string[];
   assetKind?: AssetKind;
@@ -303,6 +316,13 @@ export interface RecommendationReport {
   sessionIntent: SessionIntent;
   /** Full intent list when more than one intent was requested. */
   sessionIntents?: SessionIntent[];
+  /**
+   * Deduplicated, globally-ranked flat list of all recommendations across
+   * every host target, ordered by descending score. Each asset appears at
+   * most once (the highest-scoring entry across hosts is kept when the same
+   * asset surfaces for multiple hosts).
+   */
+  recommendations: RecommendationEntry[];
   topByHost: Record<string, RecommendationEntry[]>;
   hostSummaries: Record<string, RecommendationHostSummary>;
   suggestedBundles: RecommendationSuggestedBundle[];

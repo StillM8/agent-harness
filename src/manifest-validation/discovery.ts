@@ -606,6 +606,35 @@ export function assertSelectionReport(
   assertNumber(record.inputCount, `${context}.inputCount`);
   assertNumber(record.selectedCount, `${context}.selectedCount`);
   assertNumber(record.rejectedCount, `${context}.rejectedCount`);
+  // rejectionSummary — inject empty default for pre-v2.0.0 reports
+  if (record.rejectionSummary === undefined) {
+    record.rejectionSummary = {};
+  } else {
+    const summaryRecord = assertRecord(
+      record.rejectionSummary,
+      `${context}.rejectionSummary`,
+    );
+    for (const [reason, count] of Object.entries(summaryRecord)) {
+      assertNumber(count, `${context}.rejectionSummary.${reason}`);
+    }
+  }
+  // sampleRejected — inject empty default for pre-v2.0.0 reports
+  if (record.sampleRejected === undefined) {
+    record.sampleRejected = [];
+  } else {
+    const samples = assertArray(
+      record.sampleRejected,
+      `${context}.sampleRejected`,
+    );
+    for (let i = 0; i < samples.length; i++) {
+      const sample = assertRecord(
+        samples[i],
+        `${context}.sampleRejected[${i}]`,
+      );
+      assertString(sample.assetId, `${context}.sampleRejected[${i}].assetId`);
+      assertString(sample.reason, `${context}.sampleRejected[${i}].reason`);
+    }
+  }
 }
 
 /**

@@ -12,6 +12,7 @@ import {
 
 import { countEntriesForSource, upsertIndexedCatalogEntry } from "../state.js";
 import {
+  SOURCE_SYNC_INDEXED_REGISTRY_ENTRY_CAP,
   SOURCE_SYNC_LARGE_RESPONSE_MAX_BYTES,
   asRecord,
   fetchRequiredJson,
@@ -40,7 +41,18 @@ export async function syncPackagistRegistrySource(
   const record = asRecord(data);
   const packageNames = normalizeStringArray(record.packageNames);
 
-  for (const packageName of packageNames) {
+  // Slice up-front so the orchestrator always observes the same ≤CAP entries
+  // regardless of how many were stored from a previous run.  An in-loop guard
+  // against the existing count is wrong: if startCount is already at the cap
+  // (re-run of a fully-populated source) the guard fires on the first
+  // iteration, zero entries are observed, and the orchestrator's prune step
+  // then removes all 500 previously-indexed entries.
+  const cappedNames = packageNames.slice(
+    0,
+    SOURCE_SYNC_INDEXED_REGISTRY_ENTRY_CAP,
+  );
+
+  for (const packageName of cappedNames) {
     const entry = buildPackageRegistryCatalogEntry(
       source,
       packageName,

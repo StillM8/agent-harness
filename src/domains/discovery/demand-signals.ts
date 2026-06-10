@@ -9,6 +9,7 @@ import { applyTechnologySignatures } from "./technology-signatures.js";
 
 interface PackageJsonShape {
   author?: string | { name?: string };
+  bin?: string | Record<string, string>;
   description?: string;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
@@ -595,6 +596,13 @@ function enrichPackageJsonSignals(
     addSignals(matchedSignals.tooling, ["node"]);
   }
 
+  // Detect Node CLI tools: package exposes executable bin entries AND
+  // declares a Node.js engine requirement → emit "node-cli" framework signal
+  // so scoring can reward packages that fill a CLI-tooling demand slot.
+  if (packageJson.engines?.node && hasNodeCliBinField(packageJson.bin)) {
+    addSignals(matchedSignals.frameworks, ["node-cli"]);
+  }
+
   applyTechnologySignatures(matchedSignals, {
     dependencyNames: [...dependencyNames],
     ecosystem: "npm",
@@ -602,6 +610,23 @@ function enrichPackageJsonSignals(
   });
   addGenericTextSignals(matchedSignals, packageTextSignals);
   addPackageDependencySignals(matchedSignals, "npm", [...dependencyNames]);
+}
+
+function hasNodeCliBinField(
+  bin: string | Record<string, string> | undefined,
+): boolean {
+  if (!bin) {
+    return false;
+  }
+  if (typeof bin === "string") {
+    return bin.trim().length > 0;
+  }
+  // Object form: require at least one entry whose value is a non-empty string.
+  // An object with only empty-string values is a malformed manifest and should
+  // not generate a node-cli signal.
+  return Object.values(bin).some(
+    (path) => typeof path === "string" && path.trim().length > 0,
+  );
 }
 
 function addPackageManagerSignal(

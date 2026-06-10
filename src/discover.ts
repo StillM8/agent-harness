@@ -20,6 +20,7 @@ import {
   compareSelectionCandidates,
   filterCatalogEntriesByDemandRelevance,
   groupCatalogEntriesForSelection,
+  buildRejectionSummary,
   buildSelectionReason,
 } from "./domains/discovery/catalog-selection.js";
 import {
@@ -434,10 +435,14 @@ async function generateSelectionOutputs(projectRoot: string): Promise<{
     relevanceFilter.selectedEntries,
   );
   const selectedEntries: AssetCatalogEntry[] = [];
-  const rejectedEntries: AssetCatalogEntry[] = [
-    ...relevanceFilter.rejectedEntries,
-  ];
+  // Track rejection reason alongside each rejected entry so we can build
+  // rejectionSummary and sampleRejected without a second pass.
+  const rejectionLog: Array<{ assetId: string; reason: string }> = [];
   const duplicateDecisions: SelectionDuplicateDecision[] = [];
+
+  for (const entry of relevanceFilter.rejectedEntries) {
+    rejectionLog.push({ assetId: entry.id, reason: "demand-relevance" });
+  }
 
   for (const [groupKey, groupEntries] of groupedEntries) {
     const sortedGroupEntries = [...groupEntries].sort((left, right) =>
@@ -453,13 +458,52 @@ async function generateSelectionOutputs(projectRoot: string): Promise<{
 
     if (sortedGroupEntries.length > 1) {
       const rejectedGroupEntries = sortedGroupEntries.slice(1);
-      rejectedEntries.push(...rejectedGroupEntries);
+      for (const entry of rejectedGroupEntries) {
+        rejectionLog.push({ assetId: entry.id, reason: "duplicate" });
+      }
       duplicateDecisions.push({
         duplicateGroup: groupKey,
         selectedAssetId: selectedEntry.id,
         rejectedAssetIds: rejectedGroupEntries.map((entry) => entry.id),
         selectionReason: buildSelectionReason(selectedEntry, selectionRegistry),
       });
+    }
+  }
+
+  // Derive the flat rejected-entries list from the log so we have a single
+  // source of truth (the log) driving both the JSONL output and the report.
+  // Filter directly over catalogEntries using the id set — avoids allocating
+  // a full-catalog [id, entry][] tuple array and a throwaway Map.
+  const rejectedEntryIds = new Set(rejectionLog.map((r) => r.assetId));
+  const rejectedEntries = catalogEntries.filter((e) =>
+    rejectedEntryIds.has(e.id),
+  );
+
+  // Build rejectionSummary — stable reason → count covering 100% of rejections.
+  const rejectionSummary = buildRejectionSummary(rejectionLog);
+
+  // sampleRejected — stratified sample of up to 20 entries, guaranteeing at
+  // least one entry per distinct rejection reason so all reasons are visible
+  // in the report even when one reason dominates (e.g. thousands of
+  // demand-relevance rejections swamping the first-N slice).
+  const SAMPLE_SIZE = 20;
+  const sampleRejected: typeof rejectionLog = [];
+  const seenReasons = new Set<string>();
+  // Pass 1: take one representative per reason (cap at SAMPLE_SIZE in the
+  // unlikely but possible case where there are more than SAMPLE_SIZE distinct
+  // rejection reasons — prevents the sample from exceeding the intended maximum).
+  for (const entry of rejectionLog) {
+    if (sampleRejected.length >= SAMPLE_SIZE) break;
+    if (!seenReasons.has(entry.reason)) {
+      seenReasons.add(entry.reason);
+      sampleRejected.push(entry);
+    }
+  }
+  // Pass 2: top up to SAMPLE_SIZE with the earliest un-sampled entries.
+  for (const entry of rejectionLog) {
+    if (sampleRejected.length >= SAMPLE_SIZE) break;
+    if (!sampleRejected.includes(entry)) {
+      sampleRejected.push(entry);
     }
   }
 
@@ -478,6 +522,8 @@ async function generateSelectionOutputs(projectRoot: string): Promise<{
     duplicateDecisions: duplicateDecisions.sort((left, right) =>
       left.duplicateGroup.localeCompare(right.duplicateGroup),
     ),
+    rejectionSummary,
+    sampleRejected,
   };
 
   await writeJsonLinesFile(

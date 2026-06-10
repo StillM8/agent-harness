@@ -55,7 +55,7 @@ export async function buildDemandProfile(
     });
   }
 
-  return {
+  const profile: DemandProfile = {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
     scanRoot: toPosixPath(scanRoot),
@@ -71,4 +71,19 @@ export async function buildDemandProfile(
       left.path.localeCompare(right.path),
     ),
   };
+
+  if (scanResult.telemetry.truncated) {
+    // truncationReason is always set when truncated via listFilesRecursiveWithTelemetry;
+    // the "budget-exceeded" fallback guards against future changes to the telemetry API.
+    /* c8 ignore next */
+    const reason = scanResult.telemetry.truncationReason ?? "budget-exceeded";
+    const mb = (scanResult.telemetry.visitedBytes / 1_048_576).toFixed(1);
+    process.stderr.write(
+      `[warn] Demand-signal scan truncated (reason: ${reason}, scanned ${scannedFiles.length} files / ${mb} MB). ` +
+        `Demand profile may be incomplete. ` +
+        `Add large binary/asset directories (e.g. assets/, images/, build/) to .gitignore or .agent-harnessignore to avoid premature truncation.\n`,
+    );
+  }
+
+  return profile;
 }

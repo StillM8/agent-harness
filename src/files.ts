@@ -27,6 +27,7 @@ const FILE_STAT_CONCURRENCY = 16;
 export const DEFAULT_IGNORED_DIRECTORY_NAMES = new Set([
   ".agent",
   ".git",
+  ".worktrees",
   ".idea",
   ".next",
   ".nuxt",
@@ -509,6 +510,85 @@ export function removeManagedSection(options: {
 
 type DirectorySymlinkType = "dir" | "junction";
 
+/**
+ * File extensions that are almost never source-code and are likely to consume
+ * large amounts of the byte budget without contributing any demand signals.
+ * Files with these extensions are sorted *last* within each directory so that
+ * source files are accounted for first.
+ */
+const BINARY_SCAN_DEPRIORITY_EXTENSIONS = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".ico",
+  ".svg",
+  ".bmp",
+  ".tiff",
+  ".tif",
+  ".ttf",
+  ".otf",
+  ".woff",
+  ".woff2",
+  ".eot",
+  ".mp3",
+  ".mp4",
+  ".wav",
+  ".ogg",
+  ".webm",
+  ".avi",
+  ".mov",
+  ".mkv",
+  ".pdf",
+  ".zip",
+  ".tar",
+  ".gz",
+  ".bz2",
+  ".xz",
+  ".7z",
+  ".rar",
+  ".jar",
+  ".war",
+  ".ear",
+  ".class",
+  ".so",
+  ".dylib",
+  ".dll",
+  ".exe",
+  ".bin",
+  ".dat",
+  ".db",
+  ".sqlite",
+  // NOTE: .proto is intentionally NOT in this list — protobuf definitions are
+  // signal-rich source inputs and must not be deprioritised under scan budgets.
+  ".pb",
+  ".parquet",
+  ".pyc",
+  ".pyd",
+  ".pyo",
+  ".o",
+  ".a",
+  ".lib",
+  ".node",
+  ".wasm",
+]);
+
+/**
+ * Returns true when the file should be sorted *after* source-code files
+ * during budget accounting so the byte budget is spent on signal-rich
+ * content first.
+ */
+function isLowPriorityForScanBudget(entryPath: string): boolean {
+  const dotIndex = entryPath.lastIndexOf(".");
+  if (dotIndex === -1) {
+    return false;
+  }
+  return BINARY_SCAN_DEPRIORITY_EXTENSIONS.has(
+    entryPath.slice(dotIndex).toLowerCase(),
+  );
+}
+
 interface PendingFileEntry {
   entryPath: string;
   relativeEntryPath: string;
@@ -772,6 +852,29 @@ async function collectFilesFromDirectory(
     ),
   );
 
+  // Sort so source/text files come before binary/asset files, ensuring the
+  // byte budget is spent on signal-rich content first.
+  fileStats.sort((left, right) => {
+    const leftLow = isLowPriorityForScanBudget(left.entryPath) ? 1 : 0;
+    const rightLow = isLowPriorityForScanBudget(right.entryPath) ? 1 : 0;
+    const priorityDiff = leftLow - rightLow;
+    if (priorityDiff !== 0) {
+      return priorityDiff;
+    }
+    // Deterministic tie-breaker: stable lexicographic order by path ensures
+    // scan truncation behaviour is reproducible across platforms/filesystems.
+    // The `=== 0` case (identical paths) is unreachable in practice since a
+    // filesystem directory cannot contain two entries at the exact same path.
+    // c8 ignore: Node 22 V8 instruments nested ternary arms as separate branches;
+    // the equal-path arm is structurally impossible from a real directory listing.
+    /* c8 ignore next 5 */
+    return left.entryPath < right.entryPath
+      ? -1
+      : left.entryPath > right.entryPath
+        ? 1
+        : 0;
+  });
+
   for (const fileStat of fileStats) {
     telemetry.visitedFiles += 1;
     telemetry.visitedBytes += fileStat.size;
@@ -1003,4 +1106,6 @@ export const filesInternals = {
   globPatternToRegExp,
   compactCollectedFileStats,
   toCollectedFileStat,
+  isLowPriorityForScanBudget,
+  BINARY_SCAN_DEPRIORITY_EXTENSIONS,
 };

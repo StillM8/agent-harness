@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { filterCatalogEntriesByDemandRelevance } from "../domains/discovery/catalog-selection.js";
+import {
+  filterCatalogEntriesByDemandRelevance,
+  buildRejectionSummary,
+} from "../domains/discovery/catalog-selection.js";
 import { interactnoteFullDemandProfile } from "./fixtures/interactnote-full-demand-profile.js";
 import type { AssetCatalogEntry, DemandProfile } from "../types.js";
 
@@ -679,3 +682,47 @@ function createEntry(
     },
   };
 }
+
+// ─── buildRejectionSummary tests ─────────────────────────────────────────────
+
+void test("buildRejectionSummary returns empty object for empty log", () => {
+  assert.deepEqual(buildRejectionSummary([]), {});
+});
+
+void test("buildRejectionSummary counts each reason correctly", () => {
+  const log = [
+    { assetId: "a", reason: "demand-relevance" },
+    { assetId: "b", reason: "demand-relevance" },
+    { assetId: "c", reason: "duplicate" },
+    { assetId: "d", reason: "demand-relevance" },
+  ];
+  assert.deepEqual(buildRejectionSummary(log), {
+    "demand-relevance": 3,
+    duplicate: 1,
+  });
+});
+
+void test("buildRejectionSummary covers 100% of log entries", () => {
+  const log = Array.from({ length: 50 }, (_, i) => ({
+    assetId: `asset-${i}`,
+    reason: i % 3 === 0 ? "duplicate" : "demand-relevance",
+  }));
+  const summary = buildRejectionSummary(log);
+  const total = Object.values(summary).reduce((a, b) => a + b, 0);
+  assert.equal(total, log.length, "total count must equal log length");
+});
+
+void test("buildRejectionSummary handles single-reason log", () => {
+  const log = [
+    { assetId: "x", reason: "demand-relevance" },
+    { assetId: "y", reason: "demand-relevance" },
+  ];
+  const summary = buildRejectionSummary(log);
+  assert.equal(Object.keys(summary).length, 1);
+  assert.equal(summary["demand-relevance"], 2);
+});
+
+void test("buildRejectionSummary preserves arbitrary custom reason strings", () => {
+  const log = [{ assetId: "z", reason: "policy-filtered" }];
+  assert.deepEqual(buildRejectionSummary(log), { "policy-filtered": 1 });
+});

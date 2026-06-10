@@ -122,6 +122,30 @@ export function buildRecommendationReport(
     buildSuggestedBundle(host, topByHost[host], policy),
   );
 
+  // Build a deduplicated globally-ranked flat list. When the same asset
+  // surfaces in multiple host lists, keep the entry with the highest score.
+  const bestByAssetId = new Map<string, RecommendationEntry>();
+  for (const entries of Object.values(topByHost)) {
+    for (const entry of entries) {
+      const existing = bestByAssetId.get(entry.assetId);
+      if (existing === undefined || entry.score > existing.score) {
+        bestByAssetId.set(entry.assetId, entry);
+      }
+    }
+  }
+  const recommendations = [...bestByAssetId.values()]
+    .sort(
+      (a, b) =>
+        // Primary: descending score
+        b.score - a.score ||
+        // Stable tie-breaker: ascending assetId so ordering is deterministic
+        // across Map insertion order differences (host iteration order varies).
+        a.assetId.localeCompare(b.assetId),
+    )
+    // Assign a global rank reflecting position in the deduplicated sorted list.
+    // Consumers should use this rather than entry.rank, which is the per-host rank.
+    .map((entry, index) => ({ ...entry, globalRank: index + 1 }));
+
   return {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
@@ -130,6 +154,7 @@ export function buildRecommendationReport(
     ...(resolvedIntents.length > 1
       ? { sessionIntents: [...resolvedIntents] }
       : {}),
+    recommendations,
     topByHost,
     hostSummaries,
     suggestedBundles,

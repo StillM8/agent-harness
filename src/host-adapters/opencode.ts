@@ -77,10 +77,11 @@ export async function wireOpenCode(options: {
     "agent-harness",
   );
   const localAgentsPath = join(workspaceRoot, "AGENTS.md");
+  const gitignorePath = join(workspaceRoot, ".opencode", ".gitignore");
   const previousWirePlan = await readValidatedOpenCodeWirePlan(
     join(localContextRoot, "wire-plan.json"),
     localOverlayRoot,
-    [localAgentsPath],
+    [localAgentsPath, gitignorePath],
   );
 
   const preview: WirePreviewManifest = {
@@ -108,6 +109,15 @@ export async function wireOpenCode(options: {
   );
 
   if (mode === "preview") {
+    const prospectivePlan = await buildOpenCodeProspectivePlan({
+      projectRoot,
+      workspaceRoot,
+      activationRoot,
+      localOverlayRoot,
+      localContextRoot,
+      localAgentsPath,
+    });
+    process.stdout.write(formatWirePlanSummary(prospectivePlan));
     return;
   }
 
@@ -119,6 +129,10 @@ export async function wireOpenCode(options: {
     });
     await restoreManagedTextFileSnapshot(
       localAgentsPath,
+      previousWirePlan?.textFileSnapshots,
+    );
+    await restoreManagedTextFileSnapshot(
+      gitignorePath,
       previousWirePlan?.textFileSnapshots,
     );
     await removeManagedLinks(getManagedLinkedPaths(previousWirePlan));
@@ -165,8 +179,12 @@ export async function wireOpenCode(options: {
   );
 
   const createdLinkPaths: string[] = [];
+  // Snapshot both AGENTS.md and .opencode/.gitignore before mutating them so
+  // that wire --reset can restore either file to its pre-apply state.
+  // gitignorePath is already declared above (used for allowedTextFilePaths).
   const textFileSnapshots = await captureManagedTextFileSnapshots([
     localAgentsPath,
+    gitignorePath,
   ]);
   let nativeConfigOperations: NativeConfigOperation[] = [];
   try {
@@ -189,6 +207,14 @@ export async function wireOpenCode(options: {
       linkedAssets,
     });
 
+    // Ensure .opencode/.gitignore lists node_modules (and other npm artefacts)
+    // so that OpenCode's overlay scanner skips them and does not emit OVERLAY:
+    // lines for the ~800 files that npm install writes into .opencode/.
+    await ensureOpenCodeOverlayGitignore(workspaceRoot);
+
+    const npmInstallSummary =
+      await readOpenCodeNpmInstallSummary(workspaceRoot);
+
     const wirePlan: WirePlanManifest = {
       schemaVersion: 1,
       host: "opencode-project",
@@ -199,12 +225,20 @@ export async function wireOpenCode(options: {
       mcpServers: sharedMcpAssetIds,
       nativeConfigOperations,
       textFileSnapshots,
+      ...(npmInstallSummary !== null ? { npmInstallSummary } : {}),
       notes: [
         "Project-local OpenCode overlay written under .opencode/context/project-intelligence/agent-harness.",
         "Documented OpenCode-native asset buckets stay under .opencode/agents, .opencode/skills, .opencode/commands, and .opencode/plugins.",
         "Undocumented asset buckets are staged under the managed context root as harness-owned references.",
         "On Windows, managed directory links are created as junctions for compatibility.",
         "Shared MCP assets are surfaced in the effective OpenCode wire plan when available.",
+        ...(npmInstallSummary !== null
+          ? [
+              `OpenCode plugin npm install: ${npmInstallSummary!.declaredDependencyCount} declared dependencies, ` +
+                `~${npmInstallSummary!.estimatedPackageCount} installed packages under ${npmInstallSummary!.packageJsonPath}. ` +
+                `These files are written by OpenCode itself (not by wire --apply) and are excluded from overlay scanning via .opencode/.gitignore.`,
+            ]
+          : []),
       ],
     };
 
@@ -216,16 +250,310 @@ export async function wireOpenCode(options: {
       operations: nativeConfigOperations,
     });
     await restoreManagedTextFileSnapshot(localAgentsPath, textFileSnapshots);
+    await restoreManagedTextFileSnapshot(gitignorePath, textFileSnapshots);
     await removeManagedLinksBestEffort(createdLinkPaths);
     await removePath(localContextRoot);
     throw error;
   }
 }
 
+/**
+ * Idempotently writes `.opencode/.gitignore` so OpenCode's overlay scanner
+ * skips npm-install artefacts (node_modules, package-lock.json, etc.).
+ * If the file already exists and already contains all required entries,
+ * it is left untouched.  Otherwise it is created / updated in place.
+ *
+ * This must be called during `wire --apply` so the gitignore is present
+ * before OpenCode starts and begins enumerating its overlay directory.
+ */
+async function ensureOpenCodeOverlayGitignore(
+  workspaceRoot: string,
+): Promise<void> {
+  const REQUIRED_ENTRIES = [
+    "node_modules",
+    "package-lock.json",
+    "bun.lockb",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    ".gitignore",
+  ] as const;
+
+  const gitignorePath = join(workspaceRoot, ".opencode", ".gitignore");
+  const existing = (await readTextFileOrNull(gitignorePath)) ?? "";
+  const existingEntries = new Set(
+    existing
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith("#")),
+  );
+
+  const missing = REQUIRED_ENTRIES.filter(
+    (entry) => !existingEntries.has(entry),
+  );
+  if (missing.length === 0) {
+    return;
+  }
+
+  await ensureDirectory(join(workspaceRoot, ".opencode"));
+
+  const preamble = existing.trimEnd();
+  const additions = missing.join("\n");
+  const next =
+    preamble.length === 0
+      ? additions + "\n"
+      : preamble + "\n" + additions + "\n";
+
+  await writeTextFile(gitignorePath, next);
+}
+
+/**
+ * Reads the optional `.opencode/package.json` and `package-lock.json` to
+ * build a summary of the npm install footprint that OpenCode manages.
+ * Returns `null` when no `.opencode/package.json` exists.
+ */
+async function readOpenCodeNpmInstallSummary(
+  workspaceRoot: string,
+): Promise<WirePlanManifest["npmInstallSummary"] | null> {
+  const packageJsonPath = join(workspaceRoot, ".opencode", "package.json");
+  if (!(await pathEntryExists(packageJsonPath))) {
+    return null;
+  }
+
+  const packageJson = await readJsonFileOrNull<{
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  }>(packageJsonPath);
+
+  // readJsonFileOrNull only returns null for ENOENT (already guarded above),
+  // but keep this check as a safety net for future changes to readJsonFileOrNull.
+  /* c8 ignore next 3 */
+  if (packageJson === null) {
+    return null;
+  }
+
+  const declaredDependencyCount =
+    Object.keys(packageJson.dependencies ?? {}).length +
+    Object.keys(packageJson.devDependencies ?? {}).length;
+
+  // Prefer package-lock.json package count for accuracy; fall back to a
+  // conservative per-dependency estimate when the lockfile is absent.
+  const lockfilePath = join(workspaceRoot, ".opencode", "package-lock.json");
+  const lockfile = await readJsonFileOrNull<{
+    packages?: Record<string, unknown>;
+  }>(lockfilePath);
+
+  const estimatedPackageCount =
+    lockfile?.packages !== undefined
+      ? // package-lock v2/v3: packages includes the root "" entry, subtract 1
+        Math.max(0, Object.keys(lockfile.packages).length - 1)
+      : // Rough heuristic when no lockfile: use declared dependency count
+        declaredDependencyCount;
+
+  const relativePackageJsonPath = toPosixPath(
+    relative(workspaceRoot, packageJsonPath),
+  );
+
+  return {
+    packageJsonPath: relativePackageJsonPath,
+    declaredDependencyCount,
+    estimatedPackageCount,
+  };
+}
+
 function buildOpenCodeLinkRoots(localOverlayRoot: string): string[] {
   return [...new Set(Object.values(OPENCODE_DIRECTORY_BY_ASSET_KIND))]
     .map((directoryName) => toPosixPath(join(localOverlayRoot, directoryName)))
     .sort((left, right) => left.localeCompare(right));
+}
+
+/**
+ * Computes what `wire opencode --apply` would do without writing anything.
+ *
+ * Reads the activation manifest and shared MCP asset IDs, resolves the linked
+ * assets and native-config payloads, then returns a WirePlanManifest that
+ * describes the prospective operation. Nothing is written to disk.
+ */
+async function buildOpenCodeProspectivePlan(options: {
+  projectRoot: string;
+  workspaceRoot: string;
+  activationRoot: string;
+  localOverlayRoot: string;
+  localContextRoot: string;
+  localAgentsPath: string;
+}): Promise<WirePlanManifest> {
+  const {
+    projectRoot,
+    workspaceRoot,
+    activationRoot,
+    localOverlayRoot,
+    localContextRoot,
+    localAgentsPath,
+  } = options;
+
+  const activationManifest = await readJsonFileOrNull<ActivationManifest>(
+    join(activationRoot, "activation-manifest.json"),
+  );
+  const sharedMcpAssetIds = await readSharedMcpAssetIdsBestEffort(projectRoot);
+
+  const linkedAssets = await resolveOpenCodeLinkedAssets({
+    projectRoot,
+    activationRoot,
+    activationManifest,
+    localOverlayRoot,
+  });
+  const activeAssets = await loadActiveOpenCodeAssets(
+    activationRoot,
+    activationManifest,
+  );
+
+  // Compute native-config operations descriptively (no disk writes).
+  const nativeConfigOperations = buildOpenCodeNativeConfigPreview({
+    workspaceRoot,
+    activeAssets,
+    linkedAssets,
+  });
+
+  // Read npm install summary so preview accurately reflects what --apply reports.
+  const npmInstallSummary = await readOpenCodeNpmInstallSummary(workspaceRoot);
+
+  return {
+    schemaVersion: 1,
+    host: "opencode-project",
+    generatedAt: new Date().toISOString(),
+    workspaceRoot: toPosixPath(workspaceRoot),
+    runtimeRoot: toPosixPath(localOverlayRoot),
+    linkedPaths: linkedAssets.map((a) => toPosixPath(a.linkPath)),
+    mcpServers: sharedMcpAssetIds,
+    nativeConfigOperations,
+    textFileSnapshots: [],
+    notes: [
+      "This is a preview of what --apply would do. Nothing has been written.",
+      `AGENTS.md target: ${toPosixPath(localAgentsPath)}`,
+      `Context root: ${toPosixPath(localContextRoot)}`,
+      ...(npmInstallSummary != null
+        ? [
+            `OpenCode plugin npm install: ${npmInstallSummary.declaredDependencyCount} declared dependencies, ` +
+              `~${npmInstallSummary.estimatedPackageCount} installed packages under ${npmInstallSummary.packageJsonPath}. ` +
+              `These files are written by OpenCode itself (not by wire --apply) and are excluded from overlay scanning via .opencode/.gitignore.`,
+          ]
+        : []),
+    ],
+  };
+}
+
+/**
+ * Computes native-config operation descriptors that `--apply` would produce,
+ * without touching the filesystem. Mirrors the logic of applyOpenCodeNativeConfig.
+ */
+function buildOpenCodeNativeConfigPreview(options: {
+  workspaceRoot: string;
+  activeAssets: AssetCatalogEntry[];
+  linkedAssets: OpenCodeLinkedAsset[];
+}): NativeConfigOperation[] {
+  const instructionPaths = options.linkedAssets
+    .filter((asset) => asset.assetKind === "instruction")
+    .map((asset) =>
+      toWorkspaceRelativeConfigPath(options.workspaceRoot, asset.linkPath),
+    );
+  const payloads = collectHostNativeFilePayloads(
+    options.activeAssets,
+    "opencode",
+  );
+
+  if (instructionPaths.length > 0) {
+    payloads.unshift({
+      path: "opencode.json",
+      format: "json",
+      merge: true,
+      content: { instructions: instructionPaths },
+    });
+  }
+
+  return payloads.map((payload) => {
+    const isJson = payload.format === "json";
+    const merge = isJson && (payload as { merge?: boolean }).merge === true;
+    return {
+      path: payload.path,
+      format: payload.format,
+      mode: (merge ? "merge" : "write") as "merge" | "write",
+      content: payload.content as string | Record<string, unknown>,
+    } satisfies NativeConfigOperation;
+  });
+}
+
+/**
+ * Formats a WirePlanManifest as a human-readable summary string for stdout.
+ *
+ * Outputs:
+ *   - header with host and timestamp
+ *   - linked paths section (count + list)
+ *   - MCP servers section
+ *   - native config operations section
+ *   - text file snapshots section
+ *   - notes section
+ */
+export function formatWirePlanSummary(plan: WirePlanManifest): string {
+  const lines: string[] = [];
+  const hr = "─".repeat(60);
+
+  lines.push(hr);
+  lines.push(`  wire opencode — plan preview`);
+  lines.push(`  host: ${plan.host}  •  generated: ${plan.generatedAt}`);
+  lines.push(`  workspace: ${plan.workspaceRoot}`);
+  lines.push(hr);
+
+  // Linked paths
+  const linkedPaths = plan.linkedPaths ?? [];
+  lines.push(
+    `\n  Linked paths (${linkedPaths.length})${linkedPaths.length === 0 ? " — none" : ":"}`,
+  );
+  for (const p of linkedPaths) {
+    lines.push(`    • ${p}`);
+  }
+
+  // MCP servers
+  const mcpServers = plan.mcpServers ?? [];
+  lines.push(
+    `\n  MCP servers (${mcpServers.length})${mcpServers.length === 0 ? " — none" : ":"}`,
+  );
+  for (const s of mcpServers) {
+    lines.push(`    • ${s}`);
+  }
+
+  // Native config operations
+  const ops = plan.nativeConfigOperations ?? [];
+  lines.push(
+    `\n  Native config operations (${ops.length})${ops.length === 0 ? " — none" : ":"}`,
+  );
+  for (const op of ops) {
+    lines.push(`    • [${op.mode}] ${op.path} (${op.format})`);
+  }
+
+  // Text file snapshots
+  const snapshots = plan.textFileSnapshots ?? [];
+  lines.push(
+    `\n  Text file snapshots (${snapshots.length})${snapshots.length === 0 ? " — none" : ":"}`,
+  );
+  for (const snap of snapshots) {
+    const preview =
+      typeof snap.content === "string"
+        ? snap.content.slice(0, 80).replace(/\n/g, "↵")
+        : "(null)";
+    lines.push(`    • ${snap.path}: ${preview}`);
+  }
+
+  // Notes
+  const notes = plan.notes ?? [];
+  if (notes.length > 0) {
+    lines.push(`\n  Notes:`);
+    for (const note of notes) {
+      lines.push(`    ℹ ${note}`);
+    }
+  }
+
+  lines.push(`\n${hr}\n`);
+
+  return lines.join("\n") + "\n";
 }
 
 async function resolveOpenCodeLinkedAssets(options: {
@@ -647,4 +975,7 @@ export const openCodeWireInternals = {
   restoreManagedTextFileSnapshot,
   removeManagedLinksBestEffort,
   toLoggableErrorMessage,
+  ensureOpenCodeOverlayGitignore,
+  readOpenCodeNpmInstallSummary,
+  buildOpenCodeProspectivePlan,
 };
