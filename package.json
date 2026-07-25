@@ -1,7 +1,7 @@
 {
   "name": "@ar27111994/agent-harness",
   "version": "2.0.0",
-  "description": "MCP server and agent skills manager for Copilot, OpenCode, Cursor, Zed, Claude Code, Pi, and Codex workspaces.",
+  "description": "ARD-compatible MCP server and agent skills manager — discover, stage, and wire assets for Copilot, OpenCode, Cursor, Zed, Claude Code, Pi, and Codex workspaces.",
   "license": "MIT",
   "author": "ar27111994",
   "homepage": "https://github.com/ar27111994/agent-harness#readme",
@@ -78,6 +78,8 @@
     "dist/recommend/**/*.js",
     "dist/types/**/*.d.ts",
     "dist/types/**/*.js",
+    "dist/ard/**/*.d.ts",
+    "dist/ard/**/*.js",
     "discover/official-skills-indexes.json",
     "discover/official-upstreams.json",
     "discover/pipeline.json",
@@ -207,5 +209,13 @@
     "prettier": "^3.8.4",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.61.0"
+  },
+  "peerDependencies": {
+    "@xenova/transformers": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@xenova/transformers": {
+      "optional": true
+    }
   }
 }

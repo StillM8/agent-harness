@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ## [2.0.0] - 2026-06-09
 
+### Breaking Changes
+
+- **Demand-scan file ordering changed** — binary files are now deprioritised below source files in demand-scan ordering (previously binary and source files were interleaved lexicographically). Tools or tests that assert a fixed scan order or specific truncation behaviour may need to be updated (#280).
+- **`.worktrees/` directories excluded from all scans** — file discovery, demand detection, and source-sync traversal now skip `.worktrees/` subdirectories. Workspaces that deliberately stored assets inside `.worktrees/` will no longer have them picked up (#277).
+- **Packagist registry enforces a hard 500-entry cap** — Packagist source-sync stops at 500 entries per source. Operators who previously indexed full high-volume Packagist namespaces will observe a reduced catalog for those sources (#286).
+- **`source-health` dormant/never-synced `reason` field is now always populated** — previously the `reason` field on dormant and never-synced entries was an empty string; it now carries a descriptive message. Code that matched on empty-string reason will need to update its checks (#281).
+
 ### Added
 
 - `wire opencode --preview` now prints a structured wire-plan summary to stdout before any file is written, listing linked-asset paths count, resolved MCP server identifiers, native-config operations, and contextual notes so operators can review changes before committing (#284)
@@ -35,6 +42,16 @@ All notable changes to this project will be documented in this file.
 - demand-detection coverage matrix, targeted stack/vertical signatures, and false-positive fixtures for monorepos, serverless/edge, cross-platform mobile, AI-agent frameworks, commerce/CMS, workflow orchestration, desktop, infrastructure, and related project types for #209
 - scenario-based recommendation-limit scaling guidance and copy-paste `preserve` / `scale` examples for #210
 - ui-skills.com registered as a community skill registry source (`ui-skills`), discovered via flat sitemap with an item-URL predicate filtering to two-segment `/skills/{author}/{name}/` leaf pages; `itemCompatibilityMode: "adaptable"` across all supported hosts
+- ARD (Agentic Resource Discovery) v0.9 interoperability: `discover ard-export` command publishing `.well-known/ai-catalog.json` with URN identifiers, media-type mapping, trust-manifest derivation, and synthetic representative queries for registry discovery (#325)
+- README ARD section with ecosystem architecture diagram, publisher/consumer role descriptions, and cross-references to implementation tickets (#329)
+- ARD trust-manifest signal consumption: `ard-identity-bound` (+4), `ard-compliance-attested` (+3), `ard-soc2` (+3), `ard-hipaa` (+3), and `ard-signed` (+5) trust-score boosts (#328)
+- ARD registry source adapter consuming `POST /search` endpoints, mapping ARD results to `AssetCatalogEntry` with `SourceKind: "ard-registry"`, federated referral tracking, and semantic-score normalization (#327)
+- ARD ecosystem community submission documentation for ards-project, GitHub Agent Finder, and HuggingFace Discover (#326)
+- ARD representativeQueries wired into SemanticScorer — entries with ARD-generated natural-language query text use 1.2× weighted cosine similarity via `ARD_REPRESENTATIVE_QUERY_WEIGHT`; `buildEntryEmbeddingText` prioritizes `representativeQueries` over keyword-derived capability terms when present (#327)
+- ARD publisher FQDN now configurable via `AGENT_HARNESS_ARD_PUBLISHER_FQDN` environment variable with hardcoded default `ar27111994.dev` — production paths use `getArdPublisherFqdn()` getter
+- Comprehensive catalog breadth documentation — new `docs/guides/CATALOG-BREADTH.md` guide with two-phase offline index workflow, production configuration table, source coverage breakdown, scheduled CI workflow template, and catalog size projections; README updated with "Building a comprehensive catalog" section
+- VS Code Marketplace popularity sweep default raised from 10 to 50 pages (2,500 extensions by install count, configurable via `AGENT_HARNESS_VSCODE_MARKETPLACE_POPULARITY_SWEEP_PAGES`) for offline index builds
+- Fixed skills-sh registry source — sitemap URL updated to `www.skills.sh` (308 redirect) and leaf predicate expanded to match `sitemap-(skills|agents|misc|owners)` patterns (#336)
 
 ### Changed
 
@@ -48,10 +65,37 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `writeJsonFileAtomically` no longer performs a pre-delete before the atomic rename, closing a window where a crash between `rm` and `rename` could leave a discovery artifact missing entirely (#316)
+- `swapActivationRuntimeRoot` now surfaces rollback failures via `AggregateError` when both the apply and the restore rename fail, preventing the runtime root from being silently left in a missing state (#317)
+- `readSharedMcpAssetIds` validates that `pkg.manifestPath` stays within the install root before reading, closing a path-traversal risk via tampered bundle manifests (#318)
+- Extension-ID parsing in `verifyVsCodeExtensionInstalled` now strips only the trailing `@version` suffix instead of splitting at the first `@`, so scoped extension IDs are no longer truncated (#319)
+- `writeJsonLinesFile` no longer performs a pre-delete before the atomic rename, closing the same window as #316 for all catalog JSONL output files — `catalog.assets.jsonl`, `catalog.selected.jsonl`, and `catalog.rejected.jsonl` (#306)
+- Publisher name for VS Code Marketplace extensions is now resolved from the per-extension `publisher.publisherName` field harvested at sync time rather than the source-level publisher override, so extensions from non-Microsoft publishers are correctly attributed (#300)
+- `install refresh` no longer crashes with ENOENT on a clean checkout: missing `mirror/bundles/*.lock.json` files are now gracefully skipped during `resolveBundleLocks` (#298)
+- `setup doctor` now runs all host-adapter preflights concurrently and enforces a per-adapter wall-clock timeout (default 5 s, configurable via `AGENT_HARNESS_SETUP_DOCTOR_HOST_TIMEOUT_MS`), preventing a blocked CLI probe from hanging the entire command (#302)
+- `recommend report` now fails immediately with a clear error when `catalog.selected.jsonl` is absent or empty, instead of hanging for 10+ seconds against an empty dataset; the error message directs users to run `discover full` or `discover select` first (#303)
+- `synonymLookup` map is now built once per recommendation report instead of once per candidate entry, eliminating an O(tokens × synonyms) hot path that caused `recommend report` to stall for 81 s on real 2,000-entry catalogs (#299, #321)
+- Packagist PHP entries no longer rank in the top results for TypeScript/Node workspaces: the ecosystem-affinity mismatch penalty is now doubled (2×) when the workspace has package-manager signals and none match the candidate registry's ecosystem (#278)
+- Per-source entry cap enforced in `discover select`: no single source may contribute more than `AGENT_HARNESS_MAX_ENTRIES_PER_SOURCE` (default 200) entries to the selected catalog; excess entries are logged as `"source-cap"` rejections; a `sourceDiversityWarning` field is emitted when any source still exceeds 20% after capping (#304)
+- `assertRecommendationReport` backfill shim is now documented as a legacy-only compatibility path; fresh report writes are validated for the `recommendations` key before the validator runs, so write-path regressions are immediately visible in tests (#283)
+- Agent coding conventions and contributor guidance added to `CONTRIBUTING.md` (not `AGENTS.md`, which is gitignored) (#322)
+- `docs/guides/TROUBLESHOOTING.md` created, covering host CLI setup, version failures, doctor hang, install ENOENT, concurrent-write safety, and Packagist asset dominance; linked from README (#305)
+
 - `wire opencode --apply` idempotently writes `.opencode/.gitignore` listing `node_modules`, `package-lock.json`, `bun.lockb`, `yarn.lock`, and `pnpm-lock.yaml` before OpenCode starts, ensuring its overlay scanner skips npm install artefacts and eliminating ~800 spurious `OVERLAY:` log lines per run (#282)
 - Go module index cursor now encodes `timestamp|lastSeenPath` (pipe-delimited) instead of a bare timestamp, eliminating the gap-or-duplicate hazard when multiple modules share the same timestamp at a page boundary; legacy bare-timestamp cursors are transparently upgraded on first resume
 - npm changes-feed adapter now calls `deleteIndexedCatalogEntry` for rows with `deleted: true`, immediately removing stale catalog entries instead of leaving them until the never-firing prune-on-complete path
 - improved release synchronization, version-check, GitHub resilience, guarded HTTP, path/file, native wire, install refresh, mirror acquisition, and recommendation validation regression coverage with deterministic tests
+- `evidence.classification` is now populated for all harvested assets — `buildClassificationConfidence` synthesizes classification evidence from the asset's known `assetKind` so the field is never `null` in catalog output (#301)
+- GitHub harvester now emits an `oms-trust-anchor` repo-level trust signal when `nv-agent-root-cert.pem` is detected, and a per-asset `oms-signed` signal when a sibling `skill.oms.sig` file is present; trust-score effects are `+3` and `+5` respectively (#315)
+- `discover index` command added as a dedicated catalog-index build step — writes `catalog-index.jsonl` plus a freshness-aware meta companion; `discover sync` reuses a fresh index when it is within `AGENT_HARNESS_DISCOVERY_INDEX_MAX_AGE_DAYS` (default 7) rather than re-harvesting from scratch; raised `AGENT_HARNESS_SOURCE_SYNC_MAX_PAGES_FOR_INDEX_BUILD` default to 500 for index-build runs (#289)
+- VS Code Marketplace harvesting now runs a popularity-first sweep (top installs by count) ahead of the alphabetical demand-query loop, and a category-sweep phase driven by workspace demand → VS Code category taxonomy mappings; both phases are runtime-configurable via `AGENT_HARNESS_VSCODE_MARKETPLACE_POPULARITY_SWEEP_PAGES` and `AGENT_HARNESS_VSCODE_MARKETPLACE_CATEGORY_SWEEP_ENABLED` (#290, #291)
+- Official skills index expanded from 1 to 16 entries; `AGENT_HARNESS_OFFICIAL_INDEX_MAX_ITEMS_PER_INDEX` enforces a per-index cap (0 = unlimited) to prevent runaway harvesting from large official feeds (#292)
+- `discover/source-packs/official.json` seeded with 12 high-value MCP vendor entries (Anthropic, Stripe, Cloudflare, Supabase, GitHub, Sentry, Docker, Linear, Notion, Resend, Postmark, Braintrust); `authorityTier` and `assetKinds` are now required fields on all source-pack entries; a `scripts/seed-source-packs.ts` seeding automation and matching guide doc added (#293)
+- Six new official source-pack entries covering `google/gemini-cli-extensions`, `/sre`, `data-agent-kit`, `conductor`, `NVIDIA/skills`, and `solana-foundation/pay-skills`; new `"payable-api"` and `"acp-agent"` asset kinds added to the `AssetKind` union and validated constants (#307, #308, #309, #310, #311, #313)
+- Host surface gaps documented across Cursor, Windsurf, Cline, JetBrains, Zed, and Copilot plugin compatibility; `HOST-SURFACE-AUDIT.md` updated; VS Code extension compatibility notes, ACP/forwarding notes, and Claude-plugin schema notes added to support-matrix and README (#314)
+- `AssetCatalogEntry.compatibleHosts` field introduced; compatibility matrix derives cross-host support from asset kinds during harvesting; recommendation selection respects `compatibleHosts` when filtering candidates for each target host (#312)
+- Semantic similarity scoring added as an optional selection filter — `SemanticScorer` uses `@xenova/transformers` (optional peer) with cosine similarity and `fit.fitLevel` tagging (`"strong" | "moderate" | "weak" | "none"`); falls back to keyword-overlap gating when the runtime dependency is unavailable; configurable via `AGENT_HARNESS_DISCOVERY_SEMANTIC_SCORING` and `AGENT_HARNESS_DISCOVERY_MIN_SIMILARITY` (#294)
+- Registry metadata enrichment for 7 additional registries — static adjacent-tooling matrix and live search APIs for crates.io, NuGet, Maven, Packagist, RubyGems; `AssetEvidence` extended with `discoveryMethod` field (#295)
 
 ### Documentation
 

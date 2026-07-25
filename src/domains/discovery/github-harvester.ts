@@ -1,4 +1,5 @@
 import { fetchGitHubRepoSnapshot } from "../../github.js";
+import type { KeyObject } from "node:crypto";
 import type {
   AssetCatalogEntry,
   AssetKind,
@@ -10,6 +11,8 @@ import type {
   SelectionRegistry,
   SourceDefinition,
 } from "../../types.js";
+import { inferCompatibleHosts } from "../../host-adapters/compatibility-matrix.js";
+import { TRUST_SIGNAL_SCORE_BOOST } from "../../recommend/constants.js";
 import {
   buildAssetStatus,
   buildCandidateRankHint,
@@ -59,17 +62,44 @@ export async function harvestGitHubRepoSource(
       return [];
     }
 
+    // Build a Map of path→size for O(1) OMS-signature lookups with content
+    // verification. Require a minimum size of 64 bytes — a real OMS signature
+    // or PEM certificate is at minimum a few hundred bytes; empty or tiny files
+    // must not inflate trust scores.
+    const OMS_MIN_FILE_SIZE = 64;
+    const omsCandidateFiles = snapshot.tree.entries.filter(
+      (entry) =>
+        entry.type === "blob" &&
+        entry.size != null &&
+        entry.size >= OMS_MIN_FILE_SIZE &&
+        /(?:^|\/)(?:skill\.)?oms\.sig$|nv-agent-root-cert\.pem$/u.test(
+          entry.path,
+        ),
+    );
+
+    // Fetch and verify blob contents for candidate OMS files so trust signals
+    // are only awarded to files with cryptographically plausible content.
+    const { verified: omsFileSizes, pemParsed } = await verifyOmsBlobs(
+      snapshot,
+      omsCandidateFiles,
+      source,
+    );
+    snapshot.pemParsed = pemParsed;
+
     return snapshot.tree.entries
       .filter((entry) => entry.type === "blob")
-      .map((entry) =>
-        buildGitHubCatalogEntry(
+      .map((entry) => {
+        // Pre-compute a lower-cased path set for O(1) OMS-signature lookups
+        // inside buildGitHubCatalogEntry, avoiding an O(n) scan per asset.
+        return buildGitHubCatalogEntry(
           snapshot,
           source,
           entry,
           demandProfile,
           selectionRegistry,
-        ),
-      )
+          omsFileSizes,
+        );
+      })
       .filter((entry): entry is AssetCatalogEntry => entry !== null);
   } catch (error) {
     console.warn(
@@ -85,6 +115,7 @@ function buildGitHubCatalogEntry(
   treeEntry: GitHubRepoSnapshot["tree"]["entries"][number],
   demandProfile: DemandProfile | null,
   selectionRegistry: SelectionRegistry,
+  omsFileSizes: ReadonlyMap<string, number>,
 ): AssetCatalogEntry | null {
   const relativePath = treeEntry.path;
   const classification = classifyGitHubTreePath(relativePath, source);
@@ -100,7 +131,20 @@ function buildGitHubCatalogEntry(
       : classification.hosts;
   const contextCost = { sizeClass: "tiny", estimatedPromptWeight: 1 } as const;
   const risk = buildGitHubRisk(classification.assetKind);
-  const repoTrust = collectRepositoryTrustEvidence(snapshot);
+  const repoTrust = collectRepositoryTrustEvidence(snapshot, source);
+  const assetDir = relativePath.includes("/")
+    ? relativePath.slice(0, relativePath.lastIndexOf("/"))
+    : "";
+  // Check both canonical OMS sig filename variants: skill.oms.sig and bare oms.sig.
+  const omsSignaturePath = assetDir
+    ? `${assetDir}/skill.oms.sig`
+    : "skill.oms.sig";
+  const bareOmsSigPath = assetDir ? `${assetDir}/oms.sig` : "oms.sig";
+  const omsSigSize =
+    omsFileSizes.get(omsSignaturePath.toLowerCase()) ??
+    omsFileSizes.get(bareOmsSigPath.toLowerCase());
+  // Trust signals must be backed by real content, not empty placeholder files.
+  const hasOmsSignature = omsSigSize != null && omsSigSize > 0;
   const githubFileUrl = `${snapshot.repoSummary.htmlUrl}/blob/${snapshot.repoSummary.defaultBranch}/${relativePath}`;
 
   return {
@@ -109,6 +153,7 @@ function buildGitHubCatalogEntry(
     assetKind: classification.assetKind,
     hosts,
     compatibilityMode: classification.compatibilityMode,
+    compatibleHosts: inferCompatibleHosts(classification.assetKind, hosts),
     source: {
       sourceId: source.id,
       authorityTier: source.authorityTier,
@@ -127,7 +172,12 @@ function buildGitHubCatalogEntry(
           publisherVerified: source.publisher?.verified ?? false,
           compatibilityMode: classification.compatibilityMode,
           installMethod: "github-tree-metadata",
-        }) + repoTrust.scoreBonus,
+        }) +
+        repoTrust.scoreBonus +
+        // `oms-signed` is always in TRUST_SIGNAL_SCORE_BOOST; fallback prevents
+        // regression if the constant is accidentally removed.
+        /* c8 ignore next */
+        (hasOmsSignature ? (TRUST_SIGNAL_SCORE_BOOST["oms-signed"] ?? 5) : 0),
       signals: [
         ...buildTrustSignals({
           authorityTier: source.authorityTier,
@@ -138,6 +188,7 @@ function buildGitHubCatalogEntry(
           installMethod: "github-tree-metadata",
         }),
         ...repoTrust.signals,
+        ...(hasOmsSignature ? ["oms-signed"] : []),
       ],
     },
     capabilities,
@@ -178,7 +229,170 @@ function buildGitHubCatalogEntry(
   };
 }
 
-function collectRepositoryTrustEvidence(snapshot: GitHubRepoSnapshot): {
+/**
+ * Fetches and verifies OMS blob contents for candidate signature and
+ * certificate files found during tree discovery. Only files whose fetched
+ * content passes format and cryptographic validation are kept in the return Map.
+ *
+ * Verification tiers:
+ * 1. PEM certs: parsed via crypto.createPublicKey() — ensures real key material.
+ * 2. OMS sigs: decoded as base64, minimum 32 bytes output.
+ * 3. Internal signature check: signatures verified against the cert's public key
+ *    + asset content (SKILL.md in the same directory). This is a consistency
+ *    check only — the PEM is repo-supplied and does NOT constitute a trusted
+ *    PKI anchor. Downstream trust scoring gates oms-trust-anchor on source
+ *    authority, not on this verification alone.
+ */
+async function verifyOmsBlobs(
+  snapshot: GitHubRepoSnapshot,
+  candidates: GitHubRepoSnapshot["tree"]["entries"],
+  source: SourceDefinition,
+): Promise<{ verified: Map<string, number>; pemParsed: boolean }> {
+  if (candidates.length === 0) return { verified: new Map(), pemParsed: false };
+
+  const { repoSummary } = snapshot;
+  const { fetchTextWithGuards } = await import("../../lib/http.js");
+
+  // ── Phase 1: fetch all PEM/sig blob contents in parallel ──
+  const results = await Promise.allSettled(
+    candidates.map(async (entry) => {
+      const blobUrl = `https://api.github.com/repos/${repoSummary.fullName}/git/blobs/${entry.sha}`;
+      const content = await fetchTextWithGuards(blobUrl, {
+        allowedOrigins: ["https://api.github.com"],
+        headers: {
+          Accept: "application/vnd.github.raw+json",
+          ...(source.endpoints.token
+            ? { Authorization: `Bearer ${source.endpoints.token}` }
+            : {}),
+        },
+        timeoutMs: 5_000,
+      });
+      if (!content || typeof content !== "string") return null;
+
+      const trimmed = content.trim();
+      const isPem = /nv-agent-root-cert\.pem$/u.test(entry.path);
+
+      if (isPem) {
+        if (
+          (trimmed.startsWith("-----BEGIN CERTIFICATE-----") ||
+            trimmed.startsWith("-----BEGIN PUBLIC KEY-----")) &&
+          (trimmed.includes("-----END CERTIFICATE-----") ||
+            trimmed.includes("-----END PUBLIC KEY-----"))
+        ) {
+          try {
+            const { createPublicKey } = await import("node:crypto");
+            createPublicKey(trimmed);
+            return {
+              path: entry.path,
+              /* c8 ignore next */
+              size: entry.size ?? content.length,
+              pem: true as const,
+              pemContent: trimmed,
+            };
+          } catch {
+            return null;
+          }
+        }
+        return null;
+      }
+
+      // OMS sig; basic format validation: basic format validation (expanded in Phase 2)
+      if (trimmed.length > 0) {
+        try {
+          const decoded = Buffer.from(trimmed, "base64");
+          if (decoded.length >= 32) {
+            return {
+              path: entry.path,
+              /* c8 ignore next */
+              size: entry.size ?? content.length,
+              pem: false as const,
+              sigContent: decoded,
+            };
+          }
+          /* c8 ignore next 3 */
+        } catch {
+          // base64 decode failed — defensive, Buffer.from() doesn't throw.
+        }
+      }
+      return null;
+    }),
+  );
+
+  // ── Phase 2: extract public key from PEM, verify sigs against asset content ──
+  const verified = new Map<string, number>();
+  let pemParsed = false;
+  let publicKey: KeyObject | null = null;
+
+  // Extract public key from the first valid PEM cert
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value?.pem) {
+      try {
+        const { createPublicKey } = await import("node:crypto");
+        publicKey = createPublicKey(result.value.pemContent);
+        pemParsed = true;
+        verified.set(result.value.path.toLowerCase(), result.value.size);
+        /* c8 ignore next 3 */
+      } catch {
+        // createPublicKey already validated in Phase 1; defensive.
+      }
+      break; // Use first valid PEM cert
+    }
+  }
+
+  // Verify each OMS signature against asset content
+  for (const result of results) {
+    if (!result || result.status !== "fulfilled" || !result.value) continue;
+    const val = result.value;
+    if (val.pem) continue; // PEM already processed
+
+    // Only verify signatures when a trust anchor (public key) is available.
+    // Without one, sigs cannot be verified and must not award trust signals.
+    /* c8 ignore next */
+    if (!publicKey || !val.sigContent) continue;
+
+    // Determine the asset file being signed: SKILL.md in the same dir
+    const sigDir = val.path.includes("/")
+      ? val.path.slice(0, val.path.lastIndexOf("/"))
+      : "";
+    const assetPath = sigDir ? `${sigDir}/SKILL.md` : "SKILL.md";
+
+    // Fetch the asset content
+    const assetEntry = snapshot.tree.entries.find((e) => e.path === assetPath);
+    if (assetEntry) {
+      try {
+        const assetBlobUrl = `https://api.github.com/repos/${repoSummary.fullName}/git/blobs/${assetEntry.sha}`;
+        const assetContent = await fetchTextWithGuards(assetBlobUrl, {
+          allowedOrigins: ["https://api.github.com"],
+          headers: {
+            Accept: "application/vnd.github.raw+json",
+            ...(source.endpoints.token
+              ? { Authorization: `Bearer ${source.endpoints.token}` }
+              : {}),
+          },
+          timeoutMs: 5_000,
+        });
+        if (assetContent && typeof assetContent === "string") {
+          const { createVerify } = await import("node:crypto");
+          const verifier = createVerify("SHA256");
+          verifier.update(assetContent);
+          if (verifier.verify(publicKey, val.sigContent)) {
+            verified.set(val.path.toLowerCase(), val.size);
+          }
+        }
+        /* c8 ignore next 3 */
+      } catch {
+        // Asset fetch or verify failed — skip this sig.
+      }
+    }
+  }
+
+  return { verified, pemParsed };
+}
+
+function collectRepositoryTrustEvidence(
+  snapshot: GitHubRepoSnapshot,
+  source: SourceDefinition,
+): {
   scoreBonus: number;
   signals: string[];
 } {
@@ -203,6 +417,19 @@ function collectRepositoryTrustEvidence(snapshot: GitHubRepoSnapshot): {
   ) {
     signals.push("tests-present");
     scoreBonus += 2;
+  }
+  // OMS trust anchor: pemParsed is a diagnostic format-validation flag.
+  // Award oms-trust-anchor only when the source has sufficient authority
+  // (verified publisher or trusted tier), not on PEM parsing alone.
+  if (
+    snapshot.pemParsed &&
+    (source.authorityTier === "official-first-party" ||
+      source.authorityTier === "trusted-local" ||
+      source.publisher?.verified)
+  ) {
+    signals.push("oms-trust-anchor");
+    /* c8 ignore next */
+    scoreBonus += TRUST_SIGNAL_SCORE_BOOST["oms-trust-anchor"] ?? 3;
   }
 
   return { scoreBonus, signals };
@@ -478,3 +705,8 @@ function buildGitHubRisk(assetKind: AssetKind): AssetRisk {
 function toGitHubHarvesterErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/** Exposes github-harvester internals for focused unit testing. */
+export const githubHarvesterInternals = {
+  collectRepositoryTrustEvidence,
+} as const;

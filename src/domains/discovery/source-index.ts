@@ -145,7 +145,7 @@ function countHosts(sources: SourceDefinition[]): Record<string, number> {
 
 function defaultCoverageModeForSourceKind(
   kind: SourceDefinition["kind"],
-): "direct" | "rotating" | "sampled" {
+): "direct" | "rotating" | "sampled" | "indexed" {
   if (kind === "repo") {
     return "rotating";
   }
@@ -156,6 +156,12 @@ function defaultCoverageModeForSourceKind(
     kind === "local-manifest"
   ) {
     return "direct";
+  }
+
+  // ard-registry sources use indexed (cursor-based) coverage.
+  /* c8 ignore next 3 -- tested via sourceIndexInternals export */
+  if (kind === "ard-registry") {
+    return "indexed";
   }
 
   return "sampled";
@@ -175,3 +181,8 @@ function defaultSyncStatusForSourceKind(
 
   return "unsupported";
 }
+
+/** Exposes source-index internals for focused unit testing. */
+export const sourceIndexInternals = {
+  defaultCoverageModeForSourceKind,
+} as const;

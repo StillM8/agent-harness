@@ -232,6 +232,116 @@ void test("reference source harvester falls back to metadata when raw content is
   assert.equal(entries[0]?.install.method, "docs-reference");
 });
 
+void test("buildReferenceSourceCatalogEntry uses per-extension publisherName over source-level publisher (#300)", () => {
+  const selectionRegistry = buildSelectionRegistry();
+
+  // Non-Microsoft extension: harvestedItem.publisherName should win
+  const gitLensSource = buildSource("marketplace-reference", "marketplace", {
+    baseUrl: "https://marketplace.visualstudio.com",
+  });
+  const gitLensEntry = buildReferenceSourceCatalogEntry(
+    gitLensSource,
+    buildDemandProfile(),
+    selectionRegistry,
+    {
+      harvestedItem: {
+        displayName: "GitLens",
+        originUrl:
+          "https://marketplace.visualstudio.com/items?itemName=eamodio.gitlens",
+        assetKind: "extension",
+        compatibilityMode: "native",
+        installMethod: "vscode-extension",
+        manifestEntry: "eamodio.gitlens",
+        capabilities: ["git"],
+        summary: "Supercharge Git in VS Code",
+        publisherName: "eamodio",
+      },
+    },
+  );
+
+  // publisherName from harvestedItem must override source.publisher.name ("fixture")
+  assert.equal(
+    gitLensEntry.source.publisher,
+    "eamodio",
+    "non-Microsoft extension should show its own publisher",
+  );
+
+  // Microsoft-owned extension: publisherName is "ms-python", not the marketplace owner
+  const pylanceSource = buildSource("marketplace-reference", "marketplace", {
+    baseUrl: "https://marketplace.visualstudio.com",
+  });
+  const pylanceEntry = buildReferenceSourceCatalogEntry(
+    pylanceSource,
+    buildDemandProfile(),
+    selectionRegistry,
+    {
+      harvestedItem: {
+        displayName: "Pylance",
+        originUrl:
+          "https://marketplace.visualstudio.com/items?itemName=ms-python.vscode-pylance",
+        assetKind: "extension",
+        compatibilityMode: "native",
+        installMethod: "vscode-extension",
+        manifestEntry: "ms-python.vscode-pylance",
+        capabilities: ["python"],
+        summary: "Fast, feature-rich language support for Python",
+        publisherName: "ms-python",
+      },
+    },
+  );
+
+  assert.equal(
+    pylanceEntry.source.publisher,
+    "ms-python",
+    "Microsoft extension should show the extension publisher, not the marketplace owner",
+  );
+
+  // No publisherName: falls back to source.publisher.name
+  const noPublisherNameEntry = buildReferenceSourceCatalogEntry(
+    buildSource("marketplace-reference", "marketplace", {
+      baseUrl: "https://marketplace.visualstudio.com",
+    }),
+    buildDemandProfile(),
+    selectionRegistry,
+    {
+      harvestedItem: {
+        displayName: "Some Extension",
+        originUrl: "https://marketplace.visualstudio.com/items?itemName=x.y",
+        assetKind: "extension",
+        compatibilityMode: "native",
+        installMethod: "vscode-extension",
+        manifestEntry: "x.y",
+        capabilities: [],
+        summary: "An extension",
+        // publisherName intentionally omitted
+      },
+    },
+  );
+
+  // Falls back to source.publisher.name from buildSource helper ("fixture")
+  assert.equal(
+    noPublisherNameEntry.source.publisher,
+    "fixture",
+    "absent publisherName should fall back to source.publisher.name",
+  );
+
+  // No harvestedItem at all: falls back to source.publisher.name
+  const noHarvestEntry = buildReferenceSourceCatalogEntry(
+    buildSource("marketplace-reference", "marketplace", {
+      baseUrl: "https://marketplace.visualstudio.com",
+    }),
+    buildDemandProfile(),
+    selectionRegistry,
+    { originUrl: "https://marketplace.visualstudio.com" },
+  );
+
+  assert.equal(
+    noHarvestEntry.source.publisher,
+    "fixture",
+    "absent harvestedItem should fall back to source.publisher.name",
+  );
+});
+
 function buildSelectionRegistry(): SelectionRegistry {
   return {
     schemaVersion: 1,
@@ -294,3 +404,95 @@ function buildSource(
     rules,
   };
 }
+
+void test("reference source catalog entries include evidence.classification for every entry", () => {
+  const repoSource = buildSource("test-repo-source", "repo", {
+    baseUrl: "https://github.com/example/repo",
+  });
+  const docsSource = buildSource("test-docs-source", "docs", {
+    baseUrl: "https://docs.example.com",
+  });
+
+  // Entry built without harvested item (reference-only)
+  const bareEntry = buildReferenceSourceCatalogEntry(
+    repoSource,
+    null,
+    buildSelectionRegistry(),
+  );
+  assert.ok(
+    bareEntry.evidence.classification != null,
+    "bare reference entry must have classification",
+  );
+  assert.equal(bareEntry.evidence.classification.assetKind, "reference-pack");
+  assert.ok(
+    bareEntry.evidence.classification.confidence > 0,
+    "confidence must be positive",
+  );
+
+  // Entry with harvested item that declares a specific assetKind
+  const harvestedEntry = buildReferenceSourceCatalogEntry(
+    docsSource,
+    null,
+    buildSelectionRegistry(),
+    {
+      harvestedItem: {
+        displayName: "Example Skill",
+        originUrl: "https://github.com/example/repo/skill.md",
+        summary: "A harvested skill",
+        capabilities: ["typescript", "skill"],
+        assetKind: "skill",
+        compatibilityMode: "adaptable",
+        installMethod: "docs-summary",
+        manifestEntry: "skill.md",
+        lastUpdated: new Date().toISOString(),
+      },
+    },
+  );
+  assert.ok(
+    harvestedEntry.evidence.classification != null,
+    "harvested entry must have classification",
+  );
+  assert.equal(harvestedEntry.evidence.classification.assetKind, "skill");
+  assert.ok(
+    (harvestedEntry.evidence.classification.evidence[0]?.detail ?? "").includes(
+      "docs",
+    ),
+    "detail should mention the source kind",
+  );
+});
+
+void test("buildReferenceSourceCatalogEntry preserves item-level trustSignals (issue #3 — OMS signals)", () => {
+  // Verifies that trust signals populated on the HarvestedReferenceItem
+  // (e.g. "oms-signed", "oms-trust-anchor" from NVIDIA-style source packs)
+  // survive the reference harvester path and appear on the catalog entry's
+  // trust.signals array alongside the base authority-tier signals.
+  const docsSource = buildSource("test-docs-source", "docs", {
+    baseUrl: "https://docs.example.com",
+  });
+  const entry = buildReferenceSourceCatalogEntry(
+    docsSource,
+    null,
+    buildSelectionRegistry(),
+    {
+      harvestedItem: {
+        displayName: "Signed Skill",
+        originUrl: "https://example.com/signed-skill.md",
+        summary: "A skill with OMS signatures",
+        capabilities: ["signed"],
+        assetKind: "skill",
+        compatibilityMode: "adaptable",
+        installMethod: "docs-summary",
+        trustSignals: ["oms-signed", "oms-trust-anchor"],
+      },
+    },
+  );
+
+  assert.ok(
+    entry.trust.signals.includes("oms-signed"),
+    "oms-signed must be present on trust.signals",
+  );
+  assert.ok(
+    entry.trust.signals.includes("oms-trust-anchor"),
+    "oms-trust-anchor must be present on trust.signals",
+  );
+});

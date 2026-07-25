@@ -22,8 +22,6 @@ jobs:
     name: release checks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
-    permissions:
-      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -113,7 +111,6 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     timeout-minutes: 15
     permissions:
-      contents: read
       id-token: write
 
     steps:
@@ -216,3 +213,34 @@ jobs:
           GITHUB_REF_NAME: ${{ github.ref_name }}
           GITHUB_SHA: ${{ github.sha }}
         run: npm run release:github
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Regenerate ARD catalog
+        run: |
+          node dist/cli.js discover ard-export
+          node -e "
+            const c = require('./.well-known/ai-catalog.json');
+            if (!c.generatedAt || !c.entries || !c.entries.length) {
+              console.error('FAIL: ARD catalog is empty — release blocked.');
+              process.exit(1);
+            }
+            console.log('OK: %d entries, generated %s', c.entries.length, c.generatedAt);
+          "
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Upload ARD catalog to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release upload "$TAG_NAME" .well-known/ai-catalog.json \
+            --repo ${{ github.repository }} \
+            --clobber

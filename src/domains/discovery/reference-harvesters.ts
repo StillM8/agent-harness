@@ -21,6 +21,20 @@ export interface HarvestedReferenceItem {
   manifestEntry?: string;
   installs?: number;
   lastUpdated?: string;
+  /**
+   * The actual publisher of this item, when available from the harvest source.
+   * Overrides the source-level `publisher.name` when building catalog entries.
+   * For VS Code Marketplace extensions this is the extension publisher (e.g.
+   * `"eamodio"` for GitLens) rather than the marketplace owner (`"Microsoft"`).
+   */
+  publisherName?: string;
+  /**
+   * Additional trust signals for this item (e.g. `"oms-signed"`,
+   * `"oms-trust-anchor"`) harvested from the source payload. These are merged
+   * with the base trust signals derived from the source's authority tier and
+   * kind when building the catalog entry.
+   */
+  trustSignals?: string[];
 }
 
 const VSCODE_MARKETPLACE_API =
@@ -224,6 +238,7 @@ function normalizeVsCodeMarketplaceExtension(
       manifestEntry: extensionId,
       installs: getMarketplaceStatistic(value, "install"),
       lastUpdated: getString(value.lastUpdated),
+      publisherName: publisher,
     },
   ];
 }
@@ -234,7 +249,19 @@ function normalizeVsCodeMarketplaceExtension(
 export async function fetchVsCodeMarketplaceItemsForQuery(
   source: SourceDefinition,
   query: string,
-  options: { pageNumber: number; pageSize: number },
+  options: {
+    pageNumber: number;
+    pageSize: number;
+    /** Sort field. 0 = relevance, 4 = InstallCount, 12 = WeeklyDownloads. */
+    sortBy?: number;
+    /** Sort direction. 0 = default, 1 = ascending, 2 = descending. */
+    sortOrder?: number;
+    /**
+     * Optional category filter (filterType 5). When provided the `query`
+     * parameter is ignored and results are scoped to the named category.
+     */
+    category?: string;
+  },
 ): Promise<HarvestedReferenceItem[]> {
   const apiUrl = source.endpoints.marketplaceApi ?? VSCODE_MARKETPLACE_API;
   const apiOrigin = getAllowedOrigin(apiUrl);
@@ -253,6 +280,9 @@ export async function fetchVsCodeMarketplaceItemsForQuery(
         query,
         options.pageNumber,
         options.pageSize,
+        options.sortBy ?? 0,
+        options.sortOrder ?? 0,
+        options.category,
       ),
     ),
     headers: {
@@ -263,27 +293,43 @@ export async function fetchVsCodeMarketplaceItemsForQuery(
     method: "POST",
   });
 
-  return normalizeVsCodeMarketplaceItems(data, query, allowedOrigins);
+  return normalizeVsCodeMarketplaceItems(
+    data,
+    options.category?.trim() || query,
+    allowedOrigins,
+  );
 }
 
 function buildVsCodeMarketplaceRequest(
   query: string,
   pageNumber = 1,
   pageSize = getRuntimeConfig().discovery.vscodeMarketplaceMaxItemsPerQuery,
+  sortBy = 0,
+  sortOrder = 0,
+  category?: string,
 ): Record<string, unknown> {
+  const criteria: Array<{ filterType: number; value: string }> = [
+    { filterType: 8, value: "Microsoft.VisualStudio.Code" },
+  ];
+  // filterType 10 = full-text search query; filterType 5 = category filter.
+  // When a category is supplied we use it instead of a text query so the
+  // result set contains every extension in that category.
+  const trimmedCategory = category?.trim();
+  if (trimmedCategory) {
+    criteria.push({ filterType: 5, value: trimmedCategory });
+  } else {
+    criteria.push({ filterType: 10, value: query });
+  }
   return {
     assetTypes: ["Microsoft.VisualStudio.Services.VSIXPackage"],
     filters: [
       {
-        criteria: [
-          { filterType: 8, value: "Microsoft.VisualStudio.Code" },
-          { filterType: 10, value: query },
-        ],
+        criteria,
         direction: 2,
         pageNumber,
         pageSize,
-        sortBy: 0,
-        sortOrder: 0,
+        sortBy,
+        sortOrder,
       },
     ],
     // VS Code Marketplace gallery flags: versions, files, and statistics.

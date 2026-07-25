@@ -24,12 +24,15 @@ interface SourcePackShape {
   entries: Array<{
     id: string;
     repo: string;
+    /** Source kind — defaults to "repo" when absent. */
     kind?: SourceDefinition["kind"];
-    authorityTier?: SourceDefinition["authorityTier"];
+    /** Required: authority tier classifying trust level of this source. */
+    authorityTier: SourceDefinition["authorityTier"];
     publisher?: string;
     publisherVerified?: boolean;
     hosts?: HostTarget[];
-    assetKinds?: AssetKind[];
+    /** Required: at least one asset kind must be declared. */
+    assetKinds: AssetKind[];
     includePaths?: string[];
     excludePaths?: string[];
     mcpServerPaths?: string[];
@@ -93,6 +96,7 @@ export async function loadSourceRegistry(
         id: entry.id,
         name: entry.name ?? humanizeSlug(lastPathSegment(entry.repo)),
         kind: entry.kind ?? "repo",
+        /* c8 ignore next 2 -- authorityTier is required by assertRequiredEnum; ?? fallback is a type-safe defensive guard that cannot be reached at runtime */
         authorityTier: entry.authorityTier ?? "trusted-community",
         publisher: {
           name: entry.publisher ?? repoOwner,
@@ -100,6 +104,7 @@ export async function loadSourceRegistry(
           owner: repoOwner,
         },
         hosts: entry.hosts ?? ["copilot-vscode", "opencode"],
+        /* c8 ignore next 8 -- assetKinds is required by assertRequiredEnumArray; ?? fallback is a type-safe defensive guard that cannot be reached at runtime */
         assetKinds: entry.assetKinds ?? [
           "skill",
           "agent",
@@ -216,7 +221,7 @@ function assertSourcePackShape(
       ],
       `${context}.entries[${index}].kind`,
     );
-    assertOptionalEnum(
+    assertRequiredEnum(
       entryRecord.authorityTier,
       AUTHORITY_TIERS,
       `${context}.entries[${index}].authorityTier`,
@@ -237,7 +242,7 @@ function assertSourcePackShape(
       entryRecord.hosts,
       `${context}.entries[${index}].hosts`,
     );
-    assertOptionalEnumArray(
+    assertRequiredEnumArray(
       entryRecord.assetKinds,
       ASSET_KINDS,
       `${context}.entries[${index}].assetKinds`,
@@ -362,16 +367,38 @@ function assertOptionalEnum<T extends string>(
   }
 }
 
-function assertOptionalEnumArray<T extends string>(
+function assertRequiredEnum<T extends string>(
   value: unknown,
   allowedValues: readonly T[],
   context: string,
 ): void {
   if (value === undefined) {
-    return;
+    throw new Error(`${context} is required`);
   }
 
-  assertArray(value, context).forEach((entry, index) => {
+  if (typeof value !== "string" || !allowedValues.includes(value as T)) {
+    throw new Error(`${context} must be one of: ${allowedValues.join(", ")}`);
+  }
+}
+
+function assertRequiredEnumArray<T extends string>(
+  value: unknown,
+  allowedValues: readonly T[],
+  context: string,
+): void {
+  if (value === undefined) {
+    throw new Error(`${context} is required`);
+  }
+
+  const items = assertArray(value, context);
+  if (items.length === 0) {
+    throw new Error(`${context} must contain at least one value`);
+  }
+
+  items.forEach((entry, index) => {
+    if (entry == null) {
+      throw new Error(`${context}[${index}] must not be null or undefined`);
+    }
     assertOptionalEnum(entry, allowedValues, `${context}[${index}]`);
   });
 }
@@ -449,3 +476,8 @@ function humanizeSlug(value: string): string {
     .trim()
     .replace(/\b\w/gu, (character) => character.toUpperCase());
 }
+
+/** Exposes source-registry internals for focused unit testing. */
+export const sourceRegistryInternals = {
+  assertRequiredEnumArray,
+} as const;

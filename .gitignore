@@ -49,3 +49,9 @@ SYSTEM.md
 
 *.log
 *.tgz
+
+# GSD methodology artifacts — plans/ and .planning/ are agent session-local,
+# not shipped deliverables.
+plans/
+.planning/
+agent-harness-qa/

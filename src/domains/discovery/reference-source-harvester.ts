@@ -8,6 +8,7 @@ import type {
   SelectionRegistry,
   SourceDefinition,
 } from "../../types.js";
+import { inferCompatibleHosts } from "../../host-adapters/compatibility-matrix.js";
 import {
   buildCandidateRankHint,
   buildCatalogId,
@@ -21,6 +22,10 @@ import {
   splitIntoKeywords,
   uniqueStrings,
 } from "./catalog-utils.js";
+import {
+  buildClassificationConfidence,
+  sourceFamilyEvidence,
+} from "./classification-confidence.js";
 import {
   harvestReferenceItems,
   type HarvestedReferenceItem,
@@ -107,13 +112,15 @@ export function buildReferenceSourceCatalogEntry(
     assetKind,
     hosts: source.hosts,
     compatibilityMode,
+    compatibleHosts: inferCompatibleHosts(assetKind, source.hosts),
     source: {
       sourceId: source.id,
       authorityTier: source.authorityTier,
       sourceKind: source.kind,
       sourcePriority: source.priority,
       originUrl,
-      publisher: source.publisher?.name ?? source.id,
+      publisher:
+        harvestedItem?.publisherName ?? source.publisher?.name ?? source.id,
       publisherVerified: source.publisher?.verified ?? false,
     },
     trust: {
@@ -125,14 +132,19 @@ export function buildReferenceSourceCatalogEntry(
         compatibilityMode,
         installMethod,
       }),
-      signals: buildTrustSignals({
-        authorityTier: source.authorityTier,
-        sourceKind: source.kind,
-        sourcePriority: source.priority,
-        publisherVerified: source.publisher?.verified ?? false,
-        compatibilityMode,
-        installMethod,
-      }),
+      signals: uniqueStrings([
+        ...buildTrustSignals({
+          authorityTier: source.authorityTier,
+          sourceKind: source.kind,
+          sourcePriority: source.priority,
+          publisherVerified: source.publisher?.verified ?? false,
+          compatibilityMode,
+          installMethod,
+        }),
+        // Preserve any item-level trust signals (e.g. "oms-signed",
+        // "oms-trust-anchor") that were harvested from the source payload.
+        ...(harvestedItem?.trustSignals ?? []),
+      ]),
     },
     capabilities,
     install: {
@@ -149,6 +161,14 @@ export function buildReferenceSourceCatalogEntry(
       docsLinked: true,
       lineCount: harvestedContent?.split(/\r?\n/u).length ?? 1,
       rootPath: originUrl,
+      classification: buildClassificationConfidence({
+        assetKind,
+        evidence: [
+          sourceFamilyEvidence(
+            `inferred from ${source.kind} reference source family`,
+          ),
+        ],
+      }),
     },
     maintenance: {
       lastUpdated: harvestedItem?.lastUpdated ?? new Date().toISOString(),

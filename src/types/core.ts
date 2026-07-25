@@ -18,6 +18,7 @@ export type SourceKind =
   | "marketplace"
   | "registry"
   | "package-registry"
+  | "ard-registry"
   | "local-manifest"
   | "local-directory";
 
@@ -34,7 +35,10 @@ export type AssetKind =
   | "hook"
   | "extension"
   | "prompt-pack"
-  | "reference-pack";
+  | "reference-pack"
+  | "payable-api"
+  /** ACP-compatible agent for JetBrains Agent Client Protocol and Zed external-agent forwarding. */
+  | "acp-agent";
 
 /**
  * Defines the supported built in host target values.

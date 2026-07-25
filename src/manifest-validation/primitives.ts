@@ -34,6 +34,7 @@ export const SOURCE_KINDS: SourceKind[] = [
   "marketplace",
   "registry",
   "package-registry",
+  "ard-registry",
   "local-manifest",
   "local-directory",
 ];
@@ -52,6 +53,8 @@ export const ASSET_KINDS: AssetKind[] = [
   "extension",
   "prompt-pack",
   "reference-pack",
+  "payable-api",
+  "acp-agent",
 ];
 
 /**

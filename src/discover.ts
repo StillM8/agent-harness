@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { copyFile, mkdir } from "node:fs/promises";
 
 import { isGitHubRepoSource } from "./github.js";
 import {
@@ -38,6 +39,7 @@ import { writeSourceCandidateQueue } from "./domains/discovery/candidate-queue.j
 import { buildDemandProfile } from "./domains/discovery/demand-profile.js";
 import { writeDiscoverDiffReport } from "./domains/discovery/diff.js";
 import { writeEnvironmentIndex } from "./domains/discovery/environment-index.js";
+import { writeArdCatalog } from "./ard-catalog.js";
 import { harvestGitHubRepoSource } from "./domains/discovery/github-harvester.js";
 import { generateSourceIndex } from "./domains/discovery/source-index.js";
 import {
@@ -53,6 +55,7 @@ import {
 } from "./domains/discovery/local-harvesters.js";
 import { loadSourceRegistry } from "./domains/discovery/source-registry.js";
 import {
+  CATALOG_INDEX_OUTPUT_PATH,
   CATALOG_OUTPUT_PATH,
   DEMAND_PROFILE_OUTPUT_PATH,
   REJECTED_CATALOG_OUTPUT_PATH,
@@ -60,7 +63,12 @@ import {
   REMOTE_CATALOG_STATE_OUTPUT_PATH,
   SELECTED_CATALOG_OUTPUT_PATH,
   SELECTION_REPORT_OUTPUT_PATH,
+  SOURCE_SYNC_ENTRIES_OUTPUT_PATH,
 } from "./domains/discovery/output-paths.js";
+import {
+  isCatalogIndexFresh,
+  writeCatalogIndexMeta,
+} from "./domains/discovery/catalog-index.js";
 import { harvestOfficialSkillIndexes } from "./domains/discovery/official-index-harvester.js";
 import { harvestPackageRegistrySource } from "./domains/discovery/package-registry-harvester.js";
 import { harvestReferenceSource } from "./domains/discovery/reference-source-harvester.js";
@@ -72,6 +80,10 @@ import { writeSourceHealthReports } from "./domains/discovery/source-health.js";
 import { writeSourceUtilizationReport } from "./domains/discovery/source-utilization.js";
 import { writeSourceVerificationReport } from "./domains/discovery/source-verification.js";
 import { writeUnknownSignalReport } from "./domains/discovery/unknown-signals.js";
+import {
+  SemanticScorer,
+  buildDemandQueryText,
+} from "./domains/discovery/semantic-scoring.js";
 import {
   assertAssetCatalogEntry,
   assertDemandProfile,
@@ -116,10 +128,71 @@ export async function runDiscover(
       logDiscoverPhase("discover catalog", 1, 1, "Building discovery catalog");
       await generateCatalog(projectRoot);
       return 0;
-    case "sync":
-      logDiscoverPhase("discover sync", 1, 1, "Syncing indexed sources");
-      await syncIndexedSources(projectRoot);
+    case "index": {
+      logDiscoverPhase("discover index", 1, 1, "Building full catalog index");
+      const pageCap =
+        getRuntimeConfig().discovery.sourceSyncMaxPagesForIndexBuild;
+      // When pageCap is 0, use an unlimited sentinel rather than omitting
+      // the option — omission falls back to the runtime default (10 pages),
+      // defeating the purpose of configuring unlimited index builds.
+      await syncIndexedSources(
+        projectRoot,
+        pageCap === 0
+          ? { maxPagesPerRun: Number.MAX_SAFE_INTEGER }
+          : pageCap > 0
+            ? { maxPagesPerRun: pageCap }
+            : undefined,
+      );
+      // Copy the source-sync entries snapshot to catalog-index.jsonl so that
+      // `discover sync` and `discover select` can read it without touching
+      // the internal source-sync state paths.
+      const syncEntriesPath = join(
+        projectRoot,
+        ...SOURCE_SYNC_ENTRIES_OUTPUT_PATH,
+      );
+      const indexPath = join(projectRoot, ...CATALOG_INDEX_OUTPUT_PATH);
+      await mkdir(join(projectRoot, "discover", "output"), {
+        recursive: true,
+      });
+      await copyFile(syncEntriesPath, indexPath);
+      // Read back to get the entry count for metadata.
+      const indexedEntries = await readJsonLinesFile<AssetCatalogEntry>(
+        indexPath,
+        (v: unknown) => v as AssetCatalogEntry,
+      );
+      await writeCatalogIndexMeta(projectRoot, indexedEntries.length);
+      process.stdout.write(
+        `[discover index] Catalog index written: ${indexedEntries.length} entries → ${indexPath}\n`,
+      );
       return 0;
+    }
+    case "sync": {
+      const forceFullFlag = rest.includes("--full");
+      if (!forceFullFlag && (await isCatalogIndexFresh(projectRoot))) {
+        // The index is fresh but source-sync state may be stale or empty.
+        // Copy the index snapshot into source-sync.entries.jsonl so downstream
+        // catalog generation reads the correct set of indexed entries.
+        const syncEntriesPath = join(
+          projectRoot,
+          "state",
+          "discover",
+          "source-sync.entries.jsonl",
+        );
+        const indexPath = join(projectRoot, ...CATALOG_INDEX_OUTPUT_PATH);
+        await mkdir(join(projectRoot, "state", "discover"), {
+          recursive: true,
+        });
+        await copyFile(indexPath, syncEntriesPath);
+        process.stdout.write(
+          "[discover sync] Using fresh local catalog index — loaded into source-sync state.\n" +
+            "  Run 'discover index' or 'discover sync --full' to force a re-harvest.\n",
+        );
+      } else {
+        logDiscoverPhase("discover sync", 1, 1, "Syncing indexed sources");
+        await syncIndexedSources(projectRoot);
+      }
+      return 0;
+    }
     case "select": {
       const aiEnrichmentFlags = parseAiEnrichmentFlags(rest);
       logDiscoverPhase("discover select", 1, 1, "Applying selection rules");
@@ -182,6 +255,20 @@ export async function runDiscover(
     case "environment-index":
       await writeEnvironmentIndex(projectRoot, rest);
       return 0;
+    case "ard-export": {
+      // Try to resolve a real version from the workspace root (not --state-root)
+      // so the ARD catalog carries the correct publisher version.
+      const { readFile } = await import("node:fs/promises");
+      let pkgVersion: string | undefined;
+      try {
+        const pkgRaw = await readFile("package.json", "utf8");
+        pkgVersion = (JSON.parse(pkgRaw) as { version?: string }).version;
+      } catch {
+        // package.json unavailable — writeArdCatalog will fall back to "0.0.0".
+      }
+      await writeArdCatalog(projectRoot, pkgVersion);
+      return 0;
+    }
     case "inspect":
       await inspectCatalog(projectRoot, rest);
       return 0;
@@ -427,9 +514,12 @@ async function generateSelectionOutputs(projectRoot: string): Promise<{
     join(projectRoot, ...DEMAND_PROFILE_OUTPUT_PATH),
     assertDemandProfile,
   );
-  const relevanceFilter = filterCatalogEntriesByDemandRelevance(
+  const config = getRuntimeConfig();
+
+  const relevanceFilter = await applyRelevanceFilter(
     catalogEntries,
     demandProfile,
+    config,
   );
   const groupedEntries = groupCatalogEntriesForSelection(
     relevanceFilter.selectedEntries,
@@ -470,6 +560,23 @@ async function generateSelectionOutputs(projectRoot: string): Promise<{
     }
   }
 
+  // Per-source entry cap — prevent a single source from dominating the
+  // selected set. Sort by descending source priority first so higher-quality
+  // entries are retained when the cap removes lower-quality same-source entries.
+  selectedEntries.sort(
+    (a, b) => b.source.sourcePriority - a.source.sourcePriority,
+  );
+  const MAX_ENTRIES_PER_SOURCE = config.discovery.maxEntriesPerSource;
+  const { kept: cappedSelectedEntries, capped: capRejections } =
+    applyPerSourceCap(selectedEntries, MAX_ENTRIES_PER_SOURCE);
+  for (const { assetId } of capRejections) {
+    rejectionLog.push({ assetId, reason: "source-cap" });
+  }
+  const sourceDiversityWarning = computeSourceDiversityWarning(
+    cappedSelectedEntries,
+    MAX_ENTRIES_PER_SOURCE,
+  );
+
   // Derive the flat rejected-entries list from the log so we have a single
   // source of truth (the log) driving both the JSONL output and the report.
   // Filter directly over catalogEntries using the id set — avoids allocating
@@ -500,14 +607,17 @@ async function generateSelectionOutputs(projectRoot: string): Promise<{
     }
   }
   // Pass 2: top up to SAMPLE_SIZE with the earliest un-sampled entries.
+  // Use a Set of sampled object references so the membership check stays O(1).
+  const sampledSet = new Set(sampleRejected);
   for (const entry of rejectionLog) {
     if (sampleRejected.length >= SAMPLE_SIZE) break;
-    if (!sampleRejected.includes(entry)) {
+    if (!sampledSet.has(entry)) {
       sampleRejected.push(entry);
+      sampledSet.add(entry);
     }
   }
 
-  const sortedSelectedEntries = selectedEntries.sort(
+  const sortedSelectedEntries = cappedSelectedEntries.sort(
     compareAssetCatalogEntries,
   );
   const sortedRejectedEntries = rejectedEntries.sort(
@@ -524,6 +634,7 @@ async function generateSelectionOutputs(projectRoot: string): Promise<{
     ),
     rejectionSummary,
     sampleRejected,
+    ...(sourceDiversityWarning !== undefined ? { sourceDiversityWarning } : {}),
   };
 
   await writeJsonLinesFile(
@@ -641,10 +752,9 @@ async function runDiscoveryBreadth(
     projectRoot,
   );
   logDiscoverPhase("discover breadth", 2, 5, "Refreshing source index");
-  await generateSourceIndex(projectRoot);
+  const sourceIndex = await generateSourceIndex(projectRoot);
   logDiscoverPhase("discover breadth", 3, 5, "Syncing indexed sources");
   await syncIndexedSources(projectRoot);
-  const sourceIndex = await generateSourceIndex(projectRoot);
   logDiscoverPhase("discover breadth", 4, 5, "Building discovery catalog");
   const { catalogEntries, enabledSources } = await generateCatalog(projectRoot);
   logDiscoverPhase("discover breadth", 5, 5, "Applying selection rules");
@@ -818,7 +928,12 @@ function printDiscoverHelp(): void {
       {
         command: "sync",
         description:
-          "Persist indexed discovery results for supported high-volume sources",
+          "Persist indexed discovery results — uses local index when fresh, live harvest otherwise (see 'discover index')",
+      },
+      {
+        command: "index",
+        description:
+          "Build a full offline catalog index by fully paginating all indexed sources (slow, scheduled — run once or in CI)",
       },
       {
         command: "catalog",
@@ -863,6 +978,11 @@ function printDiscoverHelp(): void {
           "Write experimental read-only query metadata to discover/output/environment-index.json",
       },
       {
+        command: "ard-export",
+        description:
+          "Export selected catalog to ARD ai-catalog.json format at .well-known/ai-catalog.json",
+      },
+      {
         command: "enrich",
         description:
           "Run bounded AI-assisted enrichment against the selected catalog",
@@ -886,3 +1006,130 @@ function printDiscoverHelp(): void {
     ],
   });
 }
+
+/**
+ * Applies demand-relevance filtering to the catalog, using semantic similarity
+ * scoring when enabled and available, falling back to keyword-overlap gating.
+ *
+ * All scorer branching lives here so `generateSelectionOutputs` stays clean.
+ */
+async function applyRelevanceFilter(
+  catalogEntries: AssetCatalogEntry[],
+  demandProfile: DemandProfile | null,
+  config: ReturnType<typeof getRuntimeConfig>,
+): Promise<{
+  selectedEntries: AssetCatalogEntry[];
+  rejectedEntries: AssetCatalogEntry[];
+}> {
+  if (config.discovery.semanticScoringEnabled) {
+    const scorer = new SemanticScorer({
+      minSimilarity: config.discovery.semanticScoringMinSimilarity,
+    });
+    await scorer.tryInit();
+    if (scorer.available) {
+      const semanticResult = await scorer.filterAndRank(
+        catalogEntries,
+        demandProfile,
+      );
+      if (semanticResult) {
+        console.log(
+          `[semantic-scoring] scored ${catalogEntries.length} entries ` +
+            `(threshold=${config.discovery.semanticScoringMinSimilarity}, ` +
+            `query="${buildDemandQueryText(demandProfile).slice(0, 60)}...")`,
+        );
+        return {
+          selectedEntries: semanticResult.selected,
+          rejectedEntries: semanticResult.rejected,
+        };
+      }
+      console.warn(
+        "[semantic-scoring] scorer unavailable after init — falling back to keyword gate",
+      );
+    } else {
+      console.warn(
+        "[semantic-scoring] @xenova/transformers not installed — falling back to keyword gate",
+      );
+    }
+  }
+  return filterCatalogEntriesByDemandRelevance(catalogEntries, demandProfile);
+}
+
+/**
+ * Applies a per-source entry cap to a pre-sorted list of catalog entries.
+ *
+ * Entries are visited in the order provided; the first `maxPerSource` entries
+ * for each `source.sourceId` are kept, and any excess are returned in the
+ * `capped` array so callers can add rejection-log entries.
+ *
+ * @param entries - Pre-sorted selected entries (insertion order preserved).
+ * @param maxPerSource - Maximum entries to retain per unique `source.sourceId`.
+ * @returns `{ kept, capped }` — kept entries in original order; capped entries
+ *   as `{ assetId }` objects suitable for rejection logging.
+ */
+export function applyPerSourceCap(
+  entries: AssetCatalogEntry[],
+  maxPerSource: number,
+): { kept: AssetCatalogEntry[]; capped: Array<{ assetId: string }> } {
+  const sourceCountMap = new Map<string, number>();
+  const kept: AssetCatalogEntry[] = [];
+  const capped: Array<{ assetId: string }> = [];
+  for (const entry of entries) {
+    const sourceId = entry.source.sourceId;
+    const count = sourceCountMap.get(sourceId) ?? 0;
+    // 0 means unlimited — skip the cap check entirely.
+    if (maxPerSource > 0 && count >= maxPerSource) {
+      capped.push({ assetId: entry.id });
+    } else {
+      sourceCountMap.set(sourceId, count + 1);
+      kept.push(entry);
+    }
+  }
+  return { kept, capped };
+}
+
+/** Threshold fraction above which a source triggers a diversity warning. */
+const SOURCE_DIVERSITY_WARNING_THRESHOLD = 0.2;
+
+/**
+ * Returns a human-readable warning when any single source contributes more
+ * than 20% of the provided (already-capped) selected entries.  Returns
+ * `undefined` when the set is well-diversified or empty.
+ *
+ * @param cappedEntries - Selected entries after the per-source cap.
+ * @param maxPerSource - The cap value in effect, included in the message so
+ *   the operator knows which knob to turn.
+ */
+export function computeSourceDiversityWarning(
+  cappedEntries: AssetCatalogEntry[],
+  maxPerSource: number,
+): string | undefined {
+  if (cappedEntries.length === 0) {
+    return undefined;
+  }
+  const sourceCounts = new Map<string, number>();
+  for (const entry of cappedEntries) {
+    const id = entry.source.sourceId;
+    sourceCounts.set(id, (sourceCounts.get(id) ?? 0) + 1);
+  }
+  for (const [sourceId, count] of sourceCounts.entries()) {
+    const fraction = count / cappedEntries.length;
+    if (fraction > SOURCE_DIVERSITY_WARNING_THRESHOLD) {
+      const pct = Math.round(fraction * 100);
+      return (
+        `Source "${sourceId}" contributes ${pct}% of selected entries ` +
+        `(${count}/${cappedEntries.length}). ` +
+        `Consider lowering AGENT_HARNESS_MAX_ENTRIES_PER_SOURCE ` +
+        `(currently ${maxPerSource}) to improve diversity.`
+      );
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Exposes narrow discover internals for focused per-source-cap tests.
+ */
+export const discoverInternals = {
+  applyPerSourceCap,
+  computeSourceDiversityWarning,
+};

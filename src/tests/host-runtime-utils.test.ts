@@ -280,7 +280,12 @@ void test("shared MCP asset ids are collected from active shared bundles and mal
     host: "shared",
     generatedAt: new Date().toISOString(),
     activeBundles: ["bundle-z", "bundle-a"],
-    activeAssets: ["asset-z-mcp", "asset-a-mcp", "asset-plugin"],
+    activeAssets: [
+      "asset-z-mcp",
+      "asset-a-mcp",
+      "asset-plugin",
+      "asset-broken",
+    ],
     runtimeRoot: join(projectRoot, "activate", "shared"),
     notes: [],
   };
@@ -291,16 +296,22 @@ void test("shared MCP asset ids are collected from active shared bundles and mal
 
   const mcpPackageAPath = join(
     projectRoot,
+    "install",
+    "shared",
     "packages",
     "asset-a-mcp.install.json",
   );
   const mcpPackageZPath = join(
     projectRoot,
+    "install",
+    "shared",
     "packages",
     "asset-z-mcp.install.json",
   );
   const pluginPackagePath = join(
     projectRoot,
+    "install",
+    "shared",
     "packages",
     "asset-plugin.install.json",
   );
@@ -329,6 +340,11 @@ void test("shared MCP asset ids are collected from active shared bundles and mal
         mirrorId: "mirror-plugin",
         manifestPath: pluginPackagePath,
       },
+      {
+        assetId: "asset-broken",
+        mirrorId: "mirror-broken",
+        manifestPath: join(projectRoot, "nonexistent", "broken.json"),
+      },
     ]),
     writeInstalledBundleManifest(projectRoot, "bundle-a", [
       {
@@ -346,13 +362,21 @@ void test("shared MCP asset ids are collected from active shared bundles and mal
         mirrorId: "mirror-inactive",
         manifestPath: join(
           projectRoot,
+          "install",
+          "shared",
           "packages",
           "asset-inactive-mcp.install.json",
         ),
       },
     ]),
     writeInstalledPackageManifest(
-      join(projectRoot, "packages", "asset-inactive-mcp.install.json"),
+      join(
+        projectRoot,
+        "install",
+        "shared",
+        "packages",
+        "asset-inactive-mcp.install.json",
+      ),
       {
         assetId: "asset-inactive-mcp",
         assetKind: "mcp-server",
@@ -792,3 +816,149 @@ function buildTestAdapter(
     wire: overrides.wire ?? (async () => {}),
   };
 }
+
+void test("readSharedMcpAssetIds resolves symlinked manifests against installRoot", async (context) => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "ah-shared-mcp-symlink-"));
+  context.after(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const activationManifest: ActivationManifest = {
+    schemaVersion: 1,
+    host: "shared",
+    generatedAt: new Date().toISOString(),
+    activeBundles: ["bundle-sym"],
+    activeAssets: ["asset-sym-mcp"],
+    runtimeRoot: join(projectRoot, "activate", "shared"),
+    notes: [],
+  };
+  await writeJsonFile(
+    join(projectRoot, "activate", "shared", "activation-manifest.json"),
+    activationManifest,
+  );
+
+  const realPkgPath = join(
+    projectRoot,
+    "install",
+    "shared",
+    "packages",
+    "asset-sym-mcp.install.json",
+  );
+  await writeInstalledPackageManifest(realPkgPath, {
+    assetId: "asset-sym-mcp",
+    assetKind: "mcp-server",
+  });
+
+  // Create a symlink pointing to the real package manifest
+  const symlinkDir = join(
+    projectRoot,
+    "install",
+    "shared",
+    "packages",
+    "symlinks",
+  );
+  await mkdir(symlinkDir, { recursive: true });
+  const symlinkPath = join(symlinkDir, "asset-sym-mcp.install.json");
+  const { symlink } = await import("node:fs/promises");
+  try {
+    await symlink(realPkgPath, symlinkPath);
+  } catch (err) {
+    // EPERM on Windows (requires admin), EEXIST — skip symlink verification
+    if (
+      (err as NodeJS.ErrnoException).code === "EPERM" ||
+      (err as NodeJS.ErrnoException).code === "EEXIST"
+    ) {
+      return;
+    }
+    throw err;
+  }
+
+  await writeInstalledBundleManifest(projectRoot, "bundle-sym", [
+    {
+      assetId: "asset-sym-mcp",
+      mirrorId: "mirror-sym",
+      manifestPath: symlinkPath,
+    },
+  ]);
+
+  // readSharedMcpAssetIds should resolve the symlink and include the asset
+  assert.deepEqual(await readSharedMcpAssetIds(projectRoot), ["asset-sym-mcp"]);
+});
+
+void test("readSharedMcpAssetIds skips packages whose manifest file is missing (inside install root)", async (context) => {
+  const projectRoot = await mkdtemp(
+    join(tmpdir(), "ah-shared-mcp-missing-manifest-"),
+  );
+  context.after(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  const validPkgPath = join(
+    projectRoot,
+    "install",
+    "shared",
+    "packages",
+    "asset-valid-mcp.install.json",
+  );
+  await writeInstalledPackageManifest(validPkgPath, {
+    assetId: "asset-valid-mcp",
+    assetKind: "mcp-server",
+  });
+
+  // manifestPath inside installRoot but the file does not exist
+  const missingManifestPath = join(
+    projectRoot,
+    "install",
+    "shared",
+    "packages",
+    "nonexistent.install.json",
+  );
+
+  const activationManifest: ActivationManifest = {
+    schemaVersion: 1,
+    host: "shared",
+    generatedAt: new Date().toISOString(),
+    activeBundles: ["bundle-missing-manifest"],
+    activeAssets: ["asset-valid-mcp", "asset-missing"],
+    runtimeRoot: join(projectRoot, "activate", "shared"),
+    notes: [],
+  };
+  await writeJsonFile(
+    join(projectRoot, "activate", "shared", "activation-manifest.json"),
+    activationManifest,
+  );
+
+  await writeInstalledBundleManifest(projectRoot, "bundle-missing-manifest", [
+    {
+      assetId: "asset-valid-mcp",
+      mirrorId: "mirror-valid",
+      manifestPath: validPkgPath,
+    },
+    {
+      assetId: "asset-missing",
+      mirrorId: "mirror-missing",
+      manifestPath: missingManifestPath,
+    },
+  ]);
+
+  const warningMessages: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (message?: unknown) => {
+    warningMessages.push(String(message ?? ""));
+  };
+
+  let result: string[];
+  try {
+    result = await readSharedMcpAssetIds(projectRoot);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  // The valid MCP package is still returned; the missing one is skipped
+  assert.deepEqual(result, ["asset-valid-mcp"]);
+  assert.equal(warningMessages.length, 1);
+  assert.match(
+    warningMessages[0] ?? "",
+    /Skipping package .*: manifest file not found at/u,
+  );
+});

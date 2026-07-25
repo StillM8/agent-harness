@@ -277,6 +277,10 @@ export interface GitHubRepoSnapshot {
       sha: string;
     }>;
   };
+  /** Diagnostic only — set by verifyOmsBlobs when PEM key material passes
+   *   format validation. Does NOT confer trust; downstream trust scoring
+   *   gates oms-trust-anchor on source authority, not on this flag alone. */
+  pemParsed?: boolean;
 }
 
 /**

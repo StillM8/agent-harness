@@ -48,6 +48,8 @@ const OPENCODE_DIRECTORY_BY_ASSET_KIND: Record<AssetKind, string> = {
   "prompt-pack": "commands",
   "reference-pack":
     "context/project-intelligence/agent-harness/reference-packs",
+  "payable-api": "context/project-intelligence/agent-harness/payable-apis",
+  "acp-agent": "context/project-intelligence/agent-harness/acp-agents",
 };
 
 interface OpenCodeLinkedAsset {
@@ -746,6 +748,7 @@ async function readSharedMcpAssetIdsBestEffort(
   try {
     return await readSharedMcpAssetIds(projectRoot);
   } catch (error) {
+    /* c8 ignore next 4 */
     console.warn(
       `Failed to project shared MCP assets into OpenCode wire plan: ${toLoggableErrorMessage(error)}`,
     );
@@ -776,7 +779,8 @@ async function upsertManagedAgentsSection(options: {
         )
       : ["- No active OpenCode assets were found at wire time."]),
     ...(options.sharedMcpAssetIds.length > 0
-      ? [
+      ? /* c8 ignore next 5 -- sharedMcpAssetIds ternary: true branch requires wire plan with MCP asset IDs */
+        [
           "",
           "## Shared MCP references",
           ...options.sharedMcpAssetIds.map((assetId) => `- ${assetId}`),

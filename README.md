@@ -37,7 +37,9 @@
   <a href="#discovery-and-recommendations"><img alt="reference packs" src="https://img.shields.io/badge/reference%20packs-64748B?logo=gitbook&logoColor=white" /></a>
 </p>
 
-`agent-harness` is a reviewable supply chain for reusable AI-agent assets: discover trusted sources, rank workspace-specific recommendations, mirror pinned bundles, stage local files, activate host views, and wire everything into the agent host you already use.
+**Discover anywhere. Install everywhere.**
+
+`agent-harness` is a reviewable supply chain for reusable AI-agent assets: discover trusted sources, rank workspace-specific recommendations, mirror pinned bundles, stage local files, activate host views, and wire everything into the agent host you already use. ARD-compatible (v0.9) as both publisher and consumer.
 
 **Proof points**
 
@@ -92,9 +94,12 @@ The core model is deliberately boring in the best way: one command surface, a ho
 - [Demand detection playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DEMAND-DETECTION-PLAYBOOK.md)
 - [Demand detection coverage](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/DEMAND-DETECTION-COVERAGE.md)
 - [Source coverage playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/SOURCE-COVERAGE-PLAYBOOK.md)
+- [Catalog breadth guide](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/CATALOG-BREADTH.md)
+- [Semantic scoring guide](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/SEMANTIC-SCORING.md)
 - [AI enrichment playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/AI-ENRICHMENT-PLAYBOOK.md)
 - [Asset update playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/ASSET-UPDATE-PLAYBOOK.md)
 - [Logging strategy](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/LOGGING-STRATEGY.md)
+- [Troubleshooting guide](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/TROUBLESHOOTING.md)
 - [Recommendation policy playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/RECOMMENDATION-POLICY-PLAYBOOK.md)
 - [Workspace evolution control-loop playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/WORKSPACE-EVOLUTION-PLAYBOOK.md)
 - [End-user harness maintenance guide](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/HARNESS-MAINTENANCE-GUIDE.md)
@@ -178,6 +183,50 @@ agent-harness setup hosts
 | **agent-harness**              | **Discovers sources, ranks recommendations, mirrors pinned bundles, stages/activates assets, quarantines risky inputs, and wires selected assets into supported hosts with preview/apply/reset semantics.** | **Supply-chain and workspace integration layer for reusable AI-agent assets.**                                                  |
 
 The practical lifecycle is: `discover -> recommend -> mirror -> stage -> activate -> wire`. Official and verified sources are preferred over popularity-only signals, official-first-party sources are demoted when owner/publisher evidence fails verification, mirrored generations are pinned for review, risky candidates route through quarantine, and native/global host installs remain explicit instead of hidden inside `workspace <host>`.
+
+## ARD interoperability
+
+<p>
+  <a href="https://agenticresourcediscovery.org/spec"><img alt="ARD v0.9" src="https://img.shields.io/badge/ARD-v0.9-6366F1?logo=data:image/svg%2Bxml;base64,PHN2ZyBmaWxsPSJ3aGl0ZSIgdmlld0JveD0iMCAwIDI0IDI0IiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxwYXRoIGQ9Ik0xMiAyTDIgN3YxMGwxMCA1IDEwLTVWN0wxMiAyem0wIDIuMTY0bDcgMy41djcuNjcybC03IDMuNS03LTMuNVY3LjY2NGw3LTMuNXoiLz48L3N2Zz4=" /></a>
+</p>
+
+**Tagline:** _Discover anywhere. Install everywhere._
+
+`agent-harness` is both an **ARD publisher** and an **ARD consumer**, implementing the [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec) v0.9 specification (backed by Google, Microsoft, Hugging Face, GitHub, NVIDIA, and others).
+
+### Publisher — `.well-known/ai-catalog.json`
+
+Every `discover select` or `discover full` run builds a selected asset catalog. Export it as an ARD-compliant catalog so registries can discover agent-harness-curated assets:
+
+```bash
+agent-harness discover ard-export
+# → .well-known/ai-catalog.json
+```
+
+ARD registries crawl `/.well-known/ai-catalog.json` at your domain to index agent-harness assets alongside assets from other publishers. The export maps every `AssetCatalogEntry` to an ARD entry with:
+
+- **URN identifier** (`urn:ai:<publisher>:<namespace>:<name>`) — domain-backed identity
+- **Media type** (`application/mcp-server+json`, `application/ai-skill`, etc.) from AssetKind
+- **Trust manifest** — OMS signatures, publisher verification, compliance attestations
+- **Representative queries** — synthetic natural-language queries for semantic discovery
+
+### Consumer — ARD registry adapter
+
+`agent-harness` can consume ARD-compliant registries as discovery sources via `POST /search`. The registry adapter maps ARD results back to `AssetCatalogEntry` for the full mirror/stage/activate/wire pipeline. See `discover sync` and the `ard-registry` source kind (#327).
+
+### Architecture
+
+```mermaid
+graph LR
+    A[agent-harness<br/>Publisher] -->|ai-catalog.json| B[ARD Registries<br/>GitHub Agent Finder<br/>HuggingFace Discover]
+    B -->|POST /search| C[agent-harness<br/>Consumer]
+    C -->|mirror → stage → activate → wire| D[Host IDEs<br/>VS Code, Cursor, Zed,<br/>Claude Code, OpenCode, Pi, Codex]
+    B -->|index| E[End Users<br/>Agent Discovery]
+```
+
+ARD defines **discovery** (catalogs and registries). `agent-harness` handles the **distribution** phase that ARD §3.6 explicitly delegates to backend implementation — mirroring, staging, activation, and host-specific wiring.
+
+**See:** [#325](https://github.com/ar27111994/agent-harness/issues/325) (catalog export), [#327](https://github.com/ar27111994/agent-harness/issues/327) (registry consumer), [#328](https://github.com/ar27111994/agent-harness/issues/328) (trust signals), [#326](https://github.com/ar27111994/agent-harness/issues/326) (community submission).
 
 ## What it produces
 
@@ -299,6 +348,43 @@ A packaged CLI keeps checked-in discovery and mirror policy assets read-only and
 - When you run from this repository root, the development default remains the repository root so existing npm scripts continue to work.
 - When you run the installed package from another workspace, the default mutable state root is `.agent-harness/` in that workspace.
 - Override the state location with `--state-root <path>` or `AGENT_HARNESS_STATE_ROOT`.
+
+### Building a comprehensive catalog
+
+The default `discover full` builds a demand-driven catalog — fast for per-workspace use but limited in breadth (~11,500 entries from 171 sources). To build a truly comprehensive catalog across millions of available assets, use the two-phase offline index workflow:
+
+**Phase 1 (offline, one-time or CI):** Build the full index across all sources.
+
+```bash
+# Run the offline index build — fully paginates all indexed sources
+agent-harness discover index
+
+# For unlimited pagination (build the complete index):
+AGENT_HARNESS_SOURCE_SYNC_MAX_PAGES_FOR_INDEX_BUILD=0 agent-harness discover index
+
+# Run on a schedule (daily/weekly CI job recommended)
+```
+
+The `discover index` command paginates 500 pages per source by default (vs 10 for `discover sync`). Set `AGENT_HARNESS_SOURCE_SYNC_MAX_PAGES_FOR_INDEX_BUILD=0` for unlimited. The index is stored as `discover/output/catalog-index.jsonl` and stays fresh for 7 days (`AGENT_HARNESS_DISCOVERY_INDEX_MAX_AGE_DAYS`).
+
+**Phase 2 (per-workspace):** Demand-rank against the local index — zero API calls.
+
+```bash
+# Uses the pre-built index if fresh, falls back to live harvest if stale
+agent-harness discover select
+agent-harness recommend report --intent frontend
+```
+
+**Production-scale config:** Override conservative defaults for comprehensive coverage:
+
+| Env var                                                   | Default | Production            | Effect                            |
+| --------------------------------------------------------- | ------- | --------------------- | --------------------------------- |
+| `AGENT_HARNESS_SOURCE_SYNC_MAX_PAGES_FOR_INDEX_BUILD`     | 500     | 0 (unlimited)         | Pages per source in index build   |
+| `AGENT_HARNESS_VSCODE_MARKETPLACE_POPULARITY_SWEEP_PAGES` | 50      | 200+                  | Popularity-sorted VS Code pages   |
+| `AGENT_HARNESS_VSCODE_MARKETPLACE_MAX_QUERIES`            | 4       | 20                    | Demand-driven queries             |
+| `GITHUB_TOKEN`                                            | (none)  | Personal access token | 5,000 req/h vs 60 unauthenticated |
+
+**Scope:** A full index build with `GITHUB_TOKEN` and unlimited pagination can catalog tens of thousands of assets from VS Code Marketplace (60,000+ extensions), npm (2M+ packages), MCP registry, package registries, GitHub awesome-lists, and community source packs. The per-workspace selection then ranks from this comprehensive pool rather than a limited demand-driven harvest. See `docs/guides/CATALOG-BREADTH.md` for the full guide.
 
 Examples:
 
@@ -765,15 +851,15 @@ Most adapter previews use `activate/<host>/wire-preview-<host>.json`. VS Code us
 
 This matrix is the public v2 adapter contract. It separates generic lifecycle support from host-native support so unsupported/partial capabilities are intentionally named instead of implied as complete. Every host participates in discover/recommend/stage/activate and quarantine-aware review gating; native install/verify/remove stays explicit and only appears where an adapter exposes a native install provider.
 
-| Host             | Lifecycle / recommendation          | Discover-aware signals | Stage / install                           | Activate | Wire preview / apply / reset | Native install / verify / remove | Project-local native wiring                                                                                                        | Known limitations                                                                                                                                                                                                                              |
-| ---------------- | ----------------------------------- | ---------------------- | ----------------------------------------- | -------- | ---------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `copilot-vscode` | `copilot-vscode` / `copilot-vscode` | Yes                    | Stage + explicit extension native install | Yes      | Yes / yes / yes              | `extension` via VS Code CLI      | Workspace instructions plus user-scoped settings                                                                                   | Requires a writable VS Code user settings directory for apply/reset. Marketplace extension install/verify/remove is explicit and never part of wire apply.                                                                                     |
-| `opencode`       | `opencode` / `opencode`             | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `.opencode` overlay and `AGENTS.md`                                                                                  | Uses project-local overlays and does not mutate global OpenCode packages or global MCP settings. MCP and tool config synthesis requires explicit structured native payloads.                                                                   |
-| `cursor`         | `copilot-vscode` / `cursor`         | Yes                    | Stage + explicit extension native install | Yes      | Yes / yes / yes              | `extension` via Cursor CLI       | Project-local `.cursor` rules, agents, plugin-compatible tree, and structured native config when supplied                          | Reuses the Copilot lifecycle store while applying Cursor-specific project files. Cursor extension install/verify/remove requires the Cursor CLI and explicit native-install operations. Project plugin registration remains user/host managed. |
-| `zed`            | `opencode` / `zed`                  | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `.rules`, `.zed/settings.json`, and `.zed/agent-harness` references                                                  | Extension installation remains manual through Zed unless future structured native support is added. Managed .zed/agent-harness assets are references, not a claim that every asset kind is a native Zed directory.                             |
-| `claude-code`    | `opencode` / `claude-code`          | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `CLAUDE.md`, `.claude/*`, and structured native config when supplied                                                 | MCP, hook, and settings synthesis requires explicit structured Claude-native payloads. Global Claude Code profile/configuration is not modified.                                                                                               |
-| `pi`             | `opencode` / `pi`                   | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `AGENTS.md`, `SYSTEM.md`, `.pi/skills`, `.pi/prompts`, and structured native config when supplied                    | Pi does not include shared-mcp in its default bundles. MCP assets are staged as references because Pi has no built-in MCP support in the current adapter contract.                                                                             |
-| `codex`          | `opencode` / `codex`                | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `AGENTS.md`, `.agents/skills`, `.agents/plugins`, `.codex/agent-harness`, and structured native config when supplied | Global Codex config, plugin caches, automations, remote connections, and sandbox settings are not modified. Plugin, MCP, hook, and rules activation requires structured Codex-native config and trusted-project review.                        |
+| Host             | Lifecycle / recommendation          | Discover-aware signals | Stage / install                           | Activate | Wire preview / apply / reset | Native install / verify / remove | Project-local native wiring                                                                                                        | Known limitations                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------- | ----------------------------------- | ---------------------- | ----------------------------------------- | -------- | ---------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `copilot-vscode` | `copilot-vscode` / `copilot-vscode` | Yes                    | Stage + explicit extension native install | Yes      | Yes / yes / yes              | `extension` via VS Code CLI      | Workspace instructions plus user-scoped settings                                                                                   | Requires a writable VS Code user settings directory for apply/reset. Marketplace extension install/verify/remove is explicit and never part of wire apply. Claude Code plugin format (.claude-plugin/plugin.json) is partially compatible — the schema is shared with VS Code agent plugins but manifest path conventions differ. Agent assets shipping both plugin.json layouts are compatible with copilot-vscode.                                                                                                                           |
+| `opencode`       | `opencode` / `opencode`             | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `.opencode` overlay and `AGENTS.md`                                                                                  | Uses project-local overlays and does not mutate global OpenCode packages or global MCP settings. MCP and tool config synthesis requires explicit structured native payloads.                                                                                                                                                                                                                                                                                                                                                                   |
+| `cursor`         | `copilot-vscode` / `cursor`         | Yes                    | Stage + explicit extension native install | Yes      | Yes / yes / yes              | `extension` via Cursor CLI       | Project-local `.cursor` rules, agents, plugin-compatible tree, and structured native config when supplied                          | Reuses the Copilot lifecycle store while applying Cursor-specific project files. Cursor extension install/verify/remove requires the Cursor CLI and explicit native-install operations. Project plugin registration remains user/host managed. VS Code Marketplace extensions are partially compatible with Cursor — extensions that use standard VS Code APIs work, but those relying on VS Code-specific runtime features (e.g. debugger, notebook APIs) may not. Discovery from the vscode-marketplace source applies to cursor workspaces. |
+| `zed`            | `opencode` / `zed`                  | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `.rules`, `.zed/settings.json`, and `.zed/agent-harness` references                                                  | Extension installation remains manual through Zed unless future structured native support is added. Managed .zed/agent-harness assets are references, not a claim that every asset kind is a native Zed directory. Zed forwards MCP servers configured in .zed/settings.json to external ACP-based agents in the same session — MCP server recommendations for Zed workspaces are also relevant to ACP agent consumers. ACP-compatible agents (via JetBrains Agent Client Protocol) can be used in Zed when ACP forwarding is configured.      |
+| `claude-code`    | `opencode` / `claude-code`          | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `CLAUDE.md`, `.claude/*`, and structured native config when supplied                                                 | MCP, hook, and settings synthesis requires explicit structured Claude-native payloads. Global Claude Code profile/configuration is not modified.                                                                                                                                                                                                                                                                                                                                                                                               |
+| `pi`             | `opencode` / `pi`                   | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `AGENTS.md`, `SYSTEM.md`, `.pi/skills`, `.pi/prompts`, and structured native config when supplied                    | Pi does not include shared-mcp in its default bundles. MCP assets are staged as references because Pi has no built-in MCP support in the current adapter contract.                                                                                                                                                                                                                                                                                                                                                                             |
+| `codex`          | `opencode` / `codex`                | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `AGENTS.md`, `.agents/skills`, `.agents/plugins`, `.codex/agent-harness`, and structured native config when supplied | Global Codex config, plugin caches, automations, remote connections, and sandbox settings are not modified. Plugin, MCP, hook, and rules activation requires structured Codex-native config and trusted-project review.                                                                                                                                                                                                                                                                                                                        |
 
 Adapter compliance coverage lives in `src/tests/host-adapters.test.ts`, `src/tests/native-host-wire.test.ts`, and `src/tests/host-support-matrix.test.ts`. The tests assert the registered adapter metadata, preview/apply/reset behavior, native-install boundaries, reversible managed file handling, and the README matrix rows.
 

@@ -100,7 +100,20 @@ export { loadSourceSyncState, getIndexedSourceIds, loadIndexedCatalogEntries };
  * `sourceSyncMaxPagesPerRun` pages per source, and writes the updated state,
  * entries, and report back to disk.
  */
-export async function syncIndexedSources(projectRoot: string): Promise<void> {
+export async function syncIndexedSources(
+  projectRoot: string,
+  options?: { maxPagesPerRun?: number },
+): Promise<void> {
+  if (
+    options?.maxPagesPerRun !== undefined &&
+    (typeof options.maxPagesPerRun !== "number" ||
+      !isFinite(options.maxPagesPerRun) ||
+      options.maxPagesPerRun <= 0)
+  ) {
+    throw new Error(
+      `syncIndexedSources: options.maxPagesPerRun must be a positive number (got ${String(options.maxPagesPerRun)})`,
+    );
+  }
   const sourceRegistry = await loadSourceRegistry(projectRoot);
   const selectionRegistry = await readJsonFile<SelectionRegistry>(
     join(projectRoot, "discover", "selections.json"),
@@ -135,6 +148,9 @@ export async function syncIndexedSources(projectRoot: string): Promise<void> {
       entriesDirty: false,
       previousState,
       observedEntryIds: new Set<string>(),
+      ...(options?.maxPagesPerRun !== undefined
+        ? { maxPagesPerRunOverride: options.maxPagesPerRun }
+        : {}),
     };
 
     try {
@@ -195,6 +211,23 @@ async function synchronizeIndexedSource(
   source: SourceDefinition,
   context: SourceSyncContext,
 ): Promise<SourceSyncSourceState | null> {
+  // Design note: the kind-guard + id-switch below are two complementary dispatch
+  // axes, not a smell. The `switch(source.id)` handles well-known sources with
+  // fixed IDs (vscode-marketplace, npm-registry, etc.). The kind-guard catches
+  // sources identified by their `kind` rather than a specific ID — e.g. any
+  // user-configured ARD-compliant registry. Future kind-driven adapters (e.g.
+  // another standards-body registry) follow this pattern: check `source.kind`
+  // before falling through to the id-switch. The two axes never overlap because
+  // kind-guard sources don't appear in the id-switch.
+  // Requires a real ARD endpoint to exercise in integration; unit-tested via
+  // syncArdRegistrySource in registries/ard-registry.ts.
+  /* c8 ignore next 5 */
+  if (source.kind === "ard-registry") {
+    const { syncArdRegistrySource } =
+      await import("./registries/ard-registry.js");
+    return syncArdRegistrySource(source, context);
+  }
+
   switch (source.id) {
     case "vscode-marketplace":
       if (source.kind === "marketplace") {
@@ -241,9 +274,9 @@ async function synchronizeIndexedSource(
     case "skills-sh":
       return syncSitemapReferenceSource(source, context, {
         rootSitemapUrl:
-          source.endpoints.sitemapUrl ?? "https://skills.sh/sitemap.xml",
+          source.endpoints.sitemapUrl ?? "https://www.skills.sh/sitemap.xml",
         leafSitemapPredicate: (url) =>
-          /sitemap-(?:skills(?:-\d+)?|agents(?:-\d+)?)\.xml$/u.test(
+          /sitemap-(?:skills|agents|misc|owners)(?:-\d+)?\.xml$/u.test(
             url.pathname,
           ),
         itemAssetKind: "skill",

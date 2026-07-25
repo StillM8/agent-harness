@@ -87,12 +87,68 @@ const DISCOVERY_DEFAULTS = {
   vscodeMarketplaceMaxQueries: 4,
   vscodeMarketplaceMaxItemsPerQuery: 6,
   vscodeMarketplaceSyncPageSize: 50,
+  /** Pages to fetch in the popularity-first sweep before alphabetical pagination. */
+  vscodeMarketplacePopularitySweepPages: 50,
+  /** Whether the category-taxonomy sweep is enabled. */
+  vscodeMarketplaceCategorySweepEnabled: true,
   sourceSyncMaxPagesPerRun: 10,
   npmMcpSearchQueryLimit: 8,
+  /**
+   * Number of pages to paginate per source when running `discover index`
+   * (the offline full-index build). 0 means unlimited — appropriate for a
+   * scheduled full-index run. The default of 500 gives ~25,000 entries per
+   * source at the typical 50-item page size.
+   */
+  sourceSyncMaxPagesForIndexBuild: 500,
+  /**
+   * Maximum age in days before the local catalog-index.jsonl is considered
+   * stale and `discover sync` will trigger a live re-harvest instead of
+   * using the cached index.
+   */
+  discoveryIndexMaxAgeDays: 7,
+  /**
+   * Whether semantic similarity scoring via @xenova/transformers is enabled.
+   * When false (default) the existing keyword-overlap demand-relevance gate
+   * is used. When true and the package is installed, cosine similarity
+   * replaces the binary keyword gate and `fit.fitLevel` is populated.
+   */
+  semanticScoringEnabled: false,
+  /**
+   * Minimum cosine similarity (0–1) for an entry to pass the semantic
+   * demand-relevance gate. Default 0.35 ("weak" fit threshold).
+   * Ignored when semantic scoring is disabled.
+   */
+  semanticScoringMinSimilarity: 0.35,
+  /**
+   * Max search terms to dispatch per registry search sweep.
+   * Default 10 matches the AC.
+   */
+  registrySearchMaxTerms: 10,
+  /**
+   * Max results per registry search term. Default 50 per AC.
+   */
+  registrySearchMaxResultsPerTerm: 50,
+  /**
+   * Whether the adjacent-tooling static matrix is enabled. Default true.
+   */
+  adjacentToolingEnabled: true,
+  /**
+   * Maximum catalog entries to retain per unique source after selection dedup.
+   * Prevents a single high-volume source from dominating the selected set.
+   * 0 means unlimited. Default 200.
+   */
+  maxEntriesPerSource: 200,
 } as const;
 const OFFICIAL_INDEX_DEFAULTS = {
   pageMaxBytes: 1_000_000,
   contentMaxBytes: 1_000_000,
+  /**
+   * Maximum number of catalog entries produced per awesome-list index.
+   * 0 means unlimited — appropriate for large community lists (1,000+ entries)
+   * where the catalog writer's deduplication and selection steps provide the
+   * real cap. Set to a positive integer to throttle during development.
+   */
+  maxItemsPerIndex: 0,
 } as const;
 const HOST_COMMAND_DEFAULTS = {
   nativeTimeoutMs: 30_000,
@@ -174,12 +230,56 @@ export interface RuntimeConfig {
     vscodeMarketplaceMaxQueries: number;
     vscodeMarketplaceMaxItemsPerQuery: number;
     vscodeMarketplaceSyncPageSize: number;
+    /** Pages to fetch in the popularity-first sweep. */
+    vscodeMarketplacePopularitySweepPages: number;
+    /** Whether the category-taxonomy sweep is enabled. */
+    vscodeMarketplaceCategorySweepEnabled: boolean;
     sourceSyncMaxPagesPerRun: number;
     npmMcpSearchQueryLimit: number;
+    /**
+     * Pages to paginate per source during `discover index` full-index build.
+     * 0 = unlimited.
+     */
+    sourceSyncMaxPagesForIndexBuild: number;
+    /** Days before catalog-index.jsonl is considered stale. */
+    discoveryIndexMaxAgeDays: number;
+    /**
+     * Whether semantic similarity scoring is enabled.
+     * When true and @xenova/transformers is installed, cosine similarity
+     * replaces the binary keyword-overlap gate.
+     */
+    semanticScoringEnabled: boolean;
+    /**
+     * Minimum cosine similarity threshold for an entry to pass the semantic
+     * demand-relevance gate (0–1). Default 0.35.
+     */
+    semanticScoringMinSimilarity: number;
+    /**
+     * Maximum number of search terms to dispatch per registry search sweep.
+     * Higher values improve coverage; lower values reduce API call volume.
+     */
+    registrySearchMaxTerms: number;
+    /**
+     * Maximum results to retrieve per term per registry search call.
+     */
+    registrySearchMaxResultsPerTerm: number;
+    /**
+     * Whether the adjacent-tooling static matrix is enabled.
+     * When true, packages from the adjacent-tooling matrix are added to the
+     * harvest candidates for matched stack signals.
+     */
+    adjacentToolingEnabled: boolean;
+    /**
+     * Maximum catalog entries to retain per unique source after selection dedup.
+     * 0 = unlimited.
+     */
+    maxEntriesPerSource: number;
   };
   officialIndex: {
     pageMaxBytes: number;
     contentMaxBytes: number;
+    /** Maximum catalog entries per index. 0 = unlimited. */
+    maxItemsPerIndex: number;
   };
   hostCommands: {
     nativeTimeoutMs: number;
@@ -416,6 +516,16 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
         DISCOVERY_DEFAULTS.vscodeMarketplaceSyncPageSize,
         "AGENT_HARNESS_VSCODE_MARKETPLACE_SYNC_PAGE_SIZE",
       ),
+      vscodeMarketplacePopularitySweepPages: parseNonNegativeInteger(
+        env.AGENT_HARNESS_VSCODE_MARKETPLACE_POPULARITY_SWEEP_PAGES,
+        DISCOVERY_DEFAULTS.vscodeMarketplacePopularitySweepPages,
+        "AGENT_HARNESS_VSCODE_MARKETPLACE_POPULARITY_SWEEP_PAGES",
+      ),
+      vscodeMarketplaceCategorySweepEnabled: parseBooleanFlag(
+        env.AGENT_HARNESS_VSCODE_MARKETPLACE_CATEGORY_SWEEP_ENABLED,
+        DISCOVERY_DEFAULTS.vscodeMarketplaceCategorySweepEnabled,
+        "AGENT_HARNESS_VSCODE_MARKETPLACE_CATEGORY_SWEEP_ENABLED",
+      ),
       sourceSyncMaxPagesPerRun: parsePositiveInteger(
         env.AGENT_HARNESS_SOURCE_SYNC_MAX_PAGES_PER_RUN,
         DISCOVERY_DEFAULTS.sourceSyncMaxPagesPerRun,
@@ -425,6 +535,46 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
         env.AGENT_HARNESS_NPM_MCP_SEARCH_QUERY_LIMIT,
         DISCOVERY_DEFAULTS.npmMcpSearchQueryLimit,
         "AGENT_HARNESS_NPM_MCP_SEARCH_QUERY_LIMIT",
+      ),
+      sourceSyncMaxPagesForIndexBuild: parseNonNegativeInteger(
+        env.AGENT_HARNESS_SOURCE_SYNC_MAX_PAGES_FOR_INDEX_BUILD,
+        DISCOVERY_DEFAULTS.sourceSyncMaxPagesForIndexBuild,
+        "AGENT_HARNESS_SOURCE_SYNC_MAX_PAGES_FOR_INDEX_BUILD",
+      ),
+      discoveryIndexMaxAgeDays: parsePositiveInteger(
+        env.AGENT_HARNESS_DISCOVERY_INDEX_MAX_AGE_DAYS,
+        DISCOVERY_DEFAULTS.discoveryIndexMaxAgeDays,
+        "AGENT_HARNESS_DISCOVERY_INDEX_MAX_AGE_DAYS",
+      ),
+      semanticScoringEnabled: parseBooleanFlag(
+        env.AGENT_HARNESS_DISCOVERY_SEMANTIC_SCORING,
+        DISCOVERY_DEFAULTS.semanticScoringEnabled,
+        "AGENT_HARNESS_DISCOVERY_SEMANTIC_SCORING",
+      ),
+      semanticScoringMinSimilarity: parseFloatFraction(
+        env.AGENT_HARNESS_DISCOVERY_MIN_SIMILARITY,
+        DISCOVERY_DEFAULTS.semanticScoringMinSimilarity,
+        "AGENT_HARNESS_DISCOVERY_MIN_SIMILARITY",
+      ),
+      registrySearchMaxTerms: parseNonNegativeInteger(
+        env.AGENT_HARNESS_DISCOVERY_REGISTRY_SEARCH_MAX_TERMS,
+        DISCOVERY_DEFAULTS.registrySearchMaxTerms,
+        "AGENT_HARNESS_DISCOVERY_REGISTRY_SEARCH_MAX_TERMS",
+      ),
+      registrySearchMaxResultsPerTerm: parseNonNegativeInteger(
+        env.AGENT_HARNESS_DISCOVERY_REGISTRY_SEARCH_MAX_RESULTS_PER_TERM,
+        DISCOVERY_DEFAULTS.registrySearchMaxResultsPerTerm,
+        "AGENT_HARNESS_DISCOVERY_REGISTRY_SEARCH_MAX_RESULTS_PER_TERM",
+      ),
+      adjacentToolingEnabled: parseBooleanFlag(
+        env.AGENT_HARNESS_DISCOVERY_ADJACENT_TOOLING_ENABLED,
+        DISCOVERY_DEFAULTS.adjacentToolingEnabled,
+        "AGENT_HARNESS_DISCOVERY_ADJACENT_TOOLING_ENABLED",
+      ),
+      maxEntriesPerSource: parseNonNegativeInteger(
+        env.AGENT_HARNESS_MAX_ENTRIES_PER_SOURCE,
+        DISCOVERY_DEFAULTS.maxEntriesPerSource,
+        "AGENT_HARNESS_MAX_ENTRIES_PER_SOURCE",
       ),
     },
     officialIndex: {
@@ -437,6 +587,11 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
         env.AGENT_HARNESS_OFFICIAL_INDEX_CONTENT_MAX_BYTES,
         OFFICIAL_INDEX_DEFAULTS.contentMaxBytes,
         "AGENT_HARNESS_OFFICIAL_INDEX_CONTENT_MAX_BYTES",
+      ),
+      maxItemsPerIndex: parseNonNegativeInteger(
+        env.AGENT_HARNESS_OFFICIAL_INDEX_MAX_ITEMS_PER_INDEX,
+        OFFICIAL_INDEX_DEFAULTS.maxItemsPerIndex,
+        "AGENT_HARNESS_OFFICIAL_INDEX_MAX_ITEMS_PER_INDEX",
       ),
     },
     hostCommands: {
@@ -749,3 +904,34 @@ function parseBooleanFlag(
 
   throw new Error(`${envName} must be a boolean when set.`);
 }
+
+function parseFloatFraction(
+  value: string | undefined,
+  defaultValue: number,
+  envName: string,
+): number {
+  if (!value || value.trim().length === 0) {
+    return defaultValue;
+  }
+
+  const parsedValue = Number(value.trim());
+  if (Number.isNaN(parsedValue) || parsedValue < 0 || parsedValue > 1) {
+    throw new Error(`${envName} must be a number between 0 and 1 when set.`);
+  }
+
+  return parsedValue;
+}
+
+/**
+ * Test-only internals for the runtime config module.
+ * These are not part of the public API and should not be used in production code.
+ */
+export const runtimeConfigInternals = {
+  /**
+   * Resets the cached singleton so the next `getRuntimeConfig()` call
+   * re-reads `process.env`. Only use in tests that mutate env vars.
+   */
+  resetCacheForTesting(): void {
+    clearRuntimeConfig();
+  },
+};

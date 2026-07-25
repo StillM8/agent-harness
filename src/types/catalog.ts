@@ -5,6 +5,7 @@ import type {
   HostTarget,
   SourceKind,
 } from "./core.js";
+import type { CompatibleHost } from "../host-adapters/compatibility-matrix.js";
 
 /**
  * Defines the supported host-native payload target values.
@@ -128,6 +129,19 @@ export interface AssetEvidence {
   dependencies?: string[];
   filePath?: string;
   rootPath?: string;
+  /**
+   * How this entry was discovered.
+   * - `"manifest"` — declared in a workspace manifest (default, implicit).
+   * - `"registry-adjacent-search"` — surfaced via registry search or adjacent-tooling matrix;
+   *   not yet declared in any manifest.
+   */
+  discoveryMethod?: "manifest" | "registry-adjacent-search";
+  /**
+   * True when this entry was suggested by the adjacent-tooling matrix rather
+   * than directly declared in a workspace manifest or harvested from a source.
+   * Set by the package-registry harvester for registry-adjacent discoveries.
+   */
+  isAdjacentSuggestion?: boolean;
   classification?: {
     assetKind: AssetKind;
     confidence: number;
@@ -173,6 +187,17 @@ export interface AssetContextCost {
 export interface AssetFit {
   portfolioFit: number;
   hostFit: number;
+  /**
+   * Human-readable fit level derived from semantic similarity score.
+   * Populated when semantic scoring is enabled; `undefined` when using
+   * keyword-overlap fallback mode.
+   *
+   * - `"strong"` — cosine similarity ≥ 0.75 (high confidence match)
+   * - `"moderate"` — cosine similarity ≥ 0.55 (likely relevant)
+   * - `"weak"` — cosine similarity ≥ 0.35 (marginally relevant, kept)
+   * - `"none"` — similarity below threshold (filtered out)
+   */
+  fitLevel?: "strong" | "moderate" | "weak" | "none";
 }
 
 /**
@@ -220,6 +245,15 @@ export interface AssetCatalogEntry {
   assetKind: AssetKind;
   hosts: HostTarget[];
   compatibilityMode: CompatibilityMode;
+  /**
+   * Cross-host compatibility entries beyond the primary `hosts` list.
+   * Assets may be auto-populated (e.g. mcp-server → all MCP-capable hosts)
+   * or explicitly set via manifest metadata.
+   * When present, these hosts are also considered during catalog selection
+   * and recommendation, and the wire step emits host-specific instructions
+   * when `installDiffers: true`.
+   */
+  compatibleHosts?: CompatibleHost[];
   source: AssetSourceMetadata;
   trust: AssetTrust;
   capabilities: string[];
@@ -233,4 +267,10 @@ export interface AssetCatalogEntry {
   status: AssetStatus;
   queryMetadata?: AssetQueryMetadata;
   hostNativeConfig?: AssetHostNativeConfigMap;
+  /**
+   * Natural-language queries representative of what this asset can do.
+   * Used by the ARD semantic scoring path (#327) as the primary embedding
+   * text, weighted at 1.2× over other capability signals.
+   */
+  representativeQueries?: string[];
 }

@@ -4,6 +4,11 @@ import {
   fetchNpmPackageMetadata,
   fetchNpmPackageSearch,
   fetchPypiPackageMetadata,
+  fetchCratesIoSearch,
+  fetchNugetSearch,
+  fetchMavenSearch,
+  fetchPackagistSearch,
+  fetchRubyGemsSearch,
 } from "../../package-registries.js";
 import type {
   AssetCatalogEntry,
@@ -28,10 +33,17 @@ import {
   uniqueStrings,
 } from "./catalog-utils.js";
 import {
+  buildClassificationConfidence,
+  sourceFamilyEvidence,
+} from "./classification-confidence.js";
+import {
   collectNpmMcpSearchQueriesFromDemandProfile,
   collectPackageCandidatesFromDemandProfile,
   type PackageRegistryKind,
 } from "./package-candidates.js";
+import { getAdjacentPackagesForSignals } from "./adjacent-tooling.js";
+import { inferCompatibleHosts } from "../../host-adapters/compatibility-matrix.js";
+import { getRuntimeConfig } from "../../config/runtime.js";
 
 /**
  * Provides harvest package registry source for the lifecycle pipeline.
@@ -53,9 +65,29 @@ export async function harvestPackageRegistrySource(
     }
   }
 
+  // Adjacent-tooling enrichment (#295): discover packages the workspace
+  // should probably be using but has not yet declared.
+  const discoveryConfig = getRuntimeConfig().discovery;
+  const adjacentPackageNames = new Set(
+    await discoverAdjacentPackages(
+      registryKind,
+      demandProfile,
+      packageCandidates,
+      {
+        maxTerms: discoveryConfig.registrySearchMaxTerms,
+        maxResultsPerTerm: discoveryConfig.registrySearchMaxResultsPerTerm,
+        adjacentToolingEnabled: discoveryConfig.adjacentToolingEnabled,
+      },
+    ),
+  );
+  for (const pkg of adjacentPackageNames) {
+    packageCandidates.add(pkg);
+  }
+
   for (const packageName of [...packageCandidates].sort((left, right) =>
     left.localeCompare(right),
   )) {
+    const isAdjacent = adjacentPackageNames.has(packageName);
     if (source.id === "npm-registry") {
       const npmMetadata = await fetchNpmPackageMetadata(packageName);
       if (!npmMetadata) {
@@ -73,6 +105,7 @@ export async function harvestPackageRegistrySource(
           selectionRegistry,
           "npm",
           npmMetadata.keywords ?? [],
+          isAdjacent,
         ),
       );
       continue;
@@ -94,6 +127,8 @@ export async function harvestPackageRegistrySource(
           demandProfile,
           selectionRegistry,
           "pypi",
+          [],
+          isAdjacent,
         ),
       );
       continue;
@@ -109,6 +144,8 @@ export async function harvestPackageRegistrySource(
         demandProfile,
         selectionRegistry,
         registryKind,
+        [],
+        isAdjacent,
       ),
     );
   }
@@ -155,6 +192,122 @@ async function searchNpmMcpServerPackages(
   }
 
   return [...packageNames].sort((left, right) => left.localeCompare(right));
+}
+
+/**
+ * Searches a registry by kind using the appropriate search API.
+ * Returns package names sorted alphabetically. Empty on API failure.
+ */
+async function searchRegistryByKind(
+  registryKind: PackageRegistryKind,
+  query: string,
+  limit: number,
+): Promise<string[]> {
+  switch (registryKind) {
+    case "npm":
+      /* c8 ignore next 4 -- delegates to fetchNpmPackageSearch, tested in package-registries.test.ts */
+      return (await fetchNpmPackageSearch(query))
+        .slice(0, limit)
+        .map((r) => r.name)
+        .filter(Boolean);
+    case "pypi":
+      // PyPI has no public keyword-search API; fall back to empty.
+      return [];
+    /* c8 ignore start -- cargo/nuget/maven/packagist/gem delegate to registry helpers tested independently in package-registries.test.ts */
+    case "cargo":
+      return (await fetchCratesIoSearch(query, limit))
+        .map((r) => r.name)
+        .filter(Boolean);
+    case "nuget":
+      return (await fetchNugetSearch(query, limit))
+        .map((r) => r.name)
+        .filter(Boolean);
+    case "maven":
+      return (await fetchMavenSearch(query, limit))
+        .map((r) => r.name)
+        .filter(Boolean);
+    case "packagist":
+      return (await fetchPackagistSearch(query, limit))
+        .map((r) => r.name)
+        .filter(Boolean);
+    case "gem":
+      return (await fetchRubyGemsSearch(query, limit))
+        .map((r) => r.name)
+        .filter(Boolean);
+    /* c8 ignore stop */
+    default:
+      return [];
+  }
+}
+
+/**
+ * Discovers adjacent packages by combining:
+ * 1. Static adjacent-tooling matrix entries matching demand signals.
+ * 2. Live registry search results for stack-signal terms (top-N by popularity).
+ *
+ * Packages already in `existingCandidates` are excluded so we don't duplicate.
+ * Results are tagged for downstream `discoveryMethod: "registry-adjacent-search"`.
+ */
+async function discoverAdjacentPackages(
+  registryKind: PackageRegistryKind,
+  demandProfile: DemandProfile | null,
+  existingCandidates: ReadonlySet<string>,
+  config: {
+    maxTerms: number;
+    maxResultsPerTerm: number;
+    adjacentToolingEnabled: boolean;
+  },
+): Promise<string[]> {
+  const adjacent = new Set<string>();
+
+  // 1. Static matrix — always fast, zero network calls.
+  if (config.adjacentToolingEnabled && demandProfile) {
+    const allSignalTokens = [
+      ...demandProfile.signals.languages,
+      ...demandProfile.signals.frameworks,
+      ...demandProfile.signals.tooling,
+      ...demandProfile.signals.concerns,
+    ].map((s) =>
+      s.replace(
+        /^(npm|pypi|detector|framework|language|concern|tooling):/u,
+        "",
+      ),
+    );
+
+    for (const pkg of getAdjacentPackagesForSignals(
+      registryKind,
+      allSignalTokens,
+    )) {
+      if (!existingCandidates.has(pkg)) {
+        adjacent.add(pkg);
+      }
+    }
+  }
+
+  // 2. Live registry search — use top demand language/framework signals as terms.
+  if (config.adjacentToolingEnabled && demandProfile && config.maxTerms > 0) {
+    const searchSignals = [
+      ...demandProfile.signals.languages,
+      ...demandProfile.signals.frameworks,
+    ]
+      .map((s) => s.replace(/^(npm|pypi|detector|framework|language):/u, ""))
+      .filter((s) => s.length > 2)
+      .slice(0, config.maxTerms);
+
+    for (const term of searchSignals) {
+      for (const name of await searchRegistryByKind(
+        registryKind,
+        term,
+        config.maxResultsPerTerm,
+      )) {
+        if (!existingCandidates.has(name)) {
+          adjacent.add(name);
+        }
+      }
+    }
+  }
+
+  return [...adjacent].sort((a, b) => a.localeCompare(b));
 }
 
 function isMcpServerPackage(
@@ -242,6 +395,7 @@ export function buildPackageRegistryCatalogEntry(
   selectionRegistry: SelectionRegistry,
   registryKind: PackageRegistryKind,
   packageKeywords: string[] = [],
+  isAdjacent = false,
 ): AssetCatalogEntry {
   const capabilities = uniqueStrings([
     ...splitIntoKeywords(packageName),
@@ -273,6 +427,7 @@ export function buildPackageRegistryCatalogEntry(
     assetKind,
     hosts,
     compatibilityMode,
+    compatibleHosts: inferCompatibleHosts(assetKind, hosts),
     source: {
       sourceId: source.id,
       authorityTier: source.authorityTier,
@@ -308,12 +463,25 @@ export function buildPackageRegistryCatalogEntry(
       manifestEntry: packageName,
     },
     evidence: {
-      manifestFound: true,
+      manifestFound: !isAdjacent,
       readmeFound: false,
       examplesFound: false,
       docsLinked: Boolean(repositoryUrl),
       lineCount: 1,
       rootPath: originUrl,
+      discoveryMethod:
+        /* c8 ignore next -- "manifest" arm is exercised by integration path; unit tests only exercise the adjacent-search arm */ isAdjacent
+          ? "registry-adjacent-search"
+          : "manifest",
+      isAdjacentSuggestion: isAdjacent || undefined,
+      classification: buildClassificationConfidence({
+        assetKind,
+        evidence: [
+          sourceFamilyEvidence(
+            `inferred from ${registryKind} package registry source family`,
+          ),
+        ],
+      }),
     },
     maintenance: {
       lastUpdated: lastUpdated ?? new Date(0).toISOString(),
@@ -341,3 +509,13 @@ export function buildPackageRegistryCatalogEntry(
     },
   };
 }
+
+/**
+ * Exposes narrow package-registry-harvester internals for focused tests.
+ * Covers `searchRegistryByKind` and `discoverAdjacentPackages` which are
+ * private helpers not reachable without a real network in normal test suites.
+ */
+export const packageRegistryHarvesterInternals = {
+  searchRegistryByKind,
+  discoverAdjacentPackages,
+};

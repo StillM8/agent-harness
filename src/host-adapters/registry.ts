@@ -9,6 +9,10 @@ import {
   resolveVsCodeExtensionId,
   type ExtensionInstallAction,
 } from "./extension-installer.js";
+import {
+  isHostInCompatibleHosts,
+  type CompatibleHost,
+} from "./compatibility-matrix.js";
 
 export type { WireMode } from "./types.js";
 
@@ -364,8 +368,20 @@ export function isHostCompatibleWithRecommendationHost(
   entryHosts: HostTarget[],
   recommendationHost: HostTarget,
   assetKind: AssetKind,
+  compatibleHosts?: CompatibleHost[],
 ): boolean {
   const adapter = getAdapterForRecommendationHost(recommendationHost);
+
+  // Cross-host compatibility metadata takes precedence over the adapter
+  // capability gate: an entry explicitly listed in compatibleHosts should
+  // surface even when the recommendation host's adapter does not yet declare
+  // the assetKind (e.g. new "acp-agent" kind on a host that predates it).
+  if (isHostInCompatibleHosts(compatibleHosts, recommendationHost)) {
+    return true;
+  }
+
+  // Adapter capability gate: reject when the recommendation host's adapter
+  // exists but doesn't handle this assetKind.
   if (
     adapter &&
     !adapter.capabilities.some(
@@ -379,7 +395,11 @@ export function isHostCompatibleWithRecommendationHost(
     return true;
   }
 
-  return adapter ? entryHosts.includes(adapter.lifecycleHost) : false;
+  if (adapter ? entryHosts.includes(adapter.lifecycleHost) : false) {
+    return true;
+  }
+
+  return false;
 }
 
 /**

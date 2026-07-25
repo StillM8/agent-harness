@@ -117,3 +117,9 @@ export const GENERIC_CAPABILITY_TERMS = new Set([
   "tool",
   "tools",
 ]);
+
+/**
+ * Per-signal trust-score boosts applied during catalog entry construction.
+ * Re-exported from the shared ARD module to avoid duplication.
+ */
+export { TRUST_SIGNAL_SCORE_BOOST } from "../ard/types.js";

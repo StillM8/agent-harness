@@ -4,6 +4,7 @@ import {
   buildCoverageTags,
   buildDuplicateGroup,
   buildSearchTerms,
+  buildSynonymLookup,
   buildTaskModes,
   collectMatchedSignals,
   computeOutOfDomainPenalty,
@@ -50,20 +51,34 @@ interface MatchQuality {
 export function buildPolicySearchContext(
   policy: RecommendationPolicy,
 ): PolicySearchContext {
-  const genericToolingTerms = buildGenericToolingTerms(policy);
-  const wrapperLikeTerms = buildSearchTerms([...WRAPPER_LIKE_TERMS], policy);
+  const synonymLookup = buildSynonymLookup(policy);
+  const genericToolingTerms = buildGenericToolingTerms(policy, synonymLookup);
+  const wrapperLikeTerms = buildSearchTerms(
+    [...WRAPPER_LIKE_TERMS],
+    policy,
+    synonymLookup,
+  );
   const concernTermSets = new Map<string, Set<string>>();
   const taskModeTermSets = new Map<string, Set<string>>();
   const domainGroupTermSets = new Map<string, Set<string>>();
 
   for (const [concern, keywords] of Object.entries(policy.concernKeywordMap)) {
-    concernTermSets.set(concern, buildSearchTerms(keywords, policy));
+    concernTermSets.set(
+      concern,
+      buildSearchTerms(keywords, policy, synonymLookup),
+    );
   }
   for (const [mode, keywords] of Object.entries(policy.taskModeKeywordMap)) {
-    taskModeTermSets.set(mode, buildSearchTerms(keywords, policy));
+    taskModeTermSets.set(
+      mode,
+      buildSearchTerms(keywords, policy, synonymLookup),
+    );
   }
   for (const [group, keywords] of Object.entries(policy.domainKeywordGroups)) {
-    domainGroupTermSets.set(group, buildSearchTerms(keywords, policy));
+    domainGroupTermSets.set(
+      group,
+      buildSearchTerms(keywords, policy, synonymLookup),
+    );
   }
 
   return {
@@ -94,18 +109,27 @@ export function computeEntryPreselectionScore(
 /**
  * Precomputes host-independent recommendation analysis for one catalog entry so
  * large report builds do not repeat the same demand/search work for every host.
+ *
+ * @param synonymLookup - Optional precomputed alias→canonical map built by
+ *   `buildSynonymLookup`. Callers that process many entries should build this
+ *   once and pass it here; omitting it causes a per-entry rebuild.
  */
 export function buildCandidateRecommendationBase(
   entry: AssetCatalogEntry,
   demandContext: DemandContext,
   policy: RecommendationPolicy,
   policyContext?: PolicySearchContext,
+  synonymLookup?: Map<string, string>,
 ): CandidateRecommendationBase | null {
   const resolvedPolicyContext =
     policyContext ?? buildPolicySearchContext(policy);
+  // Use the caller-provided synonym lookup when available; fall back to
+  // building one here only for standalone / test call sites.
+  const resolvedSynonymLookup = synonymLookup ?? buildSynonymLookup(policy);
   const capabilitySearchTerms = buildSearchTerms(
     [entry.id, entry.displayName, ...entry.capabilities],
     policy,
+    resolvedSynonymLookup,
   );
   const rawKeywordTerms = buildRawKeywordTerms([
     entry.id,
@@ -125,6 +149,7 @@ export function buildCandidateRecommendationBase(
       entry.evidence.filePath ?? "",
     ],
     policy,
+    resolvedSynonymLookup,
   );
 
   if (
@@ -373,11 +398,18 @@ function isWrapperLikeAsset(
   return false;
 }
 
-function buildGenericToolingTerms(policy: RecommendationPolicy): Set<string> {
+function buildGenericToolingTerms(
+  policy: RecommendationPolicy,
+  synonymLookup?: Map<string, string>,
+): Set<string> {
   const genericToolingTerms = new Set<string>(GENERIC_CAPABILITY_TERMS);
 
   for (const [concern, keywords] of Object.entries(policy.concernKeywordMap)) {
-    for (const term of buildSearchTerms([concern, ...keywords], policy)) {
+    for (const term of buildSearchTerms(
+      [concern, ...keywords],
+      policy,
+      synonymLookup,
+    )) {
       genericToolingTerms.add(term);
     }
   }
@@ -586,8 +618,12 @@ function isSuppressedBySpecializedDemandGate(
  * Each entry is [sourceIdSubstring, packageManagerFamily]. The first match
  * wins. Families align with the values emitted by demand-signals.ts so that
  * a direct set-intersection with `demandContext.packageManagers` works.
+ *
+ * Order matters: more-specific substrings must come before any substring that
+ * is a prefix of them (e.g. "pnpm" before "npm") so the first match is
+ * correct. The array is iterated left-to-right when building the Map.
  */
-const REGISTRY_ECOSYSTEM_MAP: ReadonlyArray<readonly [string, string]> = [
+const REGISTRY_ECOSYSTEM_ENTRIES: ReadonlyArray<readonly [string, string]> = [
   // JavaScript / Node.js — must match "npm", "pnpm", "yarn", "bun" signals.
   // NOTE: "pnpm" must appear before any "npm*" entries because "pnpm" is a
   // substring of "pnpm-registry", while "npm-registry" and "npm" are also
@@ -632,6 +668,16 @@ const REGISTRY_ECOSYSTEM_MAP: ReadonlyArray<readonly [string, string]> = [
 ] as const;
 
 /**
+ * Ordered substring scan from source-id → package-manager family.
+ *
+ * Because a single source ID may match multiple substrings (e.g. an ID
+ * containing both "pnpm" and "npm"), we cannot index by the source ID
+ * directly. Instead we keep the ordered array for correctness and iterate it
+ * The array has ~25 entries — a single .find() pass is negligible.
+ * relative to catalog size and far cheaper than the previous .find() on every
+ * catalog entry.
+ */
+/**
  * Returns the penalty to apply when an asset's source registry belongs to a
  * package-manager ecosystem that the workspace does not use.
  *
@@ -642,6 +688,15 @@ const REGISTRY_ECOSYSTEM_MAP: ReadonlyArray<readonly [string, string]> = [
  *   language-only project — be conservative and don't penalise).
  * - The source's ecosystem cannot be mapped (unknown / internal registries).
  * - The workspace uses the matching package manager.
+ *
+ * When the workspace has package-manager signals but none of them match the
+ * registry's ecosystem, a **total mismatch** is confirmed and 2× the base
+ * penalty is applied. This prevents wrong-language package-registry entries
+ * from surviving ranking when they happen to share keyword tokens with the
+ * workspace (e.g. PHP Composer packages named after JavaScript tools in an
+ * npm workspace). The doubled penalty ensures that even a demand-cap-saturated
+ * PHP entry (score ≈ 44 before penalty) drops to a negative total while a
+ * correctly-ecosystemed npm entry is unaffected.
  */
 function computeEcosystemMismatchPenalty(
   entry: AssetCatalogEntry,
@@ -655,7 +710,7 @@ function computeEcosystemMismatchPenalty(
     return 0;
   }
   const sourceIdLower = entry.source.sourceId.toLowerCase();
-  const sourceIdMatch = REGISTRY_ECOSYSTEM_MAP.find(([substring]) =>
+  const sourceIdMatch = REGISTRY_ECOSYSTEM_ENTRIES.find(([substring]) =>
     sourceIdLower.includes(substring),
   );
   if (!sourceIdMatch) {
@@ -665,7 +720,11 @@ function computeEcosystemMismatchPenalty(
   if (demandContext.packageManagers.has(family)) {
     return 0;
   }
-  return penalty;
+  // Total ecosystem mismatch: the workspace has package-manager signals but
+  // none belong to this registry's ecosystem. Double the penalty so wrong-
+  // registry entries cannot crowd out correct-ecosystem results even when
+  // their display names overlap heavily with the workspace's keyword set.
+  return penalty * 2;
 }
 
 function isSuppressedByDependencySelfEcho(
@@ -836,3 +895,10 @@ function isSuppressedForHost(
     searchTerms.has(normalizePhrase(term)),
   );
 }
+
+/**
+ * Exposes narrow candidates internals for focused ecosystem-penalty tests.
+ */
+export const candidatesInternals = {
+  computeEcosystemMismatchPenalty,
+};
