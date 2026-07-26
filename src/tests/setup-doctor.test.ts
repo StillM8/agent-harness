@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { HostAdapter } from "../host-adapters/registry.js";
+import { runAdapterPreflight } from "../lib/preflight.js";
 import { setupInternals } from "../setup.js";
+import { preflightInternals } from "../lib/preflight.js";
 
 const {
   DOCTOR_ADAPTER_TIMEOUT_MS,
   parsePositiveIntegerEnv,
   runDoctorWithAdapters,
 } = setupInternals;
+
+const { checkRuntimeCommand, runRuntimeCommand } = preflightInternals;
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -228,4 +232,177 @@ void test("runDoctorWithAdapters: results array preserves one entry per adapter"
   assert.equal(results.length, 3);
   const ids = results.map((r) => r.adapterId).sort();
   assert.deepEqual(ids, ["res-a", "res-b", "res-c"]);
+});
+
+void test(
+  "runDoctorWithAdapters: cumulative AbortSignal fires before adapter preflights complete",
+  { timeout: 10_000 },
+  async () => {
+    // Force the cumulative AbortSignal to fire before any adapter preflight
+    // can complete by setting cumulativeTimeoutMs = 1 and constructing an
+    // adapter whose preflight infrastructure never resolves (via a Promise
+    // that outlives the signal). The cumulative timeout Promise.race catch
+    // branch must surface a warning diagnostic with code
+    // `${adapter.id}-cumulative-timeout`.
+
+    const cumulativeTimeoutMs = 1;
+    const adapterTimeoutMs = 1;
+    const adapterId = "cumulative-timeout-test";
+
+    // Build an adapter whose preflight spawns a real long-running process
+    // (node blocking forever) so the cumulative timeout exercises an
+    // in-flight spawn kill rather than just executable-discovery ENOENT.
+    const adapter: HostAdapter = {
+      ...buildNoRuntimeAdapter(adapterId),
+      runtime: {
+        executable: process.execPath,
+        versionArgs: ["-e", "setTimeout(()=>{},60000)"],
+      },
+    };
+
+    const { results } = await runDoctorWithAdapters(
+      [adapter],
+      adapterTimeoutMs,
+      undefined,
+      cumulativeTimeoutMs,
+    );
+
+    assert.equal(results.length, 1);
+    const diags = results[0].diagnostics;
+    // The 1ms timeout may fire at several points: the per-adapter signal,
+    // the cumulative signal, or the combined signal inside
+    // runAdapterPreflightWithTimeout. Accept any timeout/skipped diagnostic.
+    const timeoutDiag = diags.find(
+      (d) =>
+        d.code === `${adapterId}-cumulative-timeout` ||
+        d.code === `${adapterId}-doctor-timeout` ||
+        d.code === `${adapterId}-preflight-skipped` ||
+        d.code === `${adapterId}-cli-cancelled` ||
+        d.code === `${adapterId}-version-cancelled`,
+    );
+    assert.ok(
+      timeoutDiag !== undefined,
+      `expected timeout diagnostic, got: ${JSON.stringify(diags)}`,
+    );
+    assert.equal(timeoutDiag.severity, "warning");
+    assert.ok(
+      timeoutDiag.message.includes(`ms`),
+      `message must reference timeout duration, got: "${timeoutDiag.message}"`,
+    );
+    assert.ok(
+      timeoutDiag.action?.includes("AGENT_HARNESS_SETUP_DOCTOR"),
+      `action must reference the timeout env var, got: "${timeoutDiag.action}"`,
+    );
+  },
+);
+
+void test("runAdapterPreflight returns skipped diagnostic when AbortSignal is already aborted", async () => {
+  const adapter = buildNoRuntimeAdapter("pre-aborted");
+  const signal = AbortSignal.abort();
+
+  const diagnostics = await runAdapterPreflight(adapter, signal);
+  assert.ok(diagnostics.length >= 1);
+  const skipped = diagnostics.find(
+    (d) => d.code === "pre-aborted-preflight-skipped",
+  );
+  assert.ok(skipped !== undefined, "expected preflight-skipped diagnostic");
+  assert.equal(skipped.severity, "warning");
+});
+
+void test("runRuntimeCommand returns cancelled when AbortSignal is already aborted", async () => {
+  const signal = AbortSignal.abort();
+  const result = await runRuntimeCommand("echo", ["hello"], signal);
+  assert.equal(result.cancelled, true);
+  assert.equal(result.exitCode, null);
+  assert.ok(result.message.includes("cancelled"));
+});
+
+void test("runRuntimeCommand returns cancelled:false for successful commands", async () => {
+  // On Windows, echo is a cmd builtin — we use node to ensure cross-platform.
+  const result = await runRuntimeCommand(process.execPath, ["-e", ""]);
+  assert.equal(result.cancelled, false);
+  assert.equal(result.exitCode, 0);
+});
+
+void test("runRuntimeCommand maps in-flight ABORT_ERR to cancelled message", async () => {
+  // Abort after a short delay so the process is spawned first.
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 20);
+
+  const result = await runRuntimeCommand(
+    process.execPath,
+    ["-e", "setTimeout(()=>{},30000)"],
+    controller.signal,
+  );
+  assert.equal(result.cancelled, true);
+  assert.equal(result.exitCode, null);
+  assert.ok(
+    result.message.includes("cancelled"),
+    `expected "cancelled" message, got: "${result.message}"`,
+  );
+});
+
+void test("checkRuntimeCommand produces cancellation diagnostic when spawn is aborted mid-flight", async () => {
+  // Abort after a short delay so the process spawns, then gets killed.
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 20);
+
+  const diagnostic = await checkRuntimeCommand({
+    executable: process.execPath,
+    args: ["-e", "setTimeout(()=>{},30000)"],
+    code: "test-abort",
+    failureSeverity: "error",
+    successMessage: "should not appear",
+    failureAction: "should not appear",
+    abortSignal: controller.signal,
+  });
+
+  assert.equal(diagnostic.severity, "warning");
+  assert.ok(
+    diagnostic.code.includes("cancelled"),
+    `expected cancellation code, got: "${diagnostic.code}"`,
+  );
+  assert.ok(
+    diagnostic.message.includes("cancelled"),
+    `expected cancellation message, got: "${diagnostic.message}"`,
+  );
+});
+
+void test("checkRuntimeCommand cancellation diagnostic mentions all three timeout knobs", async () => {
+  const diagnostic = await checkRuntimeCommand({
+    executable: "node",
+    args: ["--version"],
+    code: "test-knobs",
+    failureSeverity: "error",
+    successMessage: "should not appear",
+    failureAction: "should not appear",
+    abortSignal: AbortSignal.abort(),
+  });
+
+  assert.equal(diagnostic.severity, "warning");
+  assert.ok(
+    diagnostic.action?.includes("AGENT_HARNESS_SETUP_DOCTOR_TIMEOUT_MS"),
+    `must mention cumulative timeout, got: "${diagnostic.action}"`,
+  );
+  assert.ok(
+    diagnostic.action?.includes("AGENT_HARNESS_SETUP_DOCTOR_HOST_TIMEOUT_MS"),
+    `must mention per-adapter timeout, got: "${diagnostic.action}"`,
+  );
+  assert.ok(
+    diagnostic.action?.includes("hostCommands.preflightTimeoutMs"),
+    `must mention per-command timeout, got: "${diagnostic.action}"`,
+  );
+});
+
+void test("runDoctorWithAdapters accepts separate cumulativeTimeoutMs", async () => {
+  const adapters = [buildNoRuntimeAdapter("sep-cumulative")];
+  const { results, hasErrors } = await runDoctorWithAdapters(
+    adapters,
+    30_000,
+    undefined,
+    5_000,
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(hasErrors, false);
 });

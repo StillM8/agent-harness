@@ -64,6 +64,8 @@ export async function wireVsCode(options: {
   const hooksRoot = join(generationRoot, "hooks");
   const pluginsRoot = join(generationRoot, "plugins");
   const extensionsRoot = join(generationRoot, "extensions");
+  const promptPacksRoot = join(generationRoot, "prompt-packs");
+  const referencePacksRoot = join(generationRoot, "reference-packs");
 
   const preview: WirePreviewManifest = {
     schemaVersion: 1,
@@ -105,6 +107,8 @@ export async function wireVsCode(options: {
   await ensureDirectory(hooksRoot);
   await ensureDirectory(pluginsRoot);
   await ensureDirectory(extensionsRoot);
+  await ensureDirectory(promptPacksRoot);
+  await ensureDirectory(referencePacksRoot);
 
   const sharedMcpAssetIds = await readSharedMcpAssetIdsBestEffort(projectRoot);
 
@@ -115,14 +119,11 @@ export async function wireVsCode(options: {
     hookFiles: [],
     pluginFolders: [],
     extensionIds: [],
+    promptPackFiles: [],
+    referencePackFiles: [],
   };
 
   if (profileManifest) {
-    await materializeWorkspaceInstructions(
-      workspaceRoot,
-      activationRoot,
-      profileManifest,
-    );
     materializedPaths = await materializeCuratedFolders(
       activationRoot,
       profileManifest,
@@ -133,9 +134,22 @@ export async function wireVsCode(options: {
         hooksRoot,
         pluginsRoot,
         extensionsRoot,
+        promptPacksRoot,
+        referencePacksRoot,
       },
     );
   }
+
+  // Always materialize workspace instructions so the managed
+  // .github/copilot-instructions.md is created during --apply, matching
+  // the preview's targetPaths. When there are no selected instructions
+  // the file still gets a managed section (empty body) so VS Code/Copilot
+  // recognizes the managed integration point and falls back gracefully.
+  await materializeWorkspaceInstructions(
+    workspaceRoot,
+    activationRoot,
+    profileManifest,
+  );
 
   await writeJsonFile(
     join(generationRoot, "wire-plan.json"),
@@ -241,7 +255,7 @@ async function patchVsCodeUserSettings(paths: {
 async function materializeWorkspaceInstructions(
   workspaceRoot: string,
   activationRoot: string,
-  profileManifest: CopilotWorkspaceProfileManifest,
+  profileManifest: CopilotWorkspaceProfileManifest | null,
 ): Promise<void> {
   const destinationDirectory = join(workspaceRoot, ".github");
   const destinationPath = join(destinationDirectory, "copilot-instructions.md");
@@ -249,7 +263,7 @@ async function materializeWorkspaceInstructions(
 
   const bodyLines: string[] = ["# Agent Harness Copilot instructions", ""];
 
-  for (const instructionId of profileManifest.selectedInstructionIds) {
+  for (const instructionId of profileManifest?.selectedInstructionIds ?? []) {
     const resolvedAsset = await resolveAssetContent({
       activationRoot,
       assetId: instructionId,
@@ -284,6 +298,8 @@ async function materializeCuratedFolders(
     hooksRoot: string;
     pluginsRoot: string;
     extensionsRoot: string;
+    promptPacksRoot: string;
+    referencePacksRoot: string;
   },
 ): Promise<MaterializedVsCodePaths> {
   const instructionFiles = await materializeInstructionFiles(
@@ -316,6 +332,16 @@ async function materializeCuratedFolders(
     activationRoot,
     targets.extensionsRoot,
   );
+  const promptPackFiles = await materializePromptPackFiles(
+    profileManifest.selectedPromptPackIds ?? [],
+    activationRoot,
+    targets.promptPacksRoot,
+  );
+  const referencePackFiles = await materializeReferencePackFiles(
+    profileManifest.selectedReferencePackIds ?? [],
+    activationRoot,
+    targets.referencePacksRoot,
+  );
 
   return {
     instructionFiles,
@@ -324,6 +350,8 @@ async function materializeCuratedFolders(
     hookFiles,
     pluginFolders,
     extensionIds,
+    promptPackFiles,
+    referencePackFiles,
   };
 }
 
@@ -484,6 +512,54 @@ async function materializeExtensionMetadata(
   return materializedExtensionIds;
 }
 
+async function materializePromptPackFiles(
+  assetIds: string[],
+  activationRoot: string,
+  destinationRoot: string,
+): Promise<string[]> {
+  const materializedPaths: string[] = [];
+
+  for (const assetId of assetIds) {
+    const assetData = await readActivationAssetData(activationRoot, assetId);
+    if (!assetData?.content) {
+      continue;
+    }
+
+    const destinationPath = join(
+      destinationRoot,
+      `${sanitizeAssetId(assetId)}.prompts.md`,
+    );
+    await writeTextFile(destinationPath, assetData.content);
+    materializedPaths.push(destinationPath);
+  }
+
+  return materializedPaths;
+}
+
+async function materializeReferencePackFiles(
+  assetIds: string[],
+  activationRoot: string,
+  destinationRoot: string,
+): Promise<string[]> {
+  const materializedPaths: string[] = [];
+
+  for (const assetId of assetIds) {
+    const assetData = await readActivationAssetData(activationRoot, assetId);
+    if (!assetData?.content) {
+      continue;
+    }
+
+    const destinationPath = join(
+      destinationRoot,
+      `${sanitizeAssetId(assetId)}.md`,
+    );
+    await writeTextFile(destinationPath, assetData.content);
+    materializedPaths.push(destinationPath);
+  }
+
+  return materializedPaths;
+}
+
 async function resetVsCodeWireIn(
   workspaceRoot: string,
   curatedRoot: string,
@@ -528,6 +604,10 @@ function buildVsCodeWirePlan(
       buildVsCodeExtensionInstallActions(materializedPaths.extensionIds),
     ),
     hookFiles: materializedPaths.hookFiles.map(toPosixPath),
+    referenceFiles: [
+      ...materializedPaths.promptPackFiles.map(toPosixPath),
+      ...materializedPaths.referencePackFiles.map(toPosixPath),
+    ],
     notes: [
       "User-scoped AI path settings are patched in VS Code settings.json.",
       "Workspace copilot instructions are materialized locally for Copilot consumption.",
@@ -731,6 +811,8 @@ interface MaterializedVsCodePaths {
   hookFiles: string[];
   pluginFolders: string[];
   extensionIds: string[];
+  promptPackFiles: string[];
+  referencePackFiles: string[];
 }
 
 /**
@@ -833,6 +915,8 @@ function toLoggableErrorMessage(error: unknown): string {
 export const vscodeWireInternals = {
   inferPluginFileName,
   isManagedCodeGenerationEntry,
+  materializePromptPackFiles,
+  materializeReferencePackFiles,
   pruneVsCodeGenerationDirectories,
   stripManagedCodeGenerationInstructions,
   stripManagedVsCodeLocationEntries,

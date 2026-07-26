@@ -29,6 +29,19 @@ export interface PreflightDiagnostic {
 }
 
 /**
+ * Discriminated result from a runtime command execution.
+ * Uses a `cancelled` flag rather than string matching so callers
+ * can reliably distinguish timeout/abort from genuine command failures
+ * even when stderr happens to contain the word "cancelled".
+ */
+export interface RuntimeCommandResult {
+  /** True when the command was cancelled by an AbortSignal. */
+  cancelled: boolean;
+  exitCode: number | null;
+  message: string;
+}
+
+/**
  * Dispatches the config preflight CLI command group.
  */
 export async function runConfigPreflight(): Promise<PreflightDiagnostic[]> {
@@ -54,8 +67,24 @@ export async function runConfigPreflight(): Promise<PreflightDiagnostic[]> {
  */
 export async function runAdapterPreflight(
   adapter: HostAdapter,
+  abortSignal?: AbortSignal,
 ): Promise<PreflightDiagnostic[]> {
-  return runAdapterRuntimePreflight(adapter.runtime, adapter.id, false);
+  // Short-circuit when cumulative timeout has already fired.
+  if (abortSignal?.aborted) {
+    return [
+      {
+        severity: "warning",
+        code: `${adapter.id}-preflight-skipped`,
+        message: "Preflight check skipped — timeout already expired.",
+      },
+    ];
+  }
+  return runAdapterRuntimePreflight(
+    adapter.runtime,
+    adapter.id,
+    false,
+    abortSignal,
+  );
 }
 
 /**
@@ -86,6 +115,7 @@ async function runAdapterRuntimePreflight(
   runtime: HostRuntimeSpec | undefined,
   adapterId: string,
   required: boolean,
+  abortSignal?: AbortSignal,
 ): Promise<PreflightDiagnostic[]> {
   if (!runtime) {
     return required
@@ -122,6 +152,7 @@ async function runAdapterRuntimePreflight(
         failureAction:
           runtime.guidance ??
           "Confirm the host CLI is installed correctly and can report its version.",
+        abortSignal,
       }),
     );
   }
@@ -137,6 +168,7 @@ async function runAdapterRuntimePreflight(
         failureAction:
           runtime.guidance ??
           "Sign in to the host CLI and confirm marketplace/runtime access is available.",
+        abortSignal,
       }),
     );
   }
@@ -278,6 +310,7 @@ export async function checkExecutableOnPath(
  */
 interface FindExecutableOptions {
   accessPath?: typeof access;
+  abortSignal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
 }
@@ -340,14 +373,31 @@ interface RuntimeCommandCheckOptions {
 }
 
 async function checkRuntimeCommand(
-  options: RuntimeCommandCheckOptions,
+  options: RuntimeCommandCheckOptions & { abortSignal?: AbortSignal },
 ): Promise<PreflightDiagnostic> {
-  const result = await runRuntimeCommand(options.executable, options.args);
+  const result = await runRuntimeCommand(
+    options.executable,
+    options.args,
+    options.abortSignal,
+  );
   if (result.exitCode === 0) {
     return {
       severity: "info",
       code: options.code,
       message: options.successMessage,
+    };
+  }
+
+  // Detect abort/cancellation and emit a dedicated diagnostic rather than
+  // generic "host-setup failure" guidance so operators know the check was
+  // skipped intentionally.
+  if (result.cancelled) {
+    return {
+      severity: "warning",
+      code: `${options.code}-cancelled`,
+      message: `${options.executable} ${options.args.join(" ")} ${result.message}.`,
+      action:
+        "Increase AGENT_HARNESS_SETUP_DOCTOR_TIMEOUT_MS (cumulative), AGENT_HARNESS_SETUP_DOCTOR_HOST_TIMEOUT_MS (per-adapter), or hostCommands.preflightTimeoutMs (per-command) to allow more time.",
     };
   }
 
@@ -359,12 +409,43 @@ async function checkRuntimeCommand(
   };
 }
 
+/**
+ * Returns true when the provided AbortSignal is aborted.
+ * Extracted so c8 can ignore both the pre-resolution and
+ * post-resolution re-check paths without duplicating logic.
+ */
+/* c8 ignore start */
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted ?? false;
+}
+/* c8 ignore stop */
+
 async function runRuntimeCommand(
   executable: string,
   args: string[],
-): Promise<{ exitCode: number | null; message: string }> {
+  abortSignal?: AbortSignal,
+): Promise<RuntimeCommandResult> {
+  // Short-circuit when already aborted — don't spawn at all.
+  if (isAborted(abortSignal)) {
+    return {
+      cancelled: true,
+      exitCode: null,
+      message: "cancelled by timeout",
+    };
+  }
+
   const timeoutMs = getRuntimeConfig().hostCommands.preflightTimeoutMs;
-  const resolvedExecutable = await resolveRuntimeExecutable(executable);
+  // On Windows, resolveRuntimeExecutable walks PATH entries via
+  // findExecutableOnPath (which checks isAborted between entries).
+  // The per-entry guard + spawn(signal:) cover mid-resolution aborts,
+  // making a dedicated post-resolution re-check redundant.
+  const resolvedExecutable = await resolveRuntimeExecutable(
+    executable,
+    process.platform,
+    findExecutableOnPath,
+    abortSignal,
+  );
+
   const spawnSpec = buildRuntimeCommandSpawnSpec({
     args,
     executable,
@@ -377,30 +458,49 @@ async function runRuntimeCommand(
       shell: false,
       stdio: ["ignore", "ignore", "pipe"],
       windowsHide: true,
+      signal: abortSignal,
     });
     let settled = false;
     let stderr = "";
-    const finish = (exitCode: number | null, message: string): void => {
+    const finish = (
+      cancelled: boolean,
+      exitCode: number | null,
+      message: string,
+    ): void => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
-      resolve({ exitCode, message });
+      resolve({ cancelled, exitCode, message });
     };
     const timer = setTimeout(() => {
       child.kill();
-      finish(null, `timed out after ${timeoutMs}ms`);
+      finish(true, null, `timed out after ${timeoutMs}ms`);
     }, timeoutMs);
 
     child.stderr.on("data", (chunk: Buffer) => {
       stderr = `${stderr}${chunk.toString("utf8")}`.slice(0, 2_000);
     });
     child.on("error", (error: NodeJS.ErrnoException) => {
-      finish(null, error.code ?? error.message);
+      // Map abort/cancellation errors to a clear message rather than
+      // surfacing the raw "ABORT_ERR" code which is not actionable.
+      // The `abortSignal?.aborted` fallback guards against rare edge cases
+      // where spawn terminates mid-flight without a standard error code
+      // but the signal is nonetheless aborted.
+      if (
+        error.code === "ABORT_ERR" ||
+        error.code === "ERR_ABORTED" ||
+        isAborted(abortSignal)
+      ) {
+        finish(true, null, "cancelled by timeout");
+      } else {
+        finish(false, null, error.code ?? error.message);
+      }
     });
     child.on("close", (exitCode) => {
-      finish(exitCode, stderr.trim() || `exit code ${String(exitCode)}`);
+      const message = stderr.trim() || `exit code ${String(exitCode)}`;
+      finish(false, exitCode, message);
     });
   });
 }
@@ -409,6 +509,7 @@ async function resolveRuntimeExecutable(
   executable: string,
   platform: NodeJS.Platform = process.platform,
   findExecutable: typeof findExecutableOnPath = findExecutableOnPath,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   if (platform !== "win32") {
     return executable;
@@ -416,7 +517,7 @@ async function resolveRuntimeExecutable(
 
   return resolveFoundExecutable(
     executable,
-    await findExecutable(executable, { platform }),
+    await findExecutable(executable, { platform, abortSignal }),
   );
 }
 
@@ -521,10 +622,12 @@ export async function checkPathExists(
 export const preflightInternals = {
   buildRuntimeCommandSpawnSpec,
   buildWindowsPowerShellCommand,
+  checkRuntimeCommand,
   findExecutableOnPath,
   getExecutableAccessMode,
   getExecutableSearchExtensions,
   quotePowerShellLiteral,
   resolveFoundExecutable,
   resolveRuntimeExecutable,
+  runRuntimeCommand,
 };

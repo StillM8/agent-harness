@@ -15,7 +15,6 @@ import {
 
 /** Default per-adapter wall-clock timeout for `setup doctor` (ms). */
 const DOCTOR_ADAPTER_TIMEOUT_MS = 30_000;
-
 /**
  * Parses a positive integer from an environment variable string, falling back
  * to `defaultValue` when the variable is absent or not a positive integer.
@@ -84,8 +83,29 @@ async function runAdapterPreflightWithTimeout(
   adapter: HostAdapter,
   adapterTimeoutMs: number,
   projectRoot?: string,
+  cumulativeSignal?: AbortSignal,
 ): Promise<PreflightDiagnostic[]> {
   const signal = AbortSignal.timeout(adapterTimeoutMs);
+
+  // Create a combined signal that fires when EITHER the per-adapter timeout
+  // or the cumulative timeout fires. This ensures child processes spawned
+  // during preflight checks are actually killed rather than running in the
+  // background after the doctor has already returned a timeout diagnostic.
+  const combined = new AbortController();
+  const wireSignal = (source: AbortSignal): void => {
+    if (source.aborted) {
+      combined.abort(source.reason);
+      return;
+    }
+    source.addEventListener("abort", () => combined.abort(source.reason), {
+      once: true,
+    });
+  };
+  wireSignal(signal);
+  if (cumulativeSignal) {
+    wireSignal(cumulativeSignal);
+  }
+
   try {
     return await Promise.race([
       (async () => [
@@ -93,7 +113,7 @@ async function runAdapterPreflightWithTimeout(
           requireHostPaths:
             adapter.requiresLifecycleHostPaths ?? adapter.mutatesHostPaths,
         })),
-        ...(await runAdapterPreflight(adapter)),
+        ...(await runAdapterPreflight(adapter, combined.signal)),
         ...(projectRoot
           ? await collectActivatedAssetPrerequisiteDiagnostics(
               projectRoot,
@@ -159,13 +179,84 @@ async function runDoctor(
     DOCTOR_ADAPTER_TIMEOUT_MS,
   );
 
+  // Derive the cumulative default from the resolved per-adapter timeout
+  // plus headroom for the worst-case sequential runtime preflight budget
+  // (two checks at the default hostCommands.preflightTimeoutMs of 10s each).
+  // This ensures the cumulative timeout scales with any user-configured
+  // per-adapter timeout rather than being pinned to a fixed constant.
+  const cumulativeTimeoutMs = parsePositiveIntegerEnv(
+    process.env.AGENT_HARNESS_SETUP_DOCTOR_TIMEOUT_MS,
+    adapterTimeoutMs + 2 * 10_000,
+  );
+
+  // Print progress immediately so the user sees activity — a hung doctor
+  // that prints nothing for 15+ seconds is indistinguishable from a crash.
+  console.error(
+    `Checking host readiness for ${adapters.length} adapter(s) (timeout: ${cumulativeTimeoutMs}ms)...`,
+  );
+
   // Run all adapter preflights concurrently so one stalling CLI does not
   // block the others. Each adapter is individually guarded by a wall-clock
   // timeout; if it fires we emit a synthetic timeout diagnostic and continue.
+  // A cumulative timeout at the top level prevents the overall run from
+  // hanging indefinitely even when all adapters collectively exceed budget.
+  const cumulativeSignal = AbortSignal.timeout(cumulativeTimeoutMs);
   const adapterResults = await Promise.allSettled(
-    adapters.map(async (adapter) =>
-      runAdapterPreflightWithTimeout(adapter, adapterTimeoutMs, projectRoot),
-    ),
+    adapters.map(async (adapter) => {
+      const adapterLabel = `${adapter.displayName} (${adapter.id})`;
+      console.error(`  Checking ${adapterLabel}...`);
+      try {
+        const result = await Promise.race([
+          runAdapterPreflightWithTimeout(
+            adapter,
+            adapterTimeoutMs,
+            projectRoot,
+            cumulativeSignal,
+          ),
+          // Reject immediately when cumulativeSignal is already aborted,
+          // then register listener with once: true so it cleans up after firing.
+          new Promise<never>((_, reject) => {
+            if (cumulativeSignal.aborted) {
+              reject(
+                cumulativeSignal.reason ??
+                  new DOMException("Timeout", "TimeoutError"),
+              );
+              return;
+            }
+            cumulativeSignal.addEventListener(
+              "abort",
+              () =>
+                reject(
+                  cumulativeSignal.reason ??
+                    new DOMException("Timeout", "TimeoutError"),
+                ),
+              { once: true },
+            );
+          }).catch((): never => {
+            // Late rejection after Promise.race resolution —
+            // intentionally swallowed to prevent unhandled rejection.
+            return undefined as never;
+          }),
+        ]);
+        return result;
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "TimeoutError") {
+          console.error(
+            `    timed out after ${cumulativeTimeoutMs}ms cumulative budget`,
+          );
+          return [
+            {
+              severity: "warning",
+              code: `${adapter.id}-cumulative-timeout`,
+              message: `Preflight check timed out after cumulative timeout of ${cumulativeTimeoutMs}ms.`,
+              action:
+                "Increase AGENT_HARNESS_SETUP_DOCTOR_TIMEOUT_MS or check for hanging host processes.",
+            },
+          ] satisfies PreflightDiagnostic[];
+        }
+        throw err;
+      }
+    }),
   );
 
   let hasErrors = false;
@@ -376,18 +467,26 @@ function printSetupHelp(): void {
 export const setupInternals = {
   DOCTOR_ADAPTER_TIMEOUT_MS,
   parsePositiveIntegerEnv,
-  /** Run the doctor loop over an explicit adapter list with an explicit timeout. */
+  /** Run the doctor loop over an explicit adapter list with separate timeouts. */
   async runDoctorWithAdapters(
     adapters: HostAdapter[],
     adapterTimeoutMs: number,
     projectRoot?: string,
+    cumulativeTimeoutMs?: number,
   ): Promise<{
     hasErrors: boolean;
     results: Array<{ adapterId: string; diagnostics: PreflightDiagnostic[] }>;
   }> {
+    const effectiveCumulativeMs = cumulativeTimeoutMs ?? adapterTimeoutMs;
+    const cumulativeSignal = AbortSignal.timeout(effectiveCumulativeMs);
     const adapterResults = await Promise.allSettled(
       adapters.map(async (adapter) =>
-        runAdapterPreflightWithTimeout(adapter, adapterTimeoutMs, projectRoot),
+        runAdapterPreflightWithTimeout(
+          adapter,
+          adapterTimeoutMs,
+          projectRoot,
+          cumulativeSignal,
+        ),
       ),
     );
 

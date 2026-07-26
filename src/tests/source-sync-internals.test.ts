@@ -5,6 +5,7 @@ import { clearRuntimeConfigForTests } from "../config/runtime.js";
 import { buildCatalogId } from "../domains/discovery/catalog-utils.js";
 import type { SourceSyncSourceState } from "../domains/discovery/source-sync.js";
 import { sourceSyncInternals } from "../domains/discovery/source-sync.js";
+import { htmlSyncInternals } from "../domains/discovery/source-sync/html.js";
 import type {
   AssetCatalogEntry,
   SelectionRegistry,
@@ -1397,6 +1398,84 @@ function xmlResponse(lines: string[]): Response {
     headers: { "content-type": "application/xml; charset=utf-8" },
   });
 }
+
+void test("normalizeSitemapCursorId normalizes skills.sh to www.skills.sh", () => {
+  const { normalizeSitemapCursorId } = htmlSyncInternals;
+
+  // skills.sh → www.skills.sh
+  assert.equal(
+    normalizeSitemapCursorId("https://skills.sh/sitemap-skills-1.xml"),
+    "https://www.skills.sh/sitemap-skills-1.xml",
+  );
+
+  // www.skills.sh stays canonical
+  assert.equal(
+    normalizeSitemapCursorId("https://www.skills.sh/sitemap-skills-1.xml"),
+    "https://www.skills.sh/sitemap-skills-1.xml",
+  );
+
+  // Other domains pass through unchanged
+  assert.equal(
+    normalizeSitemapCursorId("https://pypi.org/00.sitemap.xml"),
+    "https://pypi.org/00.sitemap.xml",
+  );
+
+  // Non-URL cursor IDs pass through unchanged
+  assert.equal(normalizeSitemapCursorId("page"), "page");
+  assert.equal(normalizeSitemapCursorId(""), "");
+});
+
+void test("normalizeSitemapCursorId preserves query strings and paths", () => {
+  const { normalizeSitemapCursorId } = htmlSyncInternals;
+
+  assert.equal(
+    normalizeSitemapCursorId("https://skills.sh/sitemap-skills-1.xml?foo=bar"),
+    "https://www.skills.sh/sitemap-skills-1.xml?foo=bar",
+  );
+});
+
+void test("normalizeSitemapCursorId enables resume from old-host cursor IDs after migration", () => {
+  // Regression: when skills-sh migrated from skills.sh → www.skills.sh,
+  // previously persisted cursors keyed by the old hostname must still be
+  // found by the normalized lookup so sync progress is preserved.
+  const { normalizeSitemapCursorId } = htmlSyncInternals;
+
+  // Old cursor persisted before migration.
+  const oldCursor = {
+    cursorId: "https://skills.sh/sitemap-skills-1.xml",
+    nextToken: "50",
+    completed: false,
+  };
+
+  // New leaf URL discovered after migration.
+  const newSitemapUrl = "https://www.skills.sh/sitemap-skills-1.xml";
+
+  // Normalized keys must match.
+  assert.equal(
+    normalizeSitemapCursorId(oldCursor.cursorId),
+    normalizeSitemapCursorId(newSitemapUrl),
+    "old and new hostname cursors must normalize to the same key",
+  );
+
+  // Verify the normalized key is the canonical www form.
+  assert.equal(
+    normalizeSitemapCursorId(oldCursor.cursorId),
+    "https://www.skills.sh/sitemap-skills-1.xml",
+  );
+
+  // Simulate the Map lookup used by syncSitemapSource: store old cursor,
+  // retrieve by new URL.
+  const cursorMap = new Map<string, typeof oldCursor>();
+  cursorMap.set(normalizeSitemapCursorId(oldCursor.cursorId), oldCursor);
+
+  const found = cursorMap.get(normalizeSitemapCursorId(newSitemapUrl));
+  assert.ok(
+    found !== undefined,
+    "old cursor must be found by normalized lookup",
+  );
+  assert.equal(found.nextToken, "50", "nextToken must be preserved");
+  assert.equal(found.completed, false);
+});
 
 function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), {

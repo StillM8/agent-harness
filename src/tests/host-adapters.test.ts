@@ -75,6 +75,18 @@ void test("native host adapters are registered with expected lifecycle hosts", (
   assert.equal(vscodeAdapter.runtime?.executable, "code");
   assert.equal(vscodeAdapter.nativeInstall?.assetKind, "extension");
   assert.ok(
+    vscodeAdapter.capabilities.some(
+      (capability) => capability.assetKind === "prompt-pack",
+    ),
+    "copilot-vscode adapter must support prompt-pack (#344)",
+  );
+  assert.ok(
+    vscodeAdapter.capabilities.some(
+      (capability) => capability.assetKind === "reference-pack",
+    ),
+    "copilot-vscode adapter must support reference-pack (#344)",
+  );
+  assert.ok(
     vscodeAdapter.capabilities
       .find((capability) => capability.assetKind === "extension")
       ?.behaviors.includes("native-install"),
@@ -86,6 +98,18 @@ void test("native host adapters are registered with expected lifecycle hosts", (
 
   const opencodeAdapter = resolveHostAdapter("opencode");
   assertWireCapabilities(opencodeAdapter, ALL_ASSET_KINDS);
+  assert.ok(
+    opencodeAdapter?.capabilities.some(
+      (capability) => capability.assetKind === "payable-api",
+    ),
+    "OpenCode adapter must support payable-api (#345)",
+  );
+  assert.ok(
+    opencodeAdapter?.capabilities.some(
+      (capability) => capability.assetKind === "acp-agent",
+    ),
+    "OpenCode adapter must support acp-agent (#345)",
+  );
 
   const piAdapter = resolveHostAdapter("pi");
   assert.ok(piAdapter);

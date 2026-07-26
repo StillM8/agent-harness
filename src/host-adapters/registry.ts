@@ -82,6 +82,8 @@ const vscodeCapabilities: HostCapability[] = [
   { assetKind: "workflow", behaviors: ["stage"] },
   { assetKind: "plugin", behaviors: ["stage", "wire"] },
   { assetKind: "hook", behaviors: ["stage", "wire"] },
+  { assetKind: "prompt-pack", behaviors: ["stage", "wire"] },
+  { assetKind: "reference-pack", behaviors: ["stage", "wire"] },
   {
     assetKind: "extension",
     behaviors: ["stage", "native-install", "runtime-validation"],
@@ -100,6 +102,8 @@ const opencodeCapabilities: HostCapability[] = [
   { assetKind: "reference-pack", behaviors: ["stage", "wire"] },
   { assetKind: "extension", behaviors: ["stage", "wire"] },
   { assetKind: "mcp-server", behaviors: ["stage", "wire", "auth-assist"] },
+  { assetKind: "payable-api", behaviors: ["stage", "wire"] },
+  { assetKind: "acp-agent", behaviors: ["stage", "wire"] },
 ];
 
 const cursorCapabilities: HostCapability[] = [

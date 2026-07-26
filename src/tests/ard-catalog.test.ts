@@ -19,6 +19,7 @@ import {
   buildArdUrn,
   deriveArdTrustManifest,
   mapEntryToArd,
+  extractErrorMessage,
   writeArdCatalog,
 } from "../ard-catalog.js";
 
@@ -29,6 +30,15 @@ const { ASSET_KIND_TO_ARD_TYPE, ARD_PUBLISHER_FQDN } = ardCatalogInternals;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+void test("extractErrorMessage returns message from Error instances", () => {
+  assert.equal(extractErrorMessage(new Error("test error")), "test error");
+  assert.equal(
+    extractErrorMessage(new TypeError("type mismatch")),
+    "type mismatch",
+  );
+  assert.equal(extractErrorMessage(new Error("")), "");
+});
 
 type PartialEntry = Partial<AssetCatalogEntry> & {
   id: string;
@@ -472,6 +482,153 @@ void test("committed .well-known/ai-catalog.json conforms to ARD v0.9 schema", a
       entries.length > 0,
       "release gate: generatedAt is populated but entries is empty — regenerate via 'discover ard-export' before publishing",
     );
+  }
+});
+
+void test("writeArdCatalog empty catalog has valid generatedAt ISO-8601 timestamp (#342)", async () => {
+  const root = join(tmpdir(), `agent-harness-ard-empty-ts-${randomUUID()}`);
+
+  try {
+    const discoverDir = join(root, "discover", "output");
+    await mkdir(discoverDir, { recursive: true });
+
+    // Write an empty catalog file — no entries.
+    await writeFile(join(discoverDir, "catalog.selected.jsonl"), "", "utf8");
+
+    const result = await writeArdCatalog(root, "2.0.0");
+    assert.equal(result.entryCount, 0);
+
+    const { readFile } = await import("node:fs/promises");
+    const raw = await readFile(result.filePath, "utf8");
+    const catalog = JSON.parse(raw) as Record<string, unknown>;
+
+    // generatedAt must be a valid ISO-8601 timestamp even for empty catalogs.
+    const generatedAt = catalog["generatedAt"] as string;
+    assert.equal(typeof generatedAt, "string");
+    assert.ok(generatedAt.length > 0, "generatedAt must not be empty");
+    const parsed = new Date(generatedAt);
+    assert.ok(
+      !Number.isNaN(parsed.getTime()),
+      `generatedAt must be a valid ISO-8601 timestamp, got "${generatedAt}"`,
+    );
+    assert.ok(
+      parsed.toISOString() === generatedAt,
+      `generatedAt must be in ISO-8601 format, got "${generatedAt}"`,
+    );
+    assert.equal(catalog["version"], "2.0.0");
+    assert.ok(Array.isArray(catalog["entries"]));
+    assert.equal((catalog["entries"] as Array<unknown>).length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+void test("writeArdCatalog malformed entry error includes asset ID and cause (#343)", async () => {
+  const root = join(tmpdir(), `agent-harness-ard-err-${randomUUID()}`);
+
+  try {
+    const discoverDir = join(root, "discover", "output");
+    await mkdir(discoverDir, { recursive: true });
+
+    // Build a valid entry alongside a corrupt line.
+    const validEntry = buildEntry({
+      id: "valid-test",
+      displayName: "Valid",
+      assetKind: "skill",
+    });
+    const corrupt = '{"id":null,"displayName":"CorruptAsset"}';
+
+    await writeFile(
+      join(discoverDir, "catalog.selected.jsonl"),
+      corrupt + "\n" + JSON.stringify(validEntry) + "\n",
+      "utf8",
+    );
+
+    // Capture console.warn output.
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (message: string) => {
+      warnings.push(message);
+    };
+
+    try {
+      const result = await writeArdCatalog(root, "2.0.0");
+      assert.equal(result.entryCount, 1, "valid entry still exported");
+    } finally {
+      console.warn = origWarn;
+    }
+
+    assert.ok(warnings.length >= 1, "expected at least one warning");
+    const warning = warnings.join("\n");
+    // Warning must identify the malformed entry with its displayName
+    // (falls back from id → displayName → "(unknown)").
+    assert.ok(
+      warning.includes("ard-catalog: skipping malformed entry"),
+      `warning must identify the malformed entry, got: "${warning}"`,
+    );
+    // The fixture has id:null, displayName:"CorruptAsset" → falls back to displayName.
+    assert.ok(
+      warning.includes("CorruptAsset"),
+      `warning must report malformed entry identity as "CorruptAsset", got: "${warning}"`,
+    );
+    // Ensure a non-empty cause is present after the identity.
+    const causeIndex = warning.indexOf("CorruptAsset): ");
+    assert.ok(
+      causeIndex !== -1,
+      `warning must include "CorruptAsset): " prefix before cause, got: "${warning}"`,
+    );
+    const afterPrefix = warning.slice(causeIndex + "CorruptAsset): ".length);
+    assert.ok(
+      afterPrefix.length > 0,
+      `warning must include a non-empty cause after the identity, got: "${warning}"`,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+void test("writeArdCatalog falls back to (unknown) when both id and displayName are missing", async () => {
+  const root = join(tmpdir(), `agent-harness-ard-noidentity-${randomUUID()}`);
+
+  try {
+    const discoverDir = join(root, "discover", "output");
+    await mkdir(discoverDir, { recursive: true });
+
+    // Build a valid entry alongside a completely anonymous corrupt line.
+    const validEntry = buildEntry({
+      id: "valid-entry",
+      displayName: "Valid",
+      assetKind: "skill",
+    });
+    const corrupt = "{}";
+
+    await writeFile(
+      join(discoverDir, "catalog.selected.jsonl"),
+      corrupt + "\n" + JSON.stringify(validEntry) + "\n",
+      "utf8",
+    );
+
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (message: string) => {
+      warnings.push(message);
+    };
+
+    try {
+      const result = await writeArdCatalog(root, "2.0.0");
+      assert.equal(result.entryCount, 1, "valid entry still exported");
+    } finally {
+      console.warn = origWarn;
+    }
+
+    assert.ok(warnings.length >= 1, "expected at least one warning");
+    const warning = warnings.join("\n");
+    assert.ok(
+      warning.includes("(unknown)"),
+      `warning must fall back to "(unknown)" when no id or displayName, got: "${warning}"`,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 
