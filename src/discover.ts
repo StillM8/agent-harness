@@ -77,6 +77,7 @@ import {
   writeRemoteHarvestState,
 } from "./domains/discovery/remote-state.js";
 import { writeSourceHealthReports } from "./domains/discovery/source-health.js";
+import type { SourceHealthReport } from "./domains/discovery/source-health.js";
 import { writeSourceUtilizationReport } from "./domains/discovery/source-utilization.js";
 import { writeSourceVerificationReport } from "./domains/discovery/source-verification.js";
 import { writeUnknownSignalReport } from "./domains/discovery/unknown-signals.js";
@@ -196,7 +197,7 @@ export async function runDiscover(
     case "select": {
       const aiEnrichmentFlags = parseAiEnrichmentFlags(rest);
       logDiscoverPhase("discover select", 1, 1, "Applying selection rules");
-      await generateSelectionOutputs(projectRoot);
+      await generateSelectionOutputs(projectRoot); // flags not applicable in select mode
       return handleAiEnrichmentResult(
         await orchestrateAiEnrichment(projectRoot, {
           trigger: "after-select",
@@ -210,6 +211,8 @@ export async function runDiscover(
     }
     case "full": {
       const aiEnrichmentFlags = parseAiEnrichmentFlags(rest);
+      const quietMode = rest.includes("--quiet");
+      const summaryMode = rest.includes("--summary");
       logDiscoverPhase("discover full", 1, 5, "Scanning workspace demand");
       await generateDemandProfile(workingDirectory, projectRoot);
       logDiscoverPhase("discover full", 2, 5, "Refreshing source index");
@@ -219,7 +222,16 @@ export async function runDiscover(
       logDiscoverPhase("discover full", 4, 5, "Building discovery catalog");
       await generateCatalog(projectRoot);
       logDiscoverPhase("discover full", 5, 5, "Applying selection rules");
-      await generateSelectionOutputs(projectRoot);
+      const result = await generateSelectionOutputs(projectRoot, {
+        quietMode,
+        summaryMode,
+      });
+      if (quietMode || summaryMode) {
+        printSourceHealthSummary(result.sourceHealthReport, {
+          quietMode,
+          summaryMode,
+        });
+      }
       return handleAiEnrichmentResult(
         await orchestrateAiEnrichment(projectRoot, {
           trigger: "after-select",
@@ -497,10 +509,14 @@ function appendCatalogEntries(
   }
 }
 
-async function generateSelectionOutputs(projectRoot: string): Promise<{
+async function generateSelectionOutputs(
+  projectRoot: string,
+  options: { quietMode?: boolean; summaryMode?: boolean } = {},
+): Promise<{
   selectionReport: SelectionReport;
   selectedEntries: AssetCatalogEntry[];
   rejectedEntries: AssetCatalogEntry[];
+  sourceHealthReport: SourceHealthReport;
 }> {
   const selectionRegistry = await readJsonFile<SelectionRegistry>(
     join(projectRoot, "discover", "selections.json"),
@@ -589,28 +605,25 @@ async function generateSelectionOutputs(projectRoot: string): Promise<{
   // Build rejectionSummary — stable reason → count covering 100% of rejections.
   const rejectionSummary = buildRejectionSummary(rejectionLog);
 
-  // sampleRejected — stratified sample of up to 20 entries, guaranteeing at
-  // least one entry per distinct rejection reason so all reasons are visible
-  // in the report even when one reason dominates (e.g. thousands of
-  // demand-relevance rejections swamping the first-N slice).
-  const SAMPLE_SIZE = 20;
+  // sampleRejected — stratified sample of up to REJECTION_SAMPLE_SIZE entries,
+  // guaranteeing at least one entry per distinct rejection reason.
   const sampleRejected: typeof rejectionLog = [];
   const seenReasons = new Set<string>();
-  // Pass 1: take one representative per reason (cap at SAMPLE_SIZE in the
-  // unlikely but possible case where there are more than SAMPLE_SIZE distinct
-  // rejection reasons — prevents the sample from exceeding the intended maximum).
+  // Pass 1: take one representative per reason (cap at REJECTION_SAMPLE_SIZE
+  // in the unlikely but possible case where there are more than
+  // REJECTION_SAMPLE_SIZE distinct rejection reasons).
   for (const entry of rejectionLog) {
-    if (sampleRejected.length >= SAMPLE_SIZE) break;
+    if (sampleRejected.length >= REJECTION_SAMPLE_SIZE) break;
     if (!seenReasons.has(entry.reason)) {
       seenReasons.add(entry.reason);
       sampleRejected.push(entry);
     }
   }
-  // Pass 2: top up to SAMPLE_SIZE with the earliest un-sampled entries.
+  // Pass 2: top up to REJECTION_SAMPLE_SIZE with the earliest un-sampled entries.
   // Use a Set of sampled object references so the membership check stays O(1).
   const sampledSet = new Set(sampleRejected);
   for (const entry of rejectionLog) {
-    if (sampleRejected.length >= SAMPLE_SIZE) break;
+    if (sampleRejected.length >= REJECTION_SAMPLE_SIZE) break;
     if (!sampledSet.has(entry)) {
       sampleRejected.push(entry);
       sampledSet.add(entry);
@@ -629,6 +642,10 @@ async function generateSelectionOutputs(projectRoot: string): Promise<{
     inputCount: catalogEntries.length,
     selectedCount: sortedSelectedEntries.length,
     rejectedCount: sortedRejectedEntries.length,
+    acceptanceRate: computeAcceptanceRate(
+      catalogEntries.length,
+      sortedSelectedEntries.length,
+    ),
     duplicateDecisions: duplicateDecisions.sort((left, right) =>
       left.duplicateGroup.localeCompare(right.duplicateGroup),
     ),
@@ -681,9 +698,11 @@ async function generateSelectionOutputs(projectRoot: string): Promise<{
   console.log(
     `Source verification report written (${sourceVerificationReport.demotedSourceCount} deterministic demotions)`,
   );
-  console.log(
-    `Source health reports written (${sourceHealthReport.severeCount} severe, ${sourceHealthReport.warningCount} warnings)`,
-  );
+  if (!options.quietMode && !options.summaryMode) {
+    console.log(
+      `Source health reports written (${sourceHealthReport.severeCount} severe, ${sourceHealthReport.warningCount} warnings)`,
+    );
+  }
   console.log(
     `Source candidate queue written (${sourceCandidateQueue.candidateCount} candidates, ${sourceCandidateQueue.reviewRequiredCount} review-required)`,
   );
@@ -692,7 +711,52 @@ async function generateSelectionOutputs(projectRoot: string): Promise<{
     selectionReport,
     selectedEntries: sortedSelectedEntries,
     rejectedEntries: sortedRejectedEntries,
+    sourceHealthReport,
   };
+}
+
+/**
+ * Prints a filtered or summarized source health summary based on mode flags.
+ * Only called when `--quiet` or `--summary` is active on `discover full`.
+ *
+ * - `--quiet`: suppresses expected warnings; prints only errors or all-clear.
+ * - `--summary`: prints aggregate warning breakdown by reason.
+ */
+function printSourceHealthSummary(
+  report: SourceHealthReport,
+  options: { quietMode: boolean; summaryMode: boolean },
+): void {
+  if (options.quietMode) {
+    if (report.severeCount > 0) {
+      console.log(
+        `Source health: ${report.severeCount} severe issue(s) require attention (${report.warningCount} warnings suppressed by --quiet).`,
+      );
+    } else {
+      console.log(
+        `Source health: all clear (${report.warningCount} warnings suppressed by --quiet).`,
+      );
+    }
+    return;
+  }
+
+  if (options.summaryMode) {
+    const byReason = new Map<string, number>();
+    // Aggregate warnings only (exclude errors) — the summary is about
+    // warning noise reduction, not about error diagnosis.
+    for (const source of report.sources) {
+      if (source.severity !== "warning") continue;
+      for (const reason of source.reasons) {
+        byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
+      }
+    }
+    const lines = [...byReason.entries()]
+      .sort(([, a], [, b]) => b - a)
+      .map(([reason, count]) => `  ${count} sources: ${reason}`);
+    console.log(
+      `Source health: ${report.severeCount} severe, ${report.warningCount} warnings — breakdown:` +
+        (lines.length > 0 ? `\n${lines.join("\n")}` : " none"),
+    );
+  }
 }
 
 function parseAiEnrichmentFlags(args: readonly string[]): {
@@ -1091,6 +1155,12 @@ export function applyPerSourceCap(
 const SOURCE_DIVERSITY_WARNING_THRESHOLD = 0.2;
 
 /**
+ * Maximum number of sample rejected entries in SelectionReport.sampleRejected.
+ * Guarantees at least one entry per distinct rejection reason.
+ */
+const REJECTION_SAMPLE_SIZE = 20;
+
+/**
  * Returns a human-readable warning when any single source contributes more
  * than 20% of the provided (already-capped) selected entries.  Returns
  * `undefined` when the set is well-diversified or empty.
@@ -1127,9 +1197,25 @@ export function computeSourceDiversityWarning(
 }
 
 /**
+ * Computes the acceptance rate as a fraction 0–1.
+ * Returns 0 when inputCount is 0 to avoid division by zero.
+ * Rounded to 4 decimal places for diagnostic use.
+ */
+export function computeAcceptanceRate(
+  inputCount: number,
+  selectedCount: number,
+): number {
+  if (inputCount === 0) {
+    return 0;
+  }
+  return Number((selectedCount / inputCount).toFixed(4));
+}
+
+/**
  * Exposes narrow discover internals for focused per-source-cap tests.
  */
 export const discoverInternals = {
   applyPerSourceCap,
+  computeAcceptanceRate,
   computeSourceDiversityWarning,
 };

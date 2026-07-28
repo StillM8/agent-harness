@@ -18,6 +18,9 @@ void test("source health report distinguishes active, dormant, stale, failed, an
     buildSource("dormant-source"),
     buildSource("stale-source"),
     buildSource("failed-source", { kind: "marketplace" }),
+    buildSource("stale-sync-source", { kind: "package-registry" }),
+    buildSource("stale-escalated-source", { kind: "package-registry" }),
+    buildSource("stale-no-meta-source", { kind: "package-registry" }),
     buildSource("docs-source", { kind: "docs" }),
     buildSource("registry-source", { kind: "registry" }),
     buildSource("local-directory-source", { kind: "local-directory" }),
@@ -33,6 +36,9 @@ void test("source health report distinguishes active, dormant, stale, failed, an
   ];
   const selected = [
     buildEntry("selected", "active-source"),
+    buildEntry("stale-sync-selected", "stale-sync-source"),
+    buildEntry("stale-esc-selected", "stale-escalated-source"),
+    buildEntry("stale-nometa-selected", "stale-no-meta-source"),
     buildEntry("docs-selected", "docs-source"),
     buildEntry("registry-selected", "registry-source"),
     buildEntry("local-directory-selected", "local-directory-source"),
@@ -42,6 +48,9 @@ void test("source health report distinguishes active, dormant, stale, failed, an
   const catalog = [
     ...selected,
     ...rejected,
+    buildEntry("stale-sync-catalog", "stale-sync-source"),
+    buildEntry("stale-esc-catalog", "stale-escalated-source"),
+    buildEntry("stale-nometa-catalog", "stale-no-meta-source"),
     buildEntry("active-duplicate-a", "active-source", {
       duplicateGroup: "active-duplicates",
     }),
@@ -78,6 +87,33 @@ void test("source health report distinguishes active, dormant, stale, failed, an
         indexedEntryCount: 0,
         cursors: [],
       },
+      {
+        sourceId: "stale-sync-source",
+        coverageMode: "indexed",
+        status: "stale",
+        indexedEntryCount: 50,
+        reason: "transient fetch failure",
+        cursors: [],
+        consecutiveFailures: 1,
+      },
+      {
+        sourceId: "stale-escalated-source",
+        coverageMode: "indexed",
+        status: "stale",
+        indexedEntryCount: 50,
+        reason: "persistent fetch failure",
+        cursors: [],
+        consecutiveFailures: 3,
+      },
+      {
+        sourceId: "stale-no-meta-source",
+        coverageMode: "indexed",
+        status: "stale",
+        indexedEntryCount: 30,
+        // consecutiveFailures and reason deliberately absent
+        // to exercise the ?? fallback paths in source-health.ts.
+        cursors: [],
+      },
     ],
   };
 
@@ -90,7 +126,7 @@ void test("source health report distinguishes active, dormant, stale, failed, an
   );
 
   assert.equal(report.severeCount, 3);
-  assert.equal(report.warningCount, 3);
+  assert.equal(report.warningCount, 6);
   assert.equal(sourceStatus(report, "active-source"), "active");
   // dormant-source has no syncState entry — it was never synced in this
   // state root, so it should be reported as "never-synced", not "dormant".
@@ -102,6 +138,22 @@ void test("source health report distinguishes active, dormant, stale, failed, an
   );
   assert.equal(sourceStatus(report, "stale-source"), "stale");
   assert.equal(sourceStatus(report, "failed-source"), "broken");
+  assert.equal(sourceStatus(report, "stale-sync-source"), "stale");
+  // stale-sync-source has 1 consecutive failure → warning, not error.
+  assert.equal(sourceEntry(report, "stale-sync-source")?.severity, "warning");
+  // stale-escalated-source has 3 consecutive failures → still warning
+  // (stale status always maps to warning severity).
+  assert.equal(
+    sourceEntry(report, "stale-escalated-source")?.severity,
+    "warning",
+  );
+  // stale-no-meta-source has no consecutiveFailures or reason → ?? fallbacks.
+  assert.ok(
+    sourceEntry(report, "stale-no-meta-source")?.reasons[0]?.includes(
+      "stale data",
+    ),
+    "should use default reason when syncState.reason is absent",
+  );
   assert.equal(sourceStatus(report, "docs-source"), "active");
   assert.equal(sourceStatus(report, "registry-source"), "active");
   assert.equal(sourceEntry(report, "registry-source")?.coverageMode, "sampled");

@@ -178,6 +178,8 @@ const GITHUB_SCP_REPO_URL_PATTERN =
   /^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/iu;
 const GITHUB_SSH_REPO_URL_PATTERN =
   /^ssh:\/\/git@github\.com\/([^/]+)\/(.+?)(?:\.git)?\/?$/iu;
+/** Fallback rate-limit reset window (60 s) for 403/429 without headers. */
+const FALLBACK_RATE_LIMIT_RESET_MS = 60_000;
 let githubRateLimitResetAt: number | null = null;
 let githubHealthUpdateLock: Promise<void> = Promise.resolve();
 
@@ -301,22 +303,11 @@ async function fetchGitHubRepoSnapshotFromCoordinates(options: {
   const healthKey = `${sourceId}:${owner}/${repo}`;
 
   if (isRateLimited()) {
-    const cachedSnapshot = await readGitHubRepoSnapshotCache(cachePath);
-    await updateGitHubSourceHealth(projectRoot, healthKey, {
+    return fallbackToRateLimitCache(cachePath, projectRoot, healthKey, {
       sourceId,
       owner,
       repo,
-      lastAttemptAt: new Date().toISOString(),
-      degradedMode: cachedSnapshot !== null,
-      degradedReason: cachedSnapshot
-        ? "rate-limited-cache-fallback"
-        : "rate-limited-no-cache",
-      usedCacheLastAttempt: cachedSnapshot !== null,
-      lastError: cachedSnapshot ? null : buildRateLimitMessage(),
-      consecutiveFailures: cachedSnapshot ? 0 : 1,
-      lastFailureAt: cachedSnapshot ? null : new Date().toISOString(),
     });
-    return cachedSnapshot;
   }
 
   try {
@@ -324,6 +315,15 @@ async function fetchGitHubRepoSnapshotFromCoordinates(options: {
       `/repos/${owner}/${repo}`,
     );
     if (!repoResponse) {
+      // Distinguish rate-limiting (403/429) from genuine not-found (404).
+      if (isRateLimited()) {
+        return fallbackToRateLimitCache(cachePath, projectRoot, healthKey, {
+          sourceId,
+          owner,
+          repo,
+        });
+      }
+
       await updateGitHubSourceHealth(projectRoot, healthKey, {
         sourceId,
         owner,
@@ -449,6 +449,22 @@ async function fetchGitHubJsonOptional<T>(path: string): Promise<T | null> {
   const response = await fetchGitHubResponse(path);
 
   if (response.status === 404) {
+    await response.body?.cancel();
+    return null;
+  }
+
+  // Rate-limiting: 403 (secondary rate limit) and 429 (primary) are
+  // transient — return null so callers can skip the repo gracefully
+  // instead of crashing the entire maintenance pipeline.
+  if (response.status === 403 || response.status === 429) {
+    captureRateLimit(response);
+    // When rate-limit headers are absent (e.g. permission 403s), set a
+    // fallback reset timestamp so isRateLimited() returns true and callers
+    // use cache fallback instead of treating this as repo-not-found.
+    if (!isRateLimited()) {
+      githubRateLimitResetAt = Date.now() + FALLBACK_RATE_LIMIT_RESET_MS;
+    }
+    await response.body?.cancel();
     return null;
   }
 
@@ -557,11 +573,18 @@ function buildGitHubHeaders(): HeadersInit {
 function captureRateLimit(response: Response): void {
   const remainingHeader = response.headers.get("x-ratelimit-remaining");
   const resetHeader = response.headers.get("x-ratelimit-reset");
+  const retryAfterHeader = response.headers.get("retry-after");
 
   if (remainingHeader === "0" && resetHeader) {
     const resetAtSeconds = Number(resetHeader);
     if (!Number.isNaN(resetAtSeconds)) {
       githubRateLimitResetAt = resetAtSeconds * 1000;
+    }
+  } else if (retryAfterHeader) {
+    // GitHub secondary rate limits use Retry-After instead of x-ratelimit-*.
+    const retryAfterSeconds = Number(retryAfterHeader);
+    if (!Number.isNaN(retryAfterSeconds)) {
+      githubRateLimitResetAt = Date.now() + retryAfterSeconds * 1000;
     }
   }
 }
@@ -711,6 +734,32 @@ async function waitForRetry(
   await new Promise((resolve) => {
     setTimeout(resolve, delayMs);
   });
+}
+
+/**
+ * Shared rate-limit cache fallback: reads the cached snapshot (if any),
+ * updates GitHub source health, and returns the cached snapshot.
+ */
+async function fallbackToRateLimitCache(
+  cachePath: string,
+  projectRoot: string,
+  healthKey: string,
+  ids: { sourceId: string; owner: string; repo: string },
+): Promise<GitHubRepoSnapshot | null> {
+  const cachedSnapshot = await readGitHubRepoSnapshotCache(cachePath);
+  await updateGitHubSourceHealth(projectRoot, healthKey, {
+    ...ids,
+    lastAttemptAt: new Date().toISOString(),
+    degradedMode: cachedSnapshot !== null,
+    degradedReason: cachedSnapshot
+      ? "rate-limited-cache-fallback"
+      : "rate-limited-no-cache",
+    usedCacheLastAttempt: cachedSnapshot !== null,
+    lastError: cachedSnapshot ? null : buildRateLimitMessage(),
+    consecutiveFailures: cachedSnapshot ? 0 : 1,
+    lastFailureAt: cachedSnapshot ? null : new Date().toISOString(),
+  });
+  return cachedSnapshot;
 }
 
 function buildRateLimitMessage(): string {

@@ -21,6 +21,7 @@ import {
   mapEntryToArd,
   extractErrorMessage,
   writeArdCatalog,
+  type PrettierFormatter,
 } from "../ard-catalog.js";
 
 import type { AssetCatalogEntry, AssetKind } from "../types.js";
@@ -694,6 +695,90 @@ void test("writeArdCatalog resolves version from package.json when present", asy
     const raw = await readFile(result.filePath, "utf8");
     const catalog = JSON.parse(raw) as Record<string, unknown>;
     assert.equal(catalog["version"], "3.0.0-test");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// ── #348: Prettier-unavailable coverage ─────────────────────────────────
+
+void test("writeArdCatalog gracefully handles Prettier import failure (#348)", async () => {
+  const root = join(tmpdir(), `agent-harness-test-${randomUUID()}`);
+  const catalogPath = join(
+    root,
+    "discover",
+    "output",
+    "catalog.selected.jsonl",
+  );
+  const pkgPath = join(root, "package.json");
+
+  await mkdir(catalogPath.replace("catalog.selected.jsonl", ""), {
+    recursive: true,
+  });
+  // Write a minimal valid catalog entry as JSONL.
+  const minimalEntry = {
+    id: "test-skill",
+    displayName: "Test Skill",
+    assetKind: "skill",
+    hosts: ["shared"],
+    compatibilityMode: "native",
+    source: {
+      sourceId: "test-source",
+      sourceKind: "repo",
+      registryKind: undefined,
+      publisherName: "Test",
+      category: "tools",
+      authorityTier: "trusted-community",
+      sourcePriority: 70,
+      originUrl: "https://example.com",
+      publisher: "Test",
+      publisherVerified: false,
+    },
+    trust: { score: 80, signals: ["test"], breakdown: {} },
+    capabilities: ["testing"],
+    install: { installMethod: "manual" },
+    evidence: {
+      classification: { source: "test", strength: "strong", detail: "test" },
+    },
+    maintenance: { lastUpdated: new Date().toISOString() },
+    dedupe: {},
+    score: 80,
+    demand: 30,
+    authority: 30,
+    popularity: 20,
+    freshness: 0,
+    security: 0,
+    compatibility: 0,
+    tokens: [],
+    ecosystems: [],
+    tags: [],
+    platforms: [],
+    languageSupport: [],
+    description: "",
+    descriptionTokens: [],
+    harvestTimestamp: 0,
+    kind: "skill",
+  };
+  await writeFile(catalogPath, `${JSON.stringify(minimalEntry)}\n`, "utf8");
+  await writeFile(pkgPath, JSON.stringify({ version: "2.0.0" }), "utf8");
+
+  // Inject a failing prettier formatter to exercise the catch block.
+  const failingImport: PrettierFormatter = async () => {
+    throw new Error("prettier module not installed");
+  };
+
+  try {
+    const result = await writeArdCatalog(root, "2.0.0", failingImport);
+
+    assert.ok(result.filePath, "output path should be returned");
+    assert.equal(result.entryCount, 1, "entry count should be 1");
+
+    // Read back to confirm valid JSON was written even without Prettier.
+    const { readFile } = await import("node:fs/promises");
+    const raw = await readFile(result.filePath, "utf8");
+    const catalog = JSON.parse(raw) as Record<string, unknown>;
+    assert.equal(catalog["version"], "2.0.0");
+    assert.equal((catalog["entries"] as Array<unknown>).length, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

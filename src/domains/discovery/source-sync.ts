@@ -49,6 +49,7 @@ import {
 import {
   fetchRequiredText,
   fetchRequiredJson,
+  isNonTransientError,
   resolveSitemapLeafUrls,
   parseSitemapIndex,
   parseUrlSet,
@@ -64,6 +65,9 @@ import {
   getNumber,
   stringifyUnknown,
   getErrorMessage,
+  hasHttpStatus,
+  NonTransientFetchError,
+  fetchWithRetry,
 } from "./source-sync/fetching.js";
 import {
   buildDisplayNameFromUrl,
@@ -148,4 +152,9 @@ export const sourceSyncInternals = {
   stringifyUnknown,
   getErrorMessage,
   allPreviousCursorsCompleted,
+  hasHttpStatus,
+  NonTransientFetchError,
+  isNonTransientError,
+
+  fetchWithRetry,
 };

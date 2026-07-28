@@ -69,7 +69,7 @@ function buildDependencies(
     }),
     readJsonFileOrNull: async () => null,
     runDiscover: async () => {},
-    runRecommend: async () => {},
+    runRecommend: async () => 0,
     runMirror: async () => {},
     runInstall: async () => {},
     runActivate: async () => {},
@@ -98,6 +98,7 @@ void test("runWorkspacePipeline executes lifecycle phases in order and forwards 
       },
       runRecommend: async (args) => {
         calls.push(`recommend:${args.join(" ")}`);
+        return 0;
       },
       runMirror: async (args) => {
         calls.push(`mirror:${args.join(" ")}`);
@@ -190,6 +191,7 @@ void test("runWorkspacePipeline falls back to primary intent and default progres
       },
       runRecommend: async (args) => {
         calls.push(`recommend:${args.join(" ")}`);
+        return 0;
       },
       runMirror: async (args) => {
         calls.push(`mirror:${args.join(" ")}`);
@@ -403,5 +405,65 @@ void test("installBundleBatches rejects bundles that never finish within the bat
       }),
     ),
     /install batching did not complete for bundle 'copilot-core' within the maximum batch count/u,
+  );
+});
+
+// ── #349: pipeline fast-fails when recommend returns non-zero ─────────────
+
+void test("runWorkspacePipeline throws when recommend phase returns non-zero exit code (#349)", async () => {
+  // Simulate a workspace with 0 selected catalog entries — recommend fails.
+  await assert.rejects(
+    runWorkspacePipeline(
+      {
+        projectRoot: "/project",
+        workspaceRoot: "/workspace",
+        targetHost: "copilot-vscode",
+        recommendationHost: "copilot-vscode",
+        sessionIntent: "backend",
+        bundleIds: [],
+      },
+      buildDependencies({
+        runRecommend: async () => 1, // non-zero = failure
+      }),
+    ),
+    (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      return (
+        message.includes("recommend phase failed") &&
+        message.includes("discover full")
+      );
+    },
+    "pipeline should throw a descriptive error when recommend returns non-zero",
+  );
+});
+
+void test("runWorkspacePipeline throws when recommend phase returns non-number (#349)", async () => {
+  // When runRecommend returns a non-number (e.g. void/undefined), the pipeline
+  // should throw explicitly rather than silently treating it as success.
+  await assert.rejects(
+    runWorkspacePipeline(
+      {
+        projectRoot: "/project",
+        workspaceRoot: "/workspace",
+        targetHost: "copilot-vscode",
+        recommendationHost: "copilot-vscode",
+        sessionIntent: "backend",
+        bundleIds: [],
+      },
+      buildDependencies({
+        runRecommend: async () => undefined as unknown as number,
+        readJsonFileOrNull: async <T>(path: string): Promise<T | null> => {
+          if (path.endsWith("acquire-state.json")) {
+            return createAcquireState({
+              mirroredCount: 2,
+              remainingCount: 0,
+              terminal: true,
+            }) as unknown as T;
+          }
+          return null;
+        },
+      }),
+    ),
+    /non-number exit code/,
   );
 });

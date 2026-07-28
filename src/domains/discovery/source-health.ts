@@ -133,6 +133,15 @@ export function buildSourceHealthReport(
         severity = "error";
         suggestedAction = "refresh-sync";
         reasons.push(syncState.reason ?? "source sync failed");
+      } else if (syncState?.status === "stale") {
+        // Transient fetch failure — existing data still usable.
+        // Source-sync marks status "stale" only for failures 1–3
+        // (escalates to "failed" at failure 4), so severity is
+        // always "warning" here.
+        status = "stale";
+        severity = "warning";
+        suggestedAction = "review-source";
+        reasons.push(syncState.reason ?? "source sync is using stale data");
       } else if (catalogCount === 0) {
         severity = "warning";
         suggestedAction = "review-source";

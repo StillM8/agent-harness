@@ -199,6 +199,19 @@ function buildRepresentativeQueries(entry: AssetCatalogEntry): string[] {
 // ---------------------------------------------------------------------------
 
 /**
+ * Formatter function signature for injecting Prettier (or a mock) into
+ * writeArdCatalog for testing the unavailable path.
+ */
+export type PrettierFormatter = (
+  source: string,
+  options: {
+    parser: string;
+    endOfLine: "lf" | "crlf" | "cr" | "auto";
+    trailingComma: "all" | "es5" | "none";
+  },
+) => Promise<string>;
+
+/**
  * Exports the agent-harness catalog to ARD `ai-catalog.json` format.
  *
  * Reads `discover/output/catalog.selected.jsonl` (the selected catalog) and
@@ -207,11 +220,13 @@ function buildRepresentativeQueries(entry: AssetCatalogEntry): string[] {
  *
  * @param projectRoot - Agent-harness project root.
  * @param version - Package version to stamp on the ARD catalog.
+ * @param formatWithPrettier - Injectable formatter (default: Prettier).
  * @returns Path to the written file and entry count.
  */
 export async function writeArdCatalog(
   projectRoot: string,
   version?: string,
+  formatWithPrettier?: PrettierFormatter,
 ): Promise<{ filePath: string; entryCount: number }> {
   // Use dynamic import for ESM compatibility at runtime
   const { readJsonLinesFile } = await import("./files.js");
@@ -278,13 +293,53 @@ export async function writeArdCatalog(
 
   await mkdir(wellKnownDir, { recursive: true });
   const filePath = join(wellKnownDir, "ai-catalog.json");
+  const rawJson = JSON.stringify(catalog, null, 2) + "\n";
+
+  // Format JSON with Prettier so the output passes `npm run format:check`.
+  let formattedJson = rawJson;
+  try {
+    const fmt = formatWithPrettier ?? defaultPrettierFormatter;
+    formattedJson = await fmt(rawJson, {
+      parser: "json",
+      endOfLine: "lf",
+      trailingComma: "all",
+    });
+  } catch (err: unknown) {
+    // Prettier unavailable — write unformatted JSON. This happens when the
+    // CLI is used outside a development environment (e.g., after `npm pack`
+    // strips devDependencies). Log the cause so operators can distinguish
+    // "intentionally unformatted" from "formatting error".
+    const reason =
+      // Non-Error throw path is defensive — JS allows throwing primitives.
+      /* c8 ignore next */
+      err instanceof Error ? err.message : String(err ?? "unknown error");
+    console.warn(
+      `ard-catalog: Prettier formatting skipped (${reason}). JSON output is valid but may not pass prettier --check.`,
+    );
+  }
+
   // Atomic write: write to temp file first, then rename. Prevents
   // a crash from leaving a partial ai-catalog.json on disk.
   const tempPath = `${filePath}.tmp-${Math.random().toString(36).slice(2, 8)}`;
-  await writeFile(tempPath, JSON.stringify(catalog, null, 2) + "\n", "utf8");
+  await writeFile(tempPath, formattedJson, "utf8");
   await rename(tempPath, filePath);
 
   return { filePath, entryCount: ardEntries.length };
+}
+
+/**
+ * Default Prettier formatter using the actual prettier module.
+ */
+async function defaultPrettierFormatter(
+  source: string,
+  options: {
+    parser: string;
+    endOfLine: "lf" | "crlf" | "cr" | "auto";
+    trailingComma: "all" | "es5" | "none";
+  },
+): Promise<string> {
+  const prettier = await import("prettier");
+  return prettier.format(source, options);
 }
 
 /**

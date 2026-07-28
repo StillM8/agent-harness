@@ -9,6 +9,8 @@ import {
   runNativeInstallPreflight,
 } from "../lib/preflight.js";
 
+const { isAborted } = preflightInternals;
+
 void test("adapter runtime preflight is driven by adapter metadata", async () => {
   const diagnostics = await runAdapterPreflight(buildFakeAdapter());
 
@@ -115,6 +117,37 @@ void test("executable preflight handles empty PATH and default Windows extension
       process.env.PATHEXT = originalPathext;
     }
   }
+});
+
+// ── isAborted coverage (#355) ──────────────────────────────────────────
+
+void test("isAborted: returns false when signal is undefined", () => {
+  assert.equal(isAborted(undefined), false);
+});
+
+void test("isAborted: returns false when signal is not aborted", () => {
+  const controller = new AbortController();
+  assert.equal(isAborted(controller.signal), false);
+});
+
+void test("isAborted: returns true when signal is aborted", () => {
+  const controller = new AbortController();
+  controller.abort();
+  assert.equal(isAborted(controller.signal), true);
+});
+
+void test("runAdapterPreflight returns skipped diagnostic when abort signal is already aborted", async () => {
+  const controller = new AbortController();
+  controller.abort();
+
+  const diagnostics = await runAdapterPreflight(
+    buildFakeAdapter(),
+    controller.signal,
+  );
+
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0]?.severity, "warning");
+  assert.match(diagnostics[0]?.message ?? "", /preflight check skipped/i);
 });
 
 function buildFakeAdapter(): HostAdapter {

@@ -45,49 +45,175 @@ export const SOURCE_SYNC_HEADERS = {
   Accept: "application/json,text/html,application/xml,text/plain,*/*",
   "User-Agent": "agent-harness",
 };
+/** Maximum retry attempts for transient source-sync fetch failures
+ *  (fetchWithRetry performs 1 initial attempt + up to maxRetries retries). */
+export const SOURCE_SYNC_MAX_RETRIES = 3;
+/** Base backoff delay in ms for source-sync retries (exponential: delay × 2ⁿ). */
+export const SOURCE_SYNC_RETRY_BASE_DELAY_MS = 1_000;
+/** Base of the exponential backoff factor (2ⁿ). */
+const EXPONENTIAL_BACKOFF_BASE = 2;
+/** Minimum HTTP status code for client errors (4xx). */
+const HTTP_STATUS_CLIENT_ERROR_MIN = 400;
+/** Minimum HTTP status code for server errors (5xx). */
+const HTTP_STATUS_SERVER_ERROR_MIN = 500;
 
-// ─── Fetch wrappers ───────────────────────────────────────────────────────────
+// ─── Error classification ─────────────────────────────────────────────────────
 
 /**
- * Fetches the URL as plain text, throwing when the response is null or the
- * request fails the SSRF / byte-limit guards in lib/http.ts.
+ * Error wrapper for failures where retrying is pointless (SSRF rejections,
+ * 4xx client errors, invalid URLs, policy blocks). Callers can use
+ * `instanceof NonTransientFetchError` for reliable error discrimination
+ * instead of fragile string-matching on error messages.
+ */
+export class NonTransientFetchError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, { cause });
+    this.name = "NonTransientFetchError";
+  }
+}
+
+/**
+ * Returns true when `err` is a NonTransientFetchError (explicit marker)
+ * or has a known non-transient HTTP status (4xx range).
+ */
+export function isNonTransientError(err: unknown): boolean {
+  if (err instanceof NonTransientFetchError) {
+    return true;
+  }
+
+  // Guard: JS allows throwing non-Error values. Not testable without
+  // triggering actual runtime throws of primitives/objects.
+  /* c8 ignore next 2 */
+  if (!(err instanceof Error)) {
+    return false;
+  }
+
+  // HTTP status-code based: 4xx client errors are not transient.
+  if (
+    hasHttpStatus(err) &&
+    err.status >= HTTP_STATUS_CLIENT_ERROR_MIN &&
+    err.status < HTTP_STATUS_SERVER_ERROR_MIN
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Type guard: returns true when `err` has a numeric HTTP `status` property.
+ */
+export function hasHttpStatus(err: Error): err is Error & { status: number } {
+  return typeof (err as unknown as Record<string, unknown>).status === "number";
+}
+
+// ─── Shared retry wrapper ──────────────────────────────────────────────────────
+
+/**
+ * Executes `fetchFn`, retrying on transient failures with exponential backoff.
+ *
+ * Non-transient errors (NonTransientFetchError, HTTP 4xx) are rethrown
+ * immediately without retry. Transient errors retry up to `maxRetries` times
+ * with delays of `baseDelayMs × 2ⁿ`.
+ */
+export async function fetchWithRetry<T>(
+  url: string,
+  fetchFn: () => Promise<T>,
+  options: SourceSyncFetchOptions = {},
+): Promise<T> {
+  const maxRetries = Math.max(0, options.maxRetries ?? SOURCE_SYNC_MAX_RETRIES);
+  const baseDelayMs =
+    options.retryBaseDelayMs ?? SOURCE_SYNC_RETRY_BASE_DELAY_MS;
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delayMs = baseDelayMs * EXPONENTIAL_BACKOFF_BASE ** (attempt - 1);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    try {
+      return await fetchFn();
+    } catch (err) {
+      lastError = err;
+      if (isNonTransientError(err)) {
+        throw err;
+      }
+      if (attempt === maxRetries) {
+        throw err;
+      }
+    }
+  }
+  throw lastError;
+}
+
+// ─── Public fetch wrappers ─────────────────────────────────────────────────────
+
+/**
+ * Throws when `value` is null — guarded fetches return null for all
+ * non-OK responses, SSRF rejections, and network errors. Since the
+ * guarded layer doesn't propagate status info, we throw a plain Error
+ * (transient) so fetchWithRetry can retry. The cost of extra retries
+ * on permanent failures (4xx, SSRF) is bounded (~7 s with defaults);
+ * the cost of NOT retrying on transient errors (5xx, timeouts) is
+ * a permanently stale/failed source.
+ */
+function requireNonNull<T>(value: T | null, url: string): T {
+  if (value === null) {
+    throw new Error(`Failed to fetch ${url}`);
+  }
+  return value;
+}
+
+/**
+ * Fetches the URL as plain text with retry-on-transient-failure.
+ * Throws when all retry attempts are exhausted or the request hits a
+ * non-transient failure.
  */
 export async function fetchRequiredText(
   url: string,
   allowedOrigins: readonly string[],
   options: SourceSyncFetchOptions = {},
 ): Promise<string> {
-  const content = await fetchTextWithGuards(url, {
-    allowedOrigins,
-    headers: SOURCE_SYNC_HEADERS,
-    maxBytes: options.maxBytes ?? SOURCE_SYNC_FETCH_MAX_BYTES,
-    timeoutMs: options.timeoutMs ?? SOURCE_SYNC_TIMEOUT_MS,
-  });
-  if (content === null) {
-    throw new Error(`Failed to fetch ${url}`);
-  }
-  return content;
+  return fetchWithRetry(
+    url,
+    async () =>
+      requireNonNull(
+        await fetchTextWithGuards(url, {
+          allowedOrigins,
+          headers: SOURCE_SYNC_HEADERS,
+          maxBytes: options.maxBytes ?? SOURCE_SYNC_FETCH_MAX_BYTES,
+          timeoutMs: options.timeoutMs ?? SOURCE_SYNC_TIMEOUT_MS,
+        }),
+        url,
+      ),
+    options,
+  );
 }
 
 /**
- * Fetches the URL as parsed JSON, throwing when the response is null or the
- * request fails the SSRF / byte-limit guards in lib/http.ts.
+ * Fetches the URL as parsed JSON with retry-on-transient-failure.
+ * Throws when all retry attempts are exhausted or the request hits a
+ * non-transient failure.
  */
 export async function fetchRequiredJson(
   url: string,
   allowedOrigins: readonly string[],
   options: SourceSyncFetchOptions = {},
 ): Promise<unknown> {
-  const content = await fetchJsonWithGuards(url, {
-    allowedOrigins,
-    headers: SOURCE_SYNC_HEADERS,
-    maxBytes: options.maxBytes ?? SOURCE_SYNC_FETCH_MAX_BYTES,
-    timeoutMs: options.timeoutMs ?? SOURCE_SYNC_TIMEOUT_MS,
-  });
-  if (content === null) {
-    throw new Error(`Failed to fetch ${url}`);
-  }
-  return content;
+  return fetchWithRetry(
+    url,
+    async () =>
+      requireNonNull(
+        await fetchJsonWithGuards(url, {
+          allowedOrigins,
+          headers: SOURCE_SYNC_HEADERS,
+          maxBytes: options.maxBytes ?? SOURCE_SYNC_FETCH_MAX_BYTES,
+          timeoutMs: options.timeoutMs ?? SOURCE_SYNC_TIMEOUT_MS,
+        }),
+        url,
+      ),
+    options,
+  );
 }
 
 // ─── Allowed-origin construction ──────────────────────────────────────────────

@@ -179,11 +179,26 @@ export async function runWorkspacePipeline(
     "Ranking recommendations",
     dependencies.writeWorkspaceProgress,
   );
-  await dependencies.runRecommend(
+  const recommendResult = await dependencies.runRecommend(
     ["report", ...resolvedIntents.flatMap((intent) => ["--intent", intent])],
     workspaceRoot,
     projectRoot,
   );
+  const recommendExitCode = recommendResult;
+  if (typeof recommendExitCode !== "number") {
+    throw new Error(
+      "recommend phase returned a non-number exit code — " +
+        "expected 0 for success or non-zero for failure. " +
+        `Got: ${String(recommendExitCode)}`,
+    );
+  }
+  if (recommendExitCode !== 0) {
+    throw new Error(
+      "recommend phase failed — no recommendations could be produced. " +
+        "Run 'discover full' or 'discover select' to build the catalog " +
+        "before running 'recommend'.",
+    );
+  }
   logWorkspacePhase(
     8,
     11,
