@@ -24,7 +24,8 @@ import {
   type PrettierFormatter,
 } from "../ard-catalog.js";
 
-import type { AssetCatalogEntry, AssetKind } from "../types.js";
+import type { AssetKind } from "../types.js";
+import { buildEntry } from "./test-helpers.js";
 
 const { ASSET_KIND_TO_ARD_TYPE, ARD_PUBLISHER_FQDN } = ardCatalogInternals;
 
@@ -40,71 +41,6 @@ void test("extractErrorMessage returns message from Error instances", () => {
   );
   assert.equal(extractErrorMessage(new Error("")), "");
 });
-
-type PartialEntry = Partial<AssetCatalogEntry> & {
-  id: string;
-  displayName: string;
-  assetKind: AssetKind;
-};
-
-function buildEntry(overrides: PartialEntry): AssetCatalogEntry {
-  return {
-    id: overrides.id,
-    displayName: overrides.displayName,
-    assetKind: overrides.assetKind,
-    hosts: overrides.hosts ?? ["claude-code"],
-    compatibilityMode: overrides.compatibilityMode ?? "adaptable",
-    source: {
-      sourceId: overrides.source?.sourceId ?? "test-source",
-      authorityTier: overrides.source?.authorityTier ?? "unverified-community",
-      sourceKind: overrides.source?.sourceKind ?? "repo",
-      sourcePriority: overrides.source?.sourcePriority ?? 70,
-      originUrl: overrides.source?.originUrl ?? "https://example.com/test",
-      publisher: overrides.source?.publisher ?? "test-publisher",
-      publisherVerified: overrides.source?.publisherVerified ?? false,
-    },
-    trust: {
-      score: overrides.trust?.score ?? 50,
-      signals: overrides.trust?.signals ?? [],
-    },
-    capabilities: overrides.capabilities ?? ["test"],
-    install: {
-      method: overrides.install?.method ?? "repo-reference",
-      manifestEntry:
-        overrides.install?.manifestEntry ??
-        "https://example.com/test/manifest.json",
-    },
-    evidence: {
-      manifestFound: overrides.evidence?.manifestFound ?? true,
-      readmeFound: overrides.evidence?.readmeFound ?? true,
-      examplesFound: overrides.evidence?.examplesFound ?? false,
-      docsLinked: overrides.evidence?.docsLinked ?? true,
-      lineCount: overrides.evidence?.lineCount ?? 10,
-      rootPath: overrides.evidence?.rootPath ?? "https://example.com/test",
-      classification: overrides.evidence?.classification ?? null,
-    },
-    maintenance: {
-      lastUpdated: overrides.maintenance?.lastUpdated ?? "2026-01-01T00:00:00Z",
-      stars: overrides.maintenance?.stars ?? 0,
-      releaseCadence: overrides.maintenance?.releaseCadence ?? "occasional",
-    },
-    risk: overrides.risk ?? {
-      hooks: false,
-      execScripts: false,
-      requiresNetwork: false,
-    },
-    contextCost: overrides.contextCost ?? {
-      sizeClass: "tiny",
-      estimatedPromptWeight: 1,
-    },
-    fit: overrides.fit ?? { portfolioFit: 0.5, hostFit: 0.5 },
-    dedupe: overrides.dedupe ?? {
-      duplicateGroup: null,
-      candidateRankHint: 0,
-    },
-    status: overrides.status ?? "fresh",
-  } as AssetCatalogEntry;
-}
 
 // ---------------------------------------------------------------------------
 // buildArdUrn
@@ -255,6 +191,37 @@ void test("mapEntryToArd includes trust manifest when signals present", () => {
   const ard = mapEntryToArd(entry, "test.io", "1.0.0");
   assert.ok(ard.trustManifest != null);
   assert.ok(ard.trustManifest!.attestations!.length >= 2);
+});
+
+void test("mapEntryToArd uses originUrl over manifestEntry for url field (#368)", () => {
+  const entry = buildEntry({
+    id: "url-test-skill",
+    displayName: "URL Test",
+    assetKind: "skill",
+    source: {
+      sourceId: "url-src",
+      authorityTier: "unverified-community",
+      sourceKind: "repo",
+      sourcePriority: 70,
+      originUrl: "https://github.com/test/skills/blob/main/SKILL.md",
+      publisher: "TestPub",
+      publisherVerified: false,
+    },
+    install: {
+      method: "repo-reference",
+      // manifestEntry is typically a git hash, NOT a URL
+      manifestEntry: "a94df09f75fba2f11c63103c3e573c729226a6e0",
+    },
+  });
+
+  const ard = mapEntryToArd(entry, "test.io", "2.0.0");
+  // The url must be the resolvable originUrl, not the git hash
+  assert.equal(ard.url, "https://github.com/test/skills/blob/main/SKILL.md");
+  // It must be an https:// URL, not a hash
+  assert.ok(
+    ard.url.startsWith("https://"),
+    "url must be a resolvable https URL",
+  );
 });
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { stat } from "node:fs/promises";
 
 import {
   listFilesRecursiveWithTelemetry,
@@ -23,8 +24,15 @@ import {
  */
 export async function buildDemandProfile(
   scanRoot: string,
+  options: { maxBytes?: number } = {},
 ): Promise<DemandProfile> {
-  const scanResult = await listFilesRecursiveWithTelemetry(scanRoot);
+  const budgetOptions =
+    options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {};
+  const scanResult = await listFilesRecursiveWithTelemetry(
+    scanRoot,
+    undefined,
+    budgetOptions,
+  );
   const scannedFiles = scanResult.files;
   const evidence: DemandEvidence[] = [];
   const aggregateSignals = createEmptySignalSet();
@@ -78,12 +86,76 @@ export async function buildDemandProfile(
     /* c8 ignore next */
     const reason = scanResult.telemetry.truncationReason ?? "budget-exceeded";
     const mb = (scanResult.telemetry.visitedBytes / 1_048_576).toFixed(1);
+
+    // Compute top directories by byte count for actionable guidance
+    const dirCounts = await computeDirectoryByteCounts(scanRoot, scannedFiles);
+    const topDirs = dirCounts.slice(0, 5);
+
+    let dirGuidance = "";
+    if (topDirs.length > 0) {
+      const dirLines = topDirs.map(
+        (d) => `    ${d.path} (${(d.bytes / 1_048_576).toFixed(1)} MB)`,
+      );
+      dirGuidance = `\n  Top directories by scan bytes:\n${dirLines.join("\n")}\n`;
+    }
+
+    const ignorePath = `${toPosixPath(scanRoot)}/.agent-harnessignore`;
+    const missedSignalNote =
+      evidence.length > 0
+        ? `\n  Note: ${evidence.length} demand signals were recorded before truncation; additional signals may have been missed.`
+        : "";
+
     process.stderr.write(
       `[warn] Demand-signal scan truncated (reason: ${reason}, scanned ${scannedFiles.length} files / ${mb} MB). ` +
-        `Demand profile may be incomplete. ` +
-        `Add large binary/asset directories (e.g. assets/, images/, build/) to .gitignore or .agent-harnessignore to avoid premature truncation.\n`,
+        `Demand profile may be incomplete.${missedSignalNote}\n` +
+        `${dirGuidance}` +
+        `  To fix:\n` +
+        `    • Create ${ignorePath} and add patterns for large directories\n` +
+        `    • Or increase the limit via --max-scan-bytes (or AGENT_HARNESS_SCAN_MAX_BYTES env var, currently ${mb} MB visited)\n` +
+        `    • Run 'discover full' again after excluding unnecessary directories\n`,
     );
   }
 
   return profile;
 }
+
+/**
+ * Computes the top directories by byte count from a list of scanned file
+ * paths. Stats each file to measure actual bytes consumed per top-level
+ * directory. Files that cannot be statted (deleted mid-scan) are skipped.
+ * Used to generate actionable truncation-warning guidance.
+ */
+async function computeDirectoryByteCounts(
+  scanRoot: string,
+  files: string[],
+): Promise<Array<{ path: string; bytes: number }>> {
+  const dirBytes = new Map<string, number>();
+  const CONCURRENCY = 8;
+
+  for (let i = 0; i < files.length; i += CONCURRENCY) {
+    const batch = files.slice(i, i + CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map(async (filePath) => {
+        const relative = toRelativePosixPath(scanRoot, filePath);
+        const firstSegment = relative.split("/")[0];
+        const dir = firstSegment === relative ? "." : firstSegment;
+        const s = await stat(filePath);
+        return { dir, size: s.size };
+      }),
+    );
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        const { dir, size } = result.value;
+        dirBytes.set(dir, (dirBytes.get(dir) ?? 0) + size);
+      }
+      // Files that fail to stat (deleted mid-scan) are skipped
+    }
+  }
+
+  return [...dirBytes.entries()]
+    .map(([path, bytes]) => ({ path, bytes }))
+    .sort((a, b) => b.bytes - a.bytes);
+}
+
+/** Exposes internals for behavioral coverage. */
+export const demandProfileInternals = { computeDirectoryByteCounts };

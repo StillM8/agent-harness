@@ -130,6 +130,13 @@ void test("recommend explain requires an asset id", async () => {
   );
 });
 
+void test("recommend explain --json without --asset shows helpful note", async () => {
+  await assert.rejects(
+    () => runRecommend(["explain", "--json"], process.cwd(), process.cwd()),
+    /recommend explain requires --asset <assetId> \(note: --json is a format flag, not an asset ID\)/u,
+  );
+});
+
 void test("recommend explain renders empty coverage and signal sections as none", async (t) => {
   const projectRoot = await mkdtemp(
     join(tmpdir(), "agent-harness-recommend-none-"),
@@ -1296,6 +1303,24 @@ void test("runRecommend report returns exit code 1 and writes to stderr when cat
         stderrText.includes("discover select"),
       `stderr must guide user to populate the catalog; got: ${stderrText}`,
     );
+  } finally {
+    await rm(projectRoot, { force: true, recursive: true });
+  }
+});
+
+void test("recommend explain --host with positional asset skips --host value", async () => {
+  const projectRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-recommend-host-"),
+  );
+  try {
+    const report = createRecommendationReport();
+    await seedRecommendationReport(projectRoot, report);
+    const result = await runRecommend(
+      ["explain", "--host", "vscode", "asset-a"],
+      process.cwd(),
+      projectRoot,
+    );
+    assert.equal(result, 0);
   } finally {
     await rm(projectRoot, { force: true, recursive: true });
   }

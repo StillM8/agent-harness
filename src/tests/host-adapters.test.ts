@@ -17,6 +17,10 @@ import {
   type HostAdapter,
 } from "../host-adapters/registry.js";
 import { sanitizeAssetId } from "../lib/safe-paths.js";
+import { writeZedNativeFiles } from "../host-adapters/zed-native.js";
+import { upsertManagedPiSettings } from "../host-adapters/native-utils.js";
+import { mergeCodexPluginMarketplace } from "../host-adapters/codex-native.js";
+import type { WireNativeFilesOptions } from "../host-adapters/native-utils.js";
 import type {
   AssetCatalogEntry,
   AssetKind,
@@ -1369,3 +1373,249 @@ function buildAsset(
     ...overrides,
   };
 }
+
+void test("writeZedNativeFiles throws on JSONC parse errors in settings.json", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-zed-jsonc-"));
+  try {
+    const workspaceRoot = join(root, "workspace");
+    const managedRoot = join(workspaceRoot, ".zed", "agent-harness");
+    await mkdir(join(workspaceRoot, ".zed"), { recursive: true });
+    await writeFile(
+      join(workspaceRoot, ".zed", "settings.json"),
+      "{ bad }\n",
+      "utf8",
+    );
+    const opts: WireNativeFilesOptions = {
+      workspaceRoot,
+      managedRoot,
+      nativeAssets: [],
+      materializedAssets: {
+        instructionFiles: [],
+        agentFiles: [],
+        skillDirs: [],
+        pluginDirs: [],
+        hookFiles: [],
+        hookContentPathByAssetId: {},
+        workflowFiles: [],
+        referenceFiles: [],
+        extensionIds: [],
+        mcpServers: [],
+      },
+      mcpServers: [],
+    };
+    await assert.rejects(writeZedNativeFiles(opts), (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.match(
+        err.message,
+        /Zed settings\.json contains JSONC parse errors/u,
+      );
+      return true;
+    });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+void test("writeZedNativeFiles falls back to mergeJsonFile when settings.json structure is incompatible with JSONC modify", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-zed-fallback-"));
+  try {
+    const workspaceRoot = join(root, "workspace");
+    const managedRoot = join(workspaceRoot, ".zed", "agent-harness");
+    await mkdir(join(workspaceRoot, ".zed"), { recursive: true });
+    // Write settings.json where "agent" is a number, not an object.
+    // jsonc-parser's modify cannot navigate into a number, so it throws,
+    // triggering the catch-block fallback to mergeJsonFile.
+    await writeFile(
+      join(workspaceRoot, ".zed", "settings.json"),
+      JSON.stringify({ agent: 123 }),
+      "utf8",
+    );
+    const opts: WireNativeFilesOptions = {
+      workspaceRoot,
+      managedRoot,
+      nativeAssets: [],
+      materializedAssets: {
+        instructionFiles: [],
+        agentFiles: [],
+        skillDirs: [],
+        pluginDirs: [],
+        hookFiles: [],
+        hookContentPathByAssetId: {},
+        workflowFiles: [],
+        referenceFiles: [],
+        extensionIds: [],
+        mcpServers: [],
+      },
+      mcpServers: [],
+    };
+    await writeZedNativeFiles(opts);
+    // After mergeJsonFile fallback, verify the full agent-harness profile
+    // was written and the file uses two-space JSON formatting (the
+    // fallback path via writeJsonFile, distinct from the JSONC-modify
+    // path which preserves original formatting).
+    const raw = await readFile(
+      join(workspaceRoot, ".zed", "settings.json"),
+      "utf8",
+    );
+    const content = JSON.parse(raw) as Record<string, unknown>;
+    assert.ok(
+      typeof content.agent === "object" && content.agent !== null,
+      "agent should be an object after merge fallback",
+    );
+    const agent = content.agent as Record<string, unknown>;
+    assert.ok(
+      typeof agent.profiles === "object" && agent.profiles !== null,
+      "agent.profiles should be present",
+    );
+    const profiles = agent.profiles as Record<string, Record<string, unknown>>;
+    assert.equal(profiles["agent-harness"]?.name, "Agent Harness");
+    assert.equal(profiles["agent-harness"]?.enable_all_context_servers, true);
+    // Fallback writes via JSON.stringify(…, null, 2) — verify two-space
+    // formatting with trailing newline.
+    assert.ok(
+      raw.includes('  "agent"'),
+      "fallback output should use two-space indentation",
+    );
+    assert.ok(raw.endsWith("\n"), "fallback output should end with newline");
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+void test("writeZedNativeFiles propagates non-ENOENT read errors instead of falling back to merge", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-zed-eisdir-"));
+  try {
+    const workspaceRoot = join(root, "workspace");
+    const managedRoot = join(workspaceRoot, ".zed", "agent-harness");
+    // Create .zed/settings.json as a directory — readFile on a directory
+    // returns EISDIR, not ENOENT, so the catch fallback must propagate.
+    await mkdir(join(workspaceRoot, ".zed", "settings.json"), {
+      recursive: true,
+    });
+    const opts: WireNativeFilesOptions = {
+      workspaceRoot,
+      managedRoot,
+      nativeAssets: [],
+      materializedAssets: {
+        instructionFiles: [],
+        agentFiles: [],
+        skillDirs: [],
+        pluginDirs: [],
+        hookFiles: [],
+        hookContentPathByAssetId: {},
+        workflowFiles: [],
+        referenceFiles: [],
+        extensionIds: [],
+        mcpServers: [],
+      },
+      mcpServers: [],
+    };
+    await assert.rejects(writeZedNativeFiles(opts));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+void test("writeZedNativeFiles throws on primitive-string settings.json root", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-zed-primitive-"));
+  try {
+    const workspaceRoot = join(root, "workspace");
+    const managedRoot = join(workspaceRoot, ".zed", "agent-harness");
+    await mkdir(join(workspaceRoot, ".zed"), { recursive: true });
+    // Write a JSON string literal as root — not an object or array
+    await writeFile(
+      join(workspaceRoot, ".zed", "settings.json"),
+      '"just a string"',
+      "utf8",
+    );
+    const opts: WireNativeFilesOptions = {
+      workspaceRoot,
+      managedRoot,
+      nativeAssets: [],
+      materializedAssets: {
+        instructionFiles: [],
+        agentFiles: [],
+        skillDirs: [],
+        pluginDirs: [],
+        hookFiles: [],
+        hookContentPathByAssetId: {},
+        workflowFiles: [],
+        referenceFiles: [],
+        extensionIds: [],
+        mcpServers: [],
+      },
+      mcpServers: [],
+    };
+    await assert.rejects(
+      writeZedNativeFiles(opts),
+      /not a JSON object \(found string\)/u,
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+void test("upsertManagedPiSettings no-ops when all managed entries already exist", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-pi-exists-"));
+  try {
+    const settingsPath = join(root, ".pi", "settings.json");
+    await mkdir(dirname(settingsPath), { recursive: true });
+    // Pre-populate with the managed entries already present
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        skills: ["skills/agent-harness"],
+        prompts: ["prompts/agent-harness.md"],
+      }),
+      "utf8",
+    );
+    await upsertManagedPiSettings(settingsPath);
+    const updated = JSON.parse(await readFile(settingsPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    assert.deepEqual(updated.skills, ["skills/agent-harness"]);
+    assert.deepEqual(updated.prompts, ["prompts/agent-harness.md"]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+void test("removeManagedPiSettings handles non-string and non-array entries gracefully", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-pi-nonarray-"));
+  try {
+    const settingsPath = join(root, ".pi", "settings.json");
+    await mkdir(dirname(settingsPath), { recursive: true });
+    // skills is a non-array value — coerceStringArray must handle this
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        skills: "not-an-array",
+        prompts: true,
+      }),
+      "utf8",
+    );
+    const { removeManagedPiSettings } =
+      await import("../host-adapters/native-utils.js");
+    await removeManagedPiSettings(settingsPath, root);
+    // File should be removed: both "skills" and "prompts" were non-array
+    // values so coerceStringArray returned [], removing both keys, leaving
+    // an empty object which writeOrRemoveJsonFile deletes.
+    const raw = await readFile(settingsPath, "utf8").catch(() => null);
+    assert.equal(raw, null, "file should be removed when all keys are empty");
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+void test("mergeCodexPluginMarketplace throws on non-object marketplace file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-codex-nonobj-"));
+  try {
+    const mktPath = join(root, "marketplace.json");
+    // Write a marketplace file as an array — not a JSON object
+    await writeFile(mktPath, JSON.stringify([1, 2, 3]), "utf8");
+    await assert.rejects(mergeCodexPluginMarketplace(mktPath));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});

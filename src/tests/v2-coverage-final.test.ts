@@ -747,3 +747,17 @@ void test("runRecommend ai-review — re-throws non-CatalogEmptyError from write
     await rm(projectRoot, { force: true, recursive: true });
   }
 });
+
+void test("fetchCratesIoSearch returns [] on non-2xx HTTP response (searchRegistry defensive catch)", async () => {
+  // Return a 500 response — fetchTextWithGuards returns null on non-2xx,
+  // fetchJsonWithGuards returns null, then extractResults(null) throws,
+  // triggering the searchRegistry catch block.
+  const results = await withFetchMock(
+    async () => new Response("Internal Server Error", { status: 500 }),
+    () =>
+      fetchCratesIoSearch("tokio", 10, {
+        resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+      }),
+  );
+  assert.deepEqual(results, []);
+});

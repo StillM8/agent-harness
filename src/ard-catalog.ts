@@ -71,6 +71,9 @@ import {
   getArdPublisherFqdn,
 } from "./ard/types.js";
 
+/** Re-export publisher FQDN helper for external callers. */
+export { getArdPublisherFqdn };
+
 // ---------------------------------------------------------------------------
 // Mapping
 // ---------------------------------------------------------------------------
@@ -148,9 +151,11 @@ export function mapEntryToArd(
     identifier: buildArdUrn(entry, publisherFqdn),
     displayName: entry.displayName,
     type: ardType,
-    // manifestEntry is always set by harvesters; fallback is defensive.
+    // originUrl is the resolvable access URL; manifestEntry is an internal
+    // content-addressing hash — use it only as a fallback when originUrl is
+    // missing (which should not happen for any correctly harvested entry).
     /* c8 ignore next */
-    url: entry.install.manifestEntry ?? entry.source.originUrl,
+    url: entry.source.originUrl ?? entry.install.manifestEntry,
     // classification is set by all harvesters; fallback is defensive.
     /* c8 ignore next 2 */
     description: entry.evidence.classification

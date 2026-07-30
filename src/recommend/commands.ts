@@ -47,6 +47,19 @@ export async function runRecommend(
 ): Promise<number> {
   const [command = "report", ...rest] = args;
 
+  // Subcommands with dedicated help handlers ("explain") get routed inside
+  // the switch. For all other subcommands, --help/-h shows parent recommend help.
+  const hasHelpFlag = rest.includes("--help") || rest.includes("-h");
+  const hasSpecificHelp = new Set(["explain"]);
+  // When hasSpecificHelp has the command, the switch case handles --help
+  // directly. This gate only fires for subcommands without specific help.
+  // c8 misattributes the `&&` false arm when `hasSpecificHelp.has` is true.
+  /* c8 ignore next */
+  if (hasHelpFlag && !hasSpecificHelp.has(command)) {
+    printRecommendHelp();
+    return 0;
+  }
+
   switch (command) {
     case "report": {
       const shouldRunAiReview = rest.includes("--ai-review");
@@ -101,6 +114,10 @@ export async function runRecommend(
       return 0;
     }
     case "explain":
+      if (rest.includes("--help") || rest.includes("-h")) {
+        printRecommendExplainHelp();
+        return 0;
+      }
       await explainRecommendation(projectRoot, rest);
       return 0;
     case "evaluate": {
@@ -166,12 +183,26 @@ async function explainRecommendation(
   projectRoot: string,
   args: string[],
 ): Promise<void> {
-  const assetId = getOptionValue(args, "--asset") ?? args[0];
-  const requestedHostRaw = getOptionValue(args, "--host");
+  const assetId = getOptionValue(args, "--asset");
   const json = args.includes("--json");
+  const requestedHostRaw = getOptionValue(args, "--host");
 
-  if (!assetId) {
-    throw new Error("recommend explain requires --asset <assetId>");
+  // Resolve assetId: prefer --asset flag, then fall back to the first
+  // positional arg that is not consumed by a value-taking flag (--host).
+  const valueFlagIndices = new Set<number>();
+  for (const flag of ["--host", "--asset"]) {
+    const idx = args.indexOf(flag);
+    if (idx >= 0 && idx + 1 < args.length) valueFlagIndices.add(idx + 1);
+  }
+  const resolvedAssetId =
+    assetId ??
+    args.find((arg, i) => !arg.startsWith("--") && !valueFlagIndices.has(i));
+
+  if (!resolvedAssetId) {
+    const note = json
+      ? " (note: --json is a format flag, not an asset ID)"
+      : "";
+    throw new Error(`recommend explain requires --asset <assetId>${note}`);
   }
 
   const report = await readJsonFile<RecommendationReport>(
@@ -199,14 +230,16 @@ async function explainRecommendation(
   );
   const explanations = buildRecommendationExplanations({
     report,
-    assetId,
+    assetId: resolvedAssetId,
     hosts: requestedHost ? [requestedHost] : getRecommendationHosts(),
     selectionReport,
     quarantineReport,
   });
 
   if (json) {
-    console.log(JSON.stringify({ assetId, explanations }, null, 2));
+    console.log(
+      JSON.stringify({ assetId: resolvedAssetId, explanations }, null, 2),
+    );
     return;
   }
 
@@ -249,7 +282,7 @@ async function explainRecommendation(
 
   if (lines.length === 0) {
     console.log(
-      `Asset ${assetId} is not present in the current recommendation report or explainability sidecars.`,
+      `Asset ${resolvedAssetId} is not present in the current recommendation report or explainability sidecars.`,
     );
     return;
   }
@@ -600,12 +633,59 @@ function printRecommendHelp(): void {
         ],
       },
       {
+        title: "Explain options:",
+        lines: [
+          "--asset <assetId>  Asset ID to explain (required)",
+          "--host <host>      Scope explanation to a specific host",
+          "--json             Output machine-readable JSON format",
+        ],
+      },
+      {
         title: "AI review options:",
         lines: [
           `--host <${getRecommendationHostChoices().join("|")}>`,
           "--review-limit <n>",
           "--apply",
           "--ai-review (for recommend report)",
+        ],
+      },
+    ],
+  });
+}
+
+/**
+ * Prints help for `recommend explain`.
+ */
+function printRecommendExplainHelp(): void {
+  printCommandHelp({
+    heading:
+      "recommend explain — Explain why an asset was selected, rejected, quarantined, or budget-pruned",
+    entries: [
+      {
+        command: "Usage:",
+        description: "",
+      },
+      {
+        command: "  recommend explain --asset <assetId>",
+        description: "Show per-host explanation for the given asset",
+      },
+      {
+        command: "  recommend explain --asset <assetId> --host <host>",
+        description: "Scope explanation to a specific host",
+      },
+      {
+        command: "  recommend explain --asset <assetId> --json",
+        description: "Output machine-readable JSON format",
+      },
+    ],
+    sections: [
+      {
+        title: "Explanation states:",
+        lines: [
+          "selected       Asset appears in the top-N for the host with rank and score breakdown",
+          "rejected       Asset was rejected during discovery selection (e.g., duplicate)",
+          "quarantined    Asset is held in quarantine pending review",
+          "budget-pruned  Asset was ranked but excluded by the activation budget",
         ],
       },
     ],

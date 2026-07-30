@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import test from "node:test";
@@ -8,6 +8,7 @@ import {
   pathExists,
   readJsonFile,
   readTextFileOrNull,
+  toPosixPath,
   writeJsonFile,
   writeTextFile,
 } from "../files.js";
@@ -16,12 +17,18 @@ import {
   wireNativeHost,
   type NativeWireHost,
 } from "../host-adapters/native-wire.js";
+import { resetPiNativeHost } from "../host-adapters/pi-native.js";
+import {
+  mergeJsonFile,
+  restoreManagedSectionFromSnapshot,
+} from "../host-adapters/native-utils.js";
 import { sanitizeAssetId } from "../lib/safe-paths.js";
 import type {
   ActivationManifest,
   AssetCatalogEntry,
   AssetHostNativeConfigMap,
   CopilotWorkspaceProfileManifest,
+  ManagedTextFileSnapshot,
   WirePlanManifest,
 } from "../types.js";
 
@@ -83,7 +90,7 @@ void test("Cursor native wire apply/reset materializes assets and restores merge
       ),
       [
         "---",
-        `name: ${JSON.stringify("cursor.agent")}`,
+        `name: ${JSON.stringify(sanitizeAssetId("cursor.agent"))}`,
         `description: ${JSON.stringify("Cursor Agent")}`,
         "---",
         "",
@@ -422,6 +429,7 @@ void test("Claude Code, Pi, and Codex native wire apply/reset manage project-loc
             schemaVersion: 2,
             plugins: [
               { name: "existing", path: "./existing" },
+              "ignored malformed entry",
               { name: "agent-harness", path: "./agent-harness" },
             ],
           },
@@ -560,6 +568,110 @@ void test("Codex plugin manifest omits hook registration when hook assets are ab
   );
 });
 
+void test("restoreManagedSectionFromSnapshot preserves other host sections in AGENTS.md", async () => {
+  const fixture = await createNativeFixture("pi");
+  try {
+    const agentsPath = join(fixture.workspaceRoot, "AGENTS.md");
+    // Pi section + Codex section coexist, pi reset removes only pi section
+    await writeTextFile(
+      agentsPath,
+      "<!-- agent-harness-pi:begin -->\npi\n<!-- agent-harness-pi:end -->\n<!-- agent-harness-codex:begin -->\ncodex\n<!-- agent-harness-codex:end -->\n",
+    );
+    const snapshots: Array<{ path: string; content: string | null }> = [
+      {
+        path: toPosixPath(agentsPath),
+        content:
+          "<!-- agent-harness-codex:begin -->\ncodex\n<!-- agent-harness-codex:end -->\n",
+      },
+    ];
+    await resetPiNativeHost(
+      fixture.workspaceRoot,
+      snapshots as ManagedTextFileSnapshot[],
+    );
+    const after = await readTextFileOrNull(agentsPath);
+    assert.ok(after !== null);
+    assert.ok(
+      after.includes("agent-harness-codex:begin"),
+      "codex section preserved",
+    );
+    assert.ok(!after.includes("agent-harness-pi:begin"), "pi section removed");
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+void test("restoreManagedSectionFromSnapshot null-content snapshot preserves preexisting content", async () => {
+  const fixture = await createNativeFixture("pi");
+  try {
+    const agentsPath = join(fixture.workspaceRoot, "AGENTS.md");
+    await writeTextFile(
+      agentsPath,
+      "before\n<!-- agent-harness-pi:begin -->\npi\n<!-- agent-harness-pi:end -->\n",
+    );
+    const snapshots: Array<{ path: string; content: string | null }> = [
+      { path: toPosixPath(agentsPath), content: null },
+    ];
+    await resetPiNativeHost(
+      fixture.workspaceRoot,
+      snapshots as ManagedTextFileSnapshot[],
+    );
+    const after = await readTextFileOrNull(agentsPath);
+    assert.ok(after !== null);
+    assert.ok(!after.includes("agent-harness-pi"));
+    assert.ok(after.includes("before"), "preexisting text survives");
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+void test("restoreManagedSectionFromSnapshot restores snapshot section version", async () => {
+  const fixture = await createNativeFixture("pi");
+  try {
+    const agentsPath = join(fixture.workspaceRoot, "AGENTS.md");
+    await writeTextFile(
+      agentsPath,
+      "<!-- agent-harness-pi:begin -->\nv1\n<!-- agent-harness-pi:end -->\n",
+    );
+    const snapshots: Array<{ path: string; content: string | null }> = [
+      {
+        path: toPosixPath(agentsPath),
+        content:
+          "<!-- agent-harness-pi:begin -->\nv2\n<!-- agent-harness-pi:end -->\n",
+      },
+    ];
+    await resetPiNativeHost(
+      fixture.workspaceRoot,
+      snapshots as ManagedTextFileSnapshot[],
+    );
+    const after = await readTextFileOrNull(agentsPath);
+    assert.ok(after !== null);
+    assert.ok(!after.includes("v1"));
+    assert.ok(after.includes("v2"));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+void test("restoreManagedSectionFromSnapshot inserts section when file absent", async () => {
+  const fixture = await createNativeFixture("pi");
+  try {
+    const agentsPath = join(fixture.workspaceRoot, "AGENTS.md");
+    const snapshots: ManagedTextFileSnapshot[] = [
+      {
+        path: toPosixPath(agentsPath),
+        content:
+          "<!-- agent-harness-pi:begin -->\nrestored\n<!-- agent-harness-pi:end -->\n",
+      },
+    ];
+    await resetPiNativeHost(fixture.workspaceRoot, snapshots);
+    const after = await readTextFileOrNull(agentsPath);
+    assert.ok(after !== null);
+    assert.ok(after.includes("restored"));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 void test("native wire skips missing activation assets and falls back to asset metadata when content is absent", async () => {
   const fixture = await createNativeFixture("cursor");
 
@@ -686,7 +798,7 @@ void test("Zed native wire rolls back partial apply when host settings are not a
         workspaceRoot: fixture.workspaceRoot,
         mode: "apply",
       }),
-      /Expected .*\.zed\/settings\.json to contain a JSON object, but found array/u,
+      /Zed settings\.json is not a JSON object \(found array\)/u,
     );
 
     assert.equal(
@@ -785,6 +897,9 @@ void test("Pi and Codex native wire reset removes managed-only files and setting
 
       assert.equal(
         await readTextFileOrNull(join(fixture.workspaceRoot, "AGENTS.md")),
+        // Section-scoped reset removes only the host's managed section,
+        // preserving content from other hosts. The file may be deleted
+        // if empty after section removal.
         null,
       );
       if (host === "pi") {
@@ -799,9 +914,17 @@ void test("Pi and Codex native wire reset removes managed-only files and setting
           null,
         );
       } else {
-        assert.equal(
-          await pathExists(join(fixture.workspaceRoot, ".agents")),
-          false,
+        // Marketplace preserved with plugins:[] so .agents directory persists
+        assert.ok(
+          (await readTextFileOrNull(
+            join(
+              fixture.workspaceRoot,
+              ".agents",
+              "plugins",
+              "marketplace.json",
+            ),
+          )) !== null,
+          "marketplace.json preserved with plugins:[]",
         );
         assert.equal(
           await pathExists(join(fixture.workspaceRoot, ".codex")),
@@ -1434,7 +1557,15 @@ void test("native wire internals clean failed applies and validate helper edge c
   );
   await writeTextFile(
     join(workspaceRoot, ".agents", "plugins", "marketplace.json"),
-    "{}\n",
+    JSON.stringify({
+      schemaVersion: 1,
+      plugins: [
+        { name: "agent-harness", path: "./agent-harness" },
+        "non-object-entry",
+        42,
+        { name: "third-party-plugin", version: "2.0" },
+      ],
+    }),
   );
   await nativeWireInternals.cleanupFailedNativeHostApply(
     nativeWireInternals.nativeHostSpecs.codex,
@@ -1457,12 +1588,68 @@ void test("native wire internals clean failed applies and validate helper edge c
     ),
     false,
   );
-  assert.equal(
-    await pathExists(
-      join(workspaceRoot, ".agents", "plugins", "marketplace.json"),
-    ),
-    false,
+  // Marketplace file is preserved with non-object entries intact (#374).
+  // Verify the preserved content has the expected structure and retains
+  // non-object values from the original plugins array.
+  const mktContent = await readTextFileOrNull(
+    join(workspaceRoot, ".agents", "plugins", "marketplace.json"),
   );
+  assert.ok(mktContent !== null, "marketplace.json should be preserved");
+  const mkt = JSON.parse(mktContent) as Record<string, unknown>;
+  assert.ok(
+    Array.isArray(mkt.plugins),
+    "marketplace.json should still have a plugins array",
+  );
+  // No agent-harness entry remains in the filtered plugins
+  const plugins = mkt.plugins as Array<unknown>;
+  const pluginNames = plugins
+    .filter(
+      (p): p is Record<string, unknown> => typeof p === "object" && p !== null,
+    )
+    .map((p) => p.name);
+  assert.ok(
+    !pluginNames.includes("agent-harness"),
+    "agent-harness plugin should be removed from marketplace",
+  );
+  // Non-object entries must survive the filter
+  assert.ok(
+    plugins.includes("non-object-entry"),
+    "non-object string entry should be preserved in plugins",
+  );
+  assert.ok(
+    plugins.includes(42),
+    "non-object number entry should be preserved in plugins",
+  );
+  // Third-party plugin should still be present
+  assert.ok(
+    pluginNames.includes("third-party-plugin"),
+    "third-party-plugin should survive agent-harness removal",
+  );
+
+  // Test non-array plugins field: marketplace with plugins as a string
+  // should be handled gracefully without throwing.
+  await writeTextFile(
+    join(workspaceRoot, ".agents", "plugins", "marketplace.json"),
+    JSON.stringify({ schemaVersion: 1, plugins: "not-an-array" }),
+  );
+  // create a minimal wire-plan so cleanup can find the managed root
+  await writeTextFile(join(codexManagedRoot, "wire-plan.json"), "{}\n");
+  await nativeWireInternals.cleanupFailedNativeHostApply(
+    nativeWireInternals.nativeHostSpecs.codex,
+    workspaceRoot,
+    codexManagedRoot,
+    codexActivationRoot,
+    [],
+  );
+  const afterNonArray = await readTextFileOrNull(
+    join(workspaceRoot, ".agents", "plugins", "marketplace.json"),
+  );
+  assert.ok(
+    afterNonArray !== null,
+    "marketplace.json preserved with non-array plugins",
+  );
+  const nonArrayMkt = JSON.parse(afterNonArray) as Record<string, unknown>;
+  assert.deepEqual(nonArrayMkt.plugins, []);
 
   const piManagedRoot = join(workspaceRoot, ".pi", "agent-harness");
   const piActivationRoot = join(root, "project", "activate", "pi");
@@ -1499,13 +1686,17 @@ void test("native wire internals clean failed applies and validate helper edge c
       },
     ],
   );
+  // Section-scoped restore: null-content snapshot means file absent,
+  // but since no pi section exists, the file stays unchanged.
   assert.equal(
     await readTextFileOrNull(join(workspaceRoot, "AGENTS.md")),
-    null,
+    "current agents\n",
   );
+  // Section-scoped restore: snapshot content is searched for pi section;
+  // since none exists, current content is preserved.
   assert.equal(
     await readTextFileOrNull(join(workspaceRoot, "SYSTEM.md")),
-    "system snapshot\n",
+    "current system\n",
   );
   assert.deepEqual(
     await readJsonFile(join(workspaceRoot, ".pi", "settings.json")),
@@ -1545,7 +1736,10 @@ void test("native wire internals clean failed applies and validate helper edge c
       { existing: ["keep", "add", 1], nested: { add: true }, scalar: false },
     ),
     {
-      existing: ["add", "keep"],
+      // Arrays are replaced directly from the patch (preserving order,
+      // structure, and non-string entries) rather than merged via
+      // uniqueStrings which would drop non-strings and reorder.
+      existing: ["keep", "add", 1],
       nested: { keep: true, add: true },
       scalar: false,
     },
@@ -1578,5 +1772,244 @@ void test("native wire internals clean failed applies and validate helper edge c
       workspaceRoot,
     ),
     /ENOTDIR|not a directory/u,
+  );
+});
+
+void test("restoreManagedSectionFromSnapshot removes file when snapshot section absent and file only contains managed section", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-native-restore-"));
+  try {
+    const agentsPath = join(root, "AGENTS.md");
+    // Write AGENTS.md with ONLY the pi managed section
+    await writeTextFile(
+      agentsPath,
+      "<!-- agent-harness-pi:begin -->\npi content\n<!-- agent-harness-pi:end -->\n",
+    );
+    // Snapshot has content but NO pi managed section markers
+    const snapshots: ManagedTextFileSnapshot[] = [
+      {
+        path: toPosixPath(agentsPath),
+        content: "# No pi section here\n\nJust other host stuff.\n",
+      },
+    ];
+    let fallbackCalled = false;
+    await restoreManagedSectionFromSnapshot(
+      agentsPath,
+      snapshots,
+      "agent-harness-pi",
+      async () => {
+        fallbackCalled = true;
+      },
+    );
+    assert.ok(
+      !fallbackCalled,
+      "fallback should not be called when snapshot exists",
+    );
+    const exists = await pathExists(agentsPath);
+    assert.ok(
+      !exists,
+      "AGENTS.md should be removed when it only contains the managed section",
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+void test("mergeJsonFile merges patch into existing and new files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-merge-json-"));
+  try {
+    const filePath = join(root, "settings.json");
+
+    // Merge into non-existent file — currentValue is null path
+    await mergeJsonFile(filePath, { key: "value" });
+    const content1 = await readJsonFile<Record<string, unknown>>(filePath);
+    assert.deepEqual(content1, { key: "value" });
+
+    // Merge into existing file — currentValue is non-null path
+    await mergeJsonFile(filePath, { another: "thing" });
+    const content2 = await readJsonFile<Record<string, unknown>>(filePath);
+    assert.deepEqual(content2, { key: "value", another: "thing" });
+
+    // Merge overwrites existing keys
+    await mergeJsonFile(filePath, { key: "updated" });
+    const content3 = await readJsonFile<Record<string, unknown>>(filePath);
+    assert.deepEqual(content3, { key: "updated", another: "thing" });
+
+    // Merge into file with arrays: patch arrays replace directly
+    const filePath2 = join(root, "array.json");
+    await writeJsonFile(filePath2, {
+      skills: ["security"],
+      settings: { theme: "dark" },
+    });
+    await mergeJsonFile(filePath2, {
+      skills: ["testing", "linting"],
+      settings: { indent: 2 },
+    });
+    const content4 = await readJsonFile<Record<string, unknown>>(filePath2);
+    assert.deepEqual(content4, {
+      skills: ["testing", "linting"],
+      settings: { theme: "dark", indent: 2 },
+    });
+
+    // Merge into empty object works
+    const filePath3 = join(root, "empty.json");
+    await writeJsonFile(filePath3, {});
+    await mergeJsonFile(filePath3, { key: "value" });
+    const content5 = await readJsonFile<Record<string, unknown>>(filePath3);
+    assert.deepEqual(content5, { key: "value" });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+void test("restoreManagedSectionFromSnapshot handles snapshot with begin tag but no end tag", async () => {
+  const root = await mkdtemp(
+    join(tmpdir(), "agent-harness-native-begin-only-"),
+  );
+  try {
+    const agentsPath = join(root, "AGENTS.md");
+    // Current file has the pi section
+    await writeTextFile(
+      agentsPath,
+      "# Before\n<!-- agent-harness-pi:begin -->\npi\n<!-- agent-harness-pi:end -->\n",
+    );
+    // Snapshot has begin tag but NO end tag — endIdx === -1 branch
+    const snapshots: ManagedTextFileSnapshot[] = [
+      {
+        path: toPosixPath(agentsPath),
+        content: "# Other\n<!-- agent-harness-pi:begin -->\nbroken content\n",
+      },
+    ];
+    await restoreManagedSectionFromSnapshot(
+      agentsPath,
+      snapshots,
+      "agent-harness-pi",
+      async () => {},
+    );
+    // No end tag → snapshotSection === null → section removed from current
+    const after = await readTextFileOrNull(agentsPath);
+    assert.ok(after !== null);
+    assert.ok(!after.includes("agent-harness-pi"));
+    assert.ok(after.includes("# Before"));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+void test("restoreManagedSectionFromSnapshot handles inline begin/end tags without newlines", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-harness-native-inline-"));
+  try {
+    const agentsPath = join(root, "AGENTS.md");
+    // Snapshot has begin and end tags inline on same line — endLineStart === -1 branch
+    const snapshots: ManagedTextFileSnapshot[] = [
+      {
+        path: toPosixPath(agentsPath),
+        content:
+          "<!-- agent-harness-pi:begin -->inline-content<!-- agent-harness-pi:end -->",
+      },
+    ];
+    // No current file — insert from snapshot
+    await restoreManagedSectionFromSnapshot(
+      agentsPath,
+      snapshots,
+      "agent-harness-pi",
+      async () => {},
+    );
+    const after = await readTextFileOrNull(agentsPath);
+    assert.ok(after !== null);
+    assert.ok(after.includes("inline-content"));
+    assert.ok(after.includes("agent-harness-pi:begin"));
+    assert.ok(after.includes("agent-harness-pi:end"));
+    // The begin marker must appear exactly once — the old bug included the
+    // begin marker in the extracted section, causing duplication on restore.
+    const beginCount = after.split("agent-harness-pi:begin").length - 1;
+    assert.equal(
+      beginCount,
+      1,
+      "begin marker must appear exactly once (not duplicated)",
+    );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+void test("restoreManagedSectionFromSnapshot handles malformed begin marker without closing -->", async () => {
+  const root = await mkdtemp(
+    join(tmpdir(), "agent-harness-native-malformed-begin-"),
+  );
+  try {
+    const agentsPath = join(root, "AGENTS.md");
+    // Current file has the pi section
+    await writeTextFile(
+      agentsPath,
+      "# Before\n<!-- agent-harness-pi:begin -->\npi\n<!-- agent-harness-pi:end -->\n",
+    );
+    // Snapshot has begin tag but NO closing --> — beginCommentEnd === -1 path
+    const snapshots: ManagedTextFileSnapshot[] = [
+      {
+        path: toPosixPath(agentsPath),
+        content:
+          "<!-- agent-harness-pi:begin broken marker with no closing comment\n",
+      },
+    ];
+    await restoreManagedSectionFromSnapshot(
+      agentsPath,
+      snapshots,
+      "agent-harness-pi",
+      async () => {},
+    );
+    // Malformed begin marker → extractManagedSectionContent returns null →
+    // falls through to section removal
+    const after = await readTextFileOrNull(agentsPath);
+    assert.ok(after !== null);
+    assert.ok(!after.includes("agent-harness-pi"));
+    assert.ok(after.includes("# Before"));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+void test("mergeJsonObjects preserves array ordering and non-string entries", () => {
+  // Arrays are replaced directly from the patch — ordering is preserved
+  // (uniqueStrings would deduplicate/sort) and non-string entries survive
+  // (uniqueStrings would filter them out).
+
+  // Ordering: patch array order is kept, not sorted
+  assert.deepEqual(
+    nativeWireInternals.mergeJsonObjects(
+      { items: ["a", "b"] },
+      { items: ["z", "a", "m", "b"] },
+    ),
+    { items: ["z", "a", "m", "b"] },
+  );
+
+  // Non-string entries preserved (objects, numbers, booleans, null)
+  assert.deepEqual(
+    nativeWireInternals.mergeJsonObjects(
+      { items: ["old"] },
+      {
+        items: [{ name: "structured" }, 42, true, null, "string"],
+      },
+    ),
+    {
+      items: [{ name: "structured" }, 42, true, null, "string"],
+    },
+  );
+
+  // Nested objects still merge recursively
+  assert.deepEqual(
+    nativeWireInternals.mergeJsonObjects(
+      { config: { host: "localhost", port: 3000 } },
+      { config: { host: "production", debug: false } },
+    ),
+    { config: { host: "production", port: 3000, debug: false } },
+  );
+
+  // Scalars are replaced, not merged
+  assert.deepEqual(
+    nativeWireInternals.mergeJsonObjects(
+      { mode: "read", count: 1 },
+      { mode: "write", active: true },
+    ),
+    { mode: "write", count: 1, active: true },
   );
 });

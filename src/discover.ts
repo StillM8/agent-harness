@@ -39,7 +39,7 @@ import { writeSourceCandidateQueue } from "./domains/discovery/candidate-queue.j
 import { buildDemandProfile } from "./domains/discovery/demand-profile.js";
 import { writeDiscoverDiffReport } from "./domains/discovery/diff.js";
 import { writeEnvironmentIndex } from "./domains/discovery/environment-index.js";
-import { writeArdCatalog } from "./ard-catalog.js";
+import { writeArdCatalog, getArdPublisherFqdn } from "./ard-catalog.js";
 import { harvestGitHubRepoSource } from "./domains/discovery/github-harvester.js";
 import { generateSourceIndex } from "./domains/discovery/source-index.js";
 import {
@@ -110,6 +110,20 @@ export async function runDiscover(
   projectRoot: string,
 ): Promise<number> {
   const [command = "help", ...rest] = args;
+
+  // Subcommands with dedicated help handlers get routed inside the switch.
+  // For all other subcommands, --help/-h shows the parent discover help.
+  const hasHelpFlag = rest.includes("--help") || rest.includes("-h");
+  const hasSpecificHelp = new Set([
+    "full",
+    "breadth",
+    "recall",
+    "candidate-pool",
+  ]);
+  if (hasHelpFlag && !hasSpecificHelp.has(command)) {
+    printDiscoverHelp();
+    return 0;
+  }
 
   switch (command) {
     case "demand-profile":
@@ -210,11 +224,34 @@ export async function runDiscover(
       );
     }
     case "full": {
+      if (hasHelpFlag) {
+        printDiscoverFullHelp();
+        return 0;
+      }
       const aiEnrichmentFlags = parseAiEnrichmentFlags(rest);
       const quietMode = rest.includes("--quiet");
       const summaryMode = rest.includes("--summary");
+      const maxBytesIndex = rest.indexOf("--max-scan-bytes");
+      let maxBytes: number | undefined;
+      if (maxBytesIndex >= 0) {
+        if (maxBytesIndex + 1 >= rest.length) {
+          throw new Error("discover full --max-scan-bytes requires a value");
+        }
+        const raw = rest[maxBytesIndex + 1];
+        const parsed = Number(raw);
+        if (
+          !Number.isFinite(parsed) ||
+          parsed <= 0 ||
+          !Number.isSafeInteger(parsed)
+        ) {
+          throw new Error(
+            `discover full --max-scan-bytes requires a positive safe integer (got: ${JSON.stringify(raw)})`,
+          );
+        }
+        maxBytes = parsed;
+      }
       logDiscoverPhase("discover full", 1, 5, "Scanning workspace demand");
-      await generateDemandProfile(workingDirectory, projectRoot);
+      await generateDemandProfile(workingDirectory, projectRoot, maxBytes);
       logDiscoverPhase("discover full", 2, 5, "Refreshing source index");
       await generateSourceIndex(projectRoot);
       logDiscoverPhase("discover full", 3, 5, "Syncing indexed sources");
@@ -246,6 +283,10 @@ export async function runDiscover(
     case "breadth":
     case "recall":
     case "candidate-pool":
+      if (hasHelpFlag) {
+        printDiscoverBreadthHelp();
+        return 0;
+      }
       await runDiscoveryBreadth(workingDirectory, projectRoot);
       return 0;
     case "enrich":
@@ -278,7 +319,16 @@ export async function runDiscover(
       } catch {
         // package.json unavailable — writeArdCatalog will fall back to "0.0.0".
       }
-      await writeArdCatalog(projectRoot, pkgVersion);
+      const { filePath, entryCount } = await writeArdCatalog(
+        projectRoot,
+        pkgVersion,
+      );
+      const quietMode = rest.includes("--quiet");
+      if (!quietMode) {
+        console.log(
+          `ARD ai-catalog.json written to ${toPosixPath(filePath)} (${entryCount} ${entryCount === 1 ? "entry" : "entries"}, publisher: ${getArdPublisherFqdn()})`,
+        );
+      }
       return 0;
     }
     case "inspect":
@@ -296,8 +346,9 @@ export async function runDiscover(
 async function generateDemandProfile(
   scanRoot: string,
   projectRoot: string,
+  maxBytes?: number,
 ): Promise<DemandProfile> {
-  const demandProfile = await buildDemandProfile(scanRoot);
+  const demandProfile = await buildDemandProfile(scanRoot, { maxBytes });
   const outputPath = join(projectRoot, ...DEMAND_PROFILE_OUTPUT_PATH);
   await writeJsonFile(outputPath, demandProfile);
 
@@ -1065,6 +1116,111 @@ function printDiscoverHelp(): void {
           "--no-ai-enrich      Explicitly skip enrichment for this select/full run",
           "--force             Bypass cache reuse and automatic policy skips, forcing a new provider call when enrichment runs",
           "--require-ai-enrich Fail the command when enrichment does not complete or reuse successfully",
+        ],
+      },
+    ],
+  });
+}
+
+/**
+ * Prints help for `discover full`.
+ */
+function printDiscoverFullHelp(): void {
+  printCommandHelp({
+    heading: "discover full — Run the complete discovery pipeline in one pass",
+    entries: [
+      {
+        command: "Steps executed in order:",
+        description: "",
+      },
+      {
+        command: "  1. demand-profile",
+        description: "Scan the working directory for demand signals",
+      },
+      {
+        command: "  2. sources",
+        description: "Refresh the source index",
+      },
+      {
+        command: "  3. sync",
+        description: "Sync indexed sources to local state",
+      },
+      {
+        command: "  4. catalog",
+        description: "Build the unified asset catalog",
+      },
+      {
+        command: "  5. select",
+        description: "Apply canonical selection rules",
+      },
+    ],
+    sections: [
+      {
+        title: "Options:",
+        lines: [
+          "--ai-enrich         Run AI enrichment after selection",
+          "--no-ai-enrich      Skip AI enrichment",
+          "--quiet             Suppress expected source health warnings",
+          "--summary           Print aggregate warning breakdown by reason",
+          "--max-scan-bytes N   Override the demand scan byte budget (default: 48 MB)",
+        ],
+      },
+      {
+        title: "Outputs:",
+        lines: [
+          "discover/output/demand-profile.json",
+          "discover/output/source-index.json",
+          "discover/output/catalog.assets.jsonl",
+          "discover/output/catalog.selected.jsonl",
+          "discover/output/catalog.rejected.jsonl",
+          "discover/output/selection-report.json",
+        ],
+      },
+    ],
+  });
+}
+
+/**
+ * Prints help for `discover breadth` (aliases: recall, candidate-pool).
+ */
+function printDiscoverBreadthHelp(): void {
+  printCommandHelp({
+    heading:
+      "discover breadth — Run the widest practical discovery pass (aliases: recall, candidate-pool)",
+    entries: [
+      {
+        command: "Description:",
+        description: "",
+      },
+      {
+        command:
+          "  Runs demand-profile followed by a maximally broad discovery",
+        description: "",
+      },
+      {
+        command:
+          "  pass that prioritizes candidate-pool coverage over precision.",
+        description: "",
+      },
+      {
+        command:
+          "  Useful for surveying available assets before narrowing down.",
+        description: "",
+      },
+    ],
+    sections: [
+      {
+        title: "Options:",
+        lines: [
+          "--state-root <path>  Write state under this path",
+          "--ai-enrich          Run AI enrichment after breadth scan",
+        ],
+      },
+      {
+        title: "Aliases:",
+        lines: [
+          "discover recall           Same as discover breadth",
+          "discover candidate-pool   Same as discover breadth",
         ],
       },
     ],

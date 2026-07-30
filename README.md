@@ -574,6 +574,10 @@ agent-harness discover recall
 agent-harness discover candidate-pool
 agent-harness discover stats
 agent-harness discover enrich --force
+agent-harness discover diff --baseline <state-root>
+agent-harness discover inspect --source <source-id>
+agent-harness discover inspect --id <asset-id>
+agent-harness discover environment-index
 ```
 
 ### Reducing source health noise
@@ -662,6 +666,49 @@ agent-harness workspace cursor --intent frontend --ai-enrich
 
 Use `setup login --provider ai` for configuration guidance. For scenario-based operator guidance, see [`AI-ENRICHMENT-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/AI-ENRICHMENT-PLAYBOOK.md).
 
+### Discover diff
+
+Compare discovery outputs against a baseline state root. Useful for validating that an updated source registry or selection policy changed the expected set of catalog entries.
+
+```bash
+agent-harness discover diff --baseline ../agent-harness-v1
+agent-harness discover diff --baseline ../agent-harness-v1 --json
+```
+
+Key flags:
+
+- **`--baseline <path>`** (required) — State root to compare against
+- **`--json`** — Print the diff report as JSON instead of a human-readable summary
+
+The report is written to `discover/output/diff-report.json`.
+
+### Discover inspect
+
+Print catalog entries filtered by `--source` or `--id`. This is a non-mutating lookup into the built catalog.
+
+```bash
+agent-harness discover inspect --source vscode-marketplace
+agent-harness discover inspect --id github/copilot-skills
+agent-harness discover inspect --source npm --limit 10
+```
+
+Key flags:
+
+- **`--source <id>`** — Filter entries by source identifier
+- **`--id <assetId>`** — Filter entries by asset ID
+- **`--limit <n>`** — Maximum results to display (default: 20)
+
+### Discover environment-index
+
+Write an experimental read-only query metadata index for selected catalog assets. This index is designed for future query/retrieval flows and does not change mirror, install, activation, or wire behavior.
+
+```bash
+agent-harness discover environment-index
+agent-harness discover environment-index --json
+```
+
+Output is written to `discover/output/environment-index.json`. The `--json` flag also prints the report to stdout.
+
 ### Recommend
 
 ```bash
@@ -684,6 +731,15 @@ Explain a specific recommendation:
 agent-harness recommend explain --host vscode --asset <asset-id>
 ```
 
+Evaluate golden recommendation fixtures against the current discovery and policy state:
+
+```bash
+agent-harness recommend evaluate
+npm run recommend:evaluate
+```
+
+`recommend evaluate` runs golden recommendation fixtures and prints an aggregate summary with quality signals including top-rank reason mix, top-rank confidence mix, broad-fallback frequency, and local-availability frequency. Use it to spot whether a fixture suite is being carried by exact-stack wins, weak-only generic matches, or broad fallback behavior.
+
 Print the merged effective policy for a host:
 
 ```bash
@@ -698,9 +754,73 @@ If the selected candidate pool already looks healthy but the final ranking still
 npm run mirror:plan
 npm run mirror:locks
 npm run mirror:acquire
+agent-harness mirror plan
+agent-harness mirror locks
+agent-harness mirror acquire
 agent-harness mirror diff
 agent-harness mirror explain --asset <asset-id>
+agent-harness mirror explain --mirror <mirror-id>
 ```
+
+**`mirror plan`** builds a mirror readiness plan from current discovery outputs. It summarizes the mirror-eligible candidate pool, applies mirror policy, and writes recommendations to `mirror/audit/mirror-plan.json`.
+
+```bash
+agent-harness mirror plan
+```
+
+The plan includes candidate breakdowns by host and asset kind, the effective mirror policies, and next-action suggestions.
+
+**`mirror locks`** generates initial bundle lock files from selected catalog entries. Each lock file (`mirror/bundles/<bundleId>.lock.json`) defines which assets belong to a mirror bundle before acquisition begins.
+
+```bash
+agent-harness mirror locks
+```
+
+**`mirror acquire`** acquires raw mirror artifacts, writes the mirror index, and resolves bundle locks by downloading or verifying each asset referenced in the lock files. High-risk community assets are routed into quarantine.
+
+```bash
+agent-harness mirror acquire
+```
+
+**`mirror diff`** compares the current mirror index against the previous index snapshot, printing added, removed, and changed assets.
+
+```bash
+agent-harness mirror diff
+```
+
+Previous index state is read from `mirror/index.jsonl.snapshot`; the current index is `mirror/index.jsonl`.
+
+**`mirror explain`** prints the full mirror index entry, raw content preview, and any available manifest for a specific mirrored artifact. Use `--asset` or `--mirror` to identify the target.
+
+```bash
+agent-harness mirror explain --asset my-asset-id
+agent-harness mirror explain --mirror mirror-abc123
+```
+
+Output includes the mirror index entry, raw artifact root path, optional manifest, and a 4000-character content preview.
+
+### Bundle
+
+Bundle commands inspect and explain why assets are present in bundle locks. The `bundle` CLI domain is an alias for `mirror bundle-explain`.
+
+```bash
+agent-harness bundle explain <bundleId>
+agent-harness bundle explain --bundle <bundleId>
+```
+
+**`bundle explain`** explains why assets are present in a given bundle lock. For each asset in the bundle, it shows whether the asset was selected or rejected during catalog selection, its asset kind, compatibility mode, source authority tier, mirror status, and the specific reason for its bundle inclusion.
+
+```bash
+agent-harness bundle explain copilot-vscode-default
+agent-harness bundle explain --bundle opencode-default --json
+```
+
+Key flags:
+
+- **`--bundle <bundleId>`** (or pass the bundle ID as a positional argument) — Bundle lock to explain
+- **`--json`** — Output the full explanation as JSON
+
+The explanation draws on the catalog selection report, mirror index, and rejection log to explain each asset's presence in the bundle.
 
 ### Quarantine review
 
@@ -719,6 +839,7 @@ Mirror acquisition routes high-risk or prompt-injection-like community assets in
 
 ```bash
 npm run install:bundle
+agent-harness stage bundle
 agent-harness install native --host vscode
 agent-harness install native --host vscode --operation verify
 agent-harness install native --host vscode --operation install --apply
@@ -728,6 +849,15 @@ agent-harness install native --host cursor --operation verify
 agent-harness stage refresh --host copilot-vscode
 agent-harness stage refresh --host copilot-vscode --apply
 agent-harness stage refresh --host copilot-vscode --due-only
+agent-harness stage diff
+agent-harness stage diff --host copilot-vscode
+agent-harness stage explain --asset <asset-id>
+agent-harness stage generations list
+agent-harness stage generations list --host opencode
+agent-harness stage generations pin --host copilot-vscode --generation <gen-id> --reason "stable"
+agent-harness stage generations unpin --host copilot-vscode --generation <gen-id>
+agent-harness stage generations prune
+agent-harness stage reset
 npm run install:reconcile
 npm run install:reset
 ```
@@ -744,6 +874,8 @@ For report-only vs due-only vs apply-safe update workflows, see [`ASSET-UPDATE-P
 npm run activate:host
 npm run activate:reset
 agent-harness activate rollback --host opencode --generation <generation-id>
+agent-harness activate diff --host <host> --baseline <state-root>
+agent-harness activate explain --host <host> --asset <asset-id>
 ```
 
 You can bias recommendation ranking and activation ordering with a validated `--intent`:
@@ -877,349 +1009,21 @@ This matrix is the public v2 adapter contract. It separates generic lifecycle su
 
 Adapter compliance coverage lives in `src/tests/host-adapters.test.ts`, `src/tests/native-host-wire.test.ts`, and `src/tests/host-support-matrix.test.ts`. The tests assert the registered adapter metadata, preview/apply/reset behavior, native-install boundaries, reversible managed file handling, and the README matrix rows.
 
-### VS Code / GitHub Copilot
-
-Adapter implementation:
-
-- `src/host-adapters/vscode.ts`
-- `src/host-adapters/vscode-settings.ts`
-
-This adapter is intentionally host-specific because VS Code and GitHub Copilot use protected user-scoped settings plus workspace-local instruction files.
-
-Current official docs:
-
-- <https://code.visualstudio.com/docs/copilot/customization/overview>
-- <https://code.visualstudio.com/docs/copilot/customization/custom-instructions>
-- <https://code.visualstudio.com/docs/copilot/customization/agent-skills>
-- <https://code.visualstudio.com/docs/copilot/customization/agent-plugins>
-- <https://code.visualstudio.com/docs/copilot/customization/mcp-servers>
-
-Supported behavior:
-
-- patches user-scoped VS Code JSONC settings
-- writes workspace-local `.github/copilot-instructions.md`
-- materializes curated runtime folders under `~/.copilot/agent-harness/`
-- writes extension metadata for valid VS Code extension identifiers
-- emits native install action guidance for extension assets when possible
-- supports explicit extension install, verify, and remove via `install native --host vscode`
-- projects shared MCP references into the effective wire plan
-- resets managed settings entries and generated files without wiping unrelated user settings
-
-Settings that can be patched:
-
-- `chat.pluginLocations`
-- `chat.agentSkillsLocations`
-- `chat.hookFilesLocations`
-- `chat.agentFilesLocations`
-- `chat.instructionsFilesLocations`
-- `github.copilot.chat.codeGeneration.instructions`
-
-Curated runtime folders:
-
-- `~/.copilot/agent-harness/instructions`
-- `~/.copilot/agent-harness/agents`
-- `~/.copilot/agent-harness/skills`
-- `~/.copilot/agent-harness/hooks`
-- `~/.copilot/agent-harness/plugins`
-- `~/.copilot/agent-harness/extensions`
-
-Workspace and activation outputs:
-
-- `.github/copilot-instructions.md`
-- `activate/copilot-vscode/wire-preview-vscode.json`
-- `activate/copilot-vscode/wire-plan.json`
-- `activate/copilot-vscode/workspace-profile-manifest.json`
-
-Current boundaries (host-specific details only; see [Managed wire-in vs native/global install](#managed-wire-in-vs-nativeglobal-install) for the shared invariants):
-
-- Applying VS Code wire-in requires the VS Code user settings directory to exist and be writable.
-- The README treats instruction files, skills, plugins, and MCP as the primary documented public contract. Some patched settings remain implementation detail unless a current VS Code settings reference explicitly documents them.
-- The adapter never silently installs marketplace extensions during `wire`; native extension installation is an explicit `install native --operation install --apply` action.
-
-### OpenCode
-
-Adapter implementation:
-
-- `src/host-adapters/opencode.ts`
-
-This adapter is intentionally host-specific because OpenCode consumes project-local overlays and asset-kind directory layouts.
-
-Current official docs:
-
-- <https://opencode.ai/docs/rules/>
-- <https://opencode.ai/docs/agents/>
-- <https://opencode.ai/docs/skills/>
-- <https://opencode.ai/docs/commands/>
-- <https://opencode.ai/docs/plugins/>
-- <https://opencode.ai/docs/mcp-servers/>
-- <https://opencode.ai/docs/custom-tools/>
-- <https://opencode.ai/docs/config/>
-
-Supported behavior:
-
-- writes a managed overlay under `.opencode/context/project-intelligence/agent-harness/`
-- updates/removes managed `AGENTS.md` sections
-- links selected assets into project-local `.opencode/` directories by asset kind, mapping workflow and prompt-pack assets to OpenCode `commands/`
-- writes an effective project-local wire plan under the managed overlay
-- projects shared MCP references into the wire plan when available
-- uses Windows directory junctions on Windows
-- avoids global OpenCode or OpenAgentsControl install mutation
-- does not require a global OpenCode config directory for project-local apply/reset
-
-Managed project-local locations:
-
-- `.opencode/context/project-intelligence/agent-harness/`
-- `.opencode/agents/`
-- `.opencode/skills/`
-- `.opencode/commands/`
-- `.opencode/plugins/`
-- `.opencode/context/project-intelligence/agent-harness/instructions/`
-- `.opencode/context/project-intelligence/agent-harness/hooks/`
-- `.opencode/context/project-intelligence/agent-harness/mcp-servers/`
-- `.opencode/context/project-intelligence/agent-harness/extensions/`
-- `.opencode/context/project-intelligence/agent-harness/reference-packs/`
-- `AGENTS.md`
-
-Documented OpenCode-native surfaces that this adapter uses or stays compatible with:
-
-- `AGENTS.md`
-- `opencode.json` `instructions`
-- `opencode.json` `mcp` when structured native payloads are present
-- `.opencode/agents/`
-- `.opencode/skills/`
-- `.opencode/commands/`
-- `.opencode/plugins/`
-- `.opencode/tools/` when structured native payloads are present
-
-Agent-harness-managed overlay/reference locations:
-
-- `.opencode/context/project-intelligence/agent-harness/`
-- harness-managed context-root link targets such as `.opencode/context/project-intelligence/agent-harness/instructions/`, `.opencode/context/project-intelligence/agent-harness/hooks/`, `.opencode/context/project-intelligence/agent-harness/mcp-servers/`, `.opencode/context/project-intelligence/agent-harness/extensions/`, and `.opencode/context/project-intelligence/agent-harness/reference-packs/`
-- `AGENTS.md` managed sections
-
-Wire-plan outputs:
-
-- `activate/opencode/wire-preview-opencode.json`
-- `.opencode/context/project-intelligence/agent-harness/wire-plan.json`
-
-Current boundaries (host-specific details only; see [Managed wire-in vs native/global install](#managed-wire-in-vs-nativeglobal-install) for the shared invariants):
-
-- The adapter links activated assets into a project-local overlay and reference tree.
-- It does not claim that every harness-managed `.opencode/*` path is a documented native OpenCode auto-discovery surface.
-- `opencode.json` remains opt-in: managed instruction entries are projected there automatically, and MCP/tool synthesis only happens when an asset carries structured host-native payloads for those documented surfaces.
-- It does not install or modify global OpenCode packages or any global OpenCode MCP configuration.
-
-### Cursor
-
-Adapter implementation:
-
-- `src/host-adapters/native-wire.ts`
-- registered as `cursor` in `src/host-adapters/registry.ts`
-
-Cursor is a project-local native adapter. It reuses the VS Code / Copilot lifecycle host for install and activation but ranks assets through its own `cursor` recommendation policy.
-
-Current official docs:
-
-- <https://cursor.com/docs/rules>
-- <https://cursor.com/docs/skills>
-- <https://cursor.com/docs/plugins>
-- <https://cursor.com/docs/mcp>
-- <https://cursor.com/docs/hooks>
-- <https://cursor.com/docs/subagents>
-- <https://cursor.com/marketplace>
-
-Supported behavior:
-
-- writes the documented Cursor rules file `.cursor/rules/agent-harness.mdc`
-- materializes selected assets under `.cursor/agent-harness/`
-- stages a Cursor plugin-compatible component tree at `.cursor/agent-harness/cursor-plugin/` with a `.cursor-plugin/plugin.json` manifest
-- maps selected Cursor command-like assets from `workflow` and `prompt-pack` recommendations into staged plugin `commands/`
-- stages plugin-compatible `agents/`, `skills/`, `rules/`, and reference files for hosts that register project plugin paths
-- writes `activate/cursor/wire-preview-cursor.json`
-- writes `activate/cursor/wire-plan.json` on apply
-- avoids global Cursor profile mutation
-- avoids global VS Code profile mutation
-- plans explicit Cursor native extension install/verify/remove actions when selected extension assets expose structured extension IDs
-
-Documented Cursor-native surfaces used directly:
-
-- `.cursor/rules/`
-- `.cursor/agents/`
-- `.cursor/mcp.json` when structured native payloads are present
-- `.cursor/hooks.json` / `.cursor/hooks/` when structured native payloads are present
-- compatible plugin bundle format via `.cursor-plugin/plugin.json`
-
-Agent-harness staged/plugin-compatible surfaces:
-
-- `.cursor/agent-harness/`
-- `.cursor/agent-harness/cursor-plugin/`
-- staged plugin `agents/`, `skills/`, `rules/`, `commands/`, and references
-
-Current boundaries (host-specific details only; see [Managed wire-in vs native/global install](#managed-wire-in-vs-nativeglobal-install) for the shared invariants):
-
-- Cursor native extension installation is explicit through `install native --host cursor --operation <verify|install|remove>` and depends on a compatible `cursor` CLI.
-- `.cursor/agent-harness/` and `.cursor/agent-harness/cursor-plugin/` are staged project-local managed locations; `.cursor/agent-harness/cursor-plugin/` is treated as a compatible plugin bundle, and registering plugin paths remains host/user-managed.
-- `.cursor/mcp.json` and `.cursor/hooks*.json` synthesis is opt-in and only happens when an asset carries structured host-native payloads for those documented files.
-- Extension-like assets without structured extension IDs are treated as reference material in the project-local managed tree.
-
-### Zed
-
-Adapter implementation:
-
-- `src/host-adapters/native-wire.ts`
-- registered as `zed` in `src/host-adapters/registry.ts`
-
-Zed is a project-local native adapter. It reuses the OpenCode-compatible lifecycle host for install and activation but ranks assets through its own `zed` recommendation policy.
-
-Current official docs:
-
-- <https://zed.dev/docs/ai/rules>
-- <https://zed.dev/docs/ai/mcp>
-- <https://zed.dev/docs/reference/all-settings.html>
-
-Supported behavior:
-
-- updates the documented project `.rules` file with an agent-harness managed section
-- adds an `agent-harness` profile entry to `.zed/settings.json`
-- materializes selected assets of every supported asset kind under `.zed/agent-harness/`
-- surfaces agents, skills, workflows, prompt packs, plugins, hooks, extensions, reference packs, and MCP assets as project-readable references in managed Zed context
-- writes `activate/zed/wire-preview-zed.json`
-- writes `activate/zed/wire-plan.json` on apply
-- avoids global Zed profile/settings mutation
-- avoids global OpenCode profile mutation
-
-Documented Zed-native surfaces used directly:
-
-- `.rules`
-- `.zed/settings.json` agent profile settings
-
-Agent-harness managed reference surfaces:
-
-- `.zed/agent-harness/`
-- project-readable references for non-native asset kinds
-
-Current boundaries (host-specific details only; see [Managed wire-in vs native/global install](#managed-wire-in-vs-nativeglobal-install) for the shared invariants):
-
-- The adapter writes project-local context and profile hints.
-- Zed extension installation remains manual through Zed's Extension Gallery or `auto_install_extensions`; extension assets are wired as managed project references unless explicit extension-install intent is provided.
-- `.zed/agent-harness/` is a managed reference tree, not a claim that every staged asset kind is a documented Zed-native directory.
-- Zed's documented MCP/context-server settings can be synthesized when an asset includes structured host-native config payloads for `.zed/settings.json`.
-
-### Claude Code
-
-Adapter implementation:
-
-- `src/host-adapters/native-wire.ts`
-- registered as `claude-code` in `src/host-adapters/registry.ts`
-
-Claude Code is a project-local native adapter. It reuses the OpenCode-compatible lifecycle host for install and activation but ranks assets through its own `claude-code` recommendation policy.
-
-Current official docs:
-
-- <https://code.claude.com/docs/en/memory>
-- <https://code.claude.com/docs/en/slash-commands>
-- <https://code.claude.com/docs/en/sub-agents>
-- <https://code.claude.com/docs/en/hooks>
-- <https://code.claude.com/docs/en/settings>
-
-Supported behavior:
-
-- writes managed project context to `CLAUDE.md`
-- writes managed local Claude context to `.claude/CLAUDE.md`
-- writes `.claude/rules/agent-harness.md`
-- writes `.claude/agents/agent-harness.md`
-- writes `.claude/skills/agent-harness/SKILL.md`
-- writes `.claude/commands/agent-harness.md`
-- maps selected Claude Code command-like assets from `workflow` and `prompt-pack` recommendations into the managed command context
-- includes selected instruction, agent, skill, workflow, and prompt-pack content in the matching managed Claude files
-- materializes selected assets of every supported asset kind under `.claude/agent-harness/`
-- surfaces plugins, hooks, extensions, reference packs, and MCP assets as managed project-readable references
-- writes `activate/claude-code/wire-preview-claude-code.json`
-- writes `activate/claude-code/wire-plan.json` on apply
-- avoids global Claude Code profile mutation
-
-Current boundaries (host-specific details only; see [Managed wire-in vs native/global install](#managed-wire-in-vs-nativeglobal-install) for the shared invariants):
-
-- MCP and reference assets are still staged as project-readable references by default.
-- The adapter can synthesize Claude Code `.mcp.json` and `.claude/settings*.json` surfaces when an asset includes structured host-native config payloads.
-- Executable hook/plugin settings still require asset metadata that deliberately targets those documented Claude surfaces.
-
-### OpenAI Codex
-
-The Codex adapter uses the OpenCode-compatible lifecycle host while applying Codex-specific recommendation policy and project-local wire-in surfaces.
-
-Official references:
-
-- <https://developers.openai.com/codex>
-- <https://developers.openai.com/codex/app>
-- <https://developers.openai.com/codex/cli>
-- <https://developers.openai.com/codex/skills>
-- <https://developers.openai.com/codex/plugins>
-- <https://developers.openai.com/codex/mcp>
-- <https://developers.openai.com/codex/hooks>
-- <https://developers.openai.com/codex/guides/agents-md>
-
-What the adapter does:
-
-- writes a managed Codex section into project `AGENTS.md`
-- materializes selected skills into repo-local `.agents/skills/agent-harness/`
-- writes a repo-local `.agents/plugins/marketplace.json` and reviewable `agent-harness` plugin descriptor
-- stores reference assets under `.codex/agent-harness/`
-- applies structured Codex-native payloads only when assets explicitly provide documented host-native config
-
-What it does not do by default:
-
-- it does not write global `~/.codex` config or plugin cache entries
-- it does not silently enable plugin hooks
-- it does not perform MCP OAuth/login or create MCP server config without structured native payloads
-- it does not create automations, remote connections, browser/computer-use settings, or full-access sandbox settings
-
-### Pi
-
-Adapter implementation:
-
-- `src/host-adapters/native-wire.ts`
-- registered as `pi` in `src/host-adapters/registry.ts`
-
-Pi is a project-local native adapter. It reuses the OpenCode-compatible lifecycle host for install and activation but ranks assets through its own `pi` recommendation policy.
-
-Current official docs:
-
-- <https://pi.dev/docs/latest/settings>
-- <https://pi.dev/docs/latest/skills>
-- <https://pi.dev/docs/latest/prompt-templates>
-- <https://pi.dev/docs/latest/extensions>
-- <https://pi.dev/docs/latest/packages>
-- <https://pi.dev/docs/latest/usage>
-
-Supported behavior:
-
-- writes managed project agent context to `AGENTS.md`
-- writes managed project system context to `SYSTEM.md`
-- writes `.pi/skills/agent-harness/SKILL.md`
-- writes `.pi/prompts/agent-harness.md`
-- updates `.pi/settings.json` using Pi's documented top-level `skills` and `prompts` arrays
-- includes selected instruction, agent, skill, workflow, and prompt-pack content in the matching managed Pi files
-- materializes selected assets of every supported asset kind under `.pi/agent-harness/`
-- surfaces plugins, hooks, extensions, reference packs, and MCP assets as managed project-readable references
-- writes `activate/pi/wire-preview-pi.json`
-- writes `activate/pi/wire-plan.json` on apply
-- avoids global Pi profile mutation
-
-Documented Pi-native surfaces used directly:
-
-- `AGENTS.md`
-- `SYSTEM.md`
-- `.pi/skills/`
-- `.pi/prompts/`
-- `.pi/settings.json` top-level resource arrays
-
-Current boundaries (host-specific details only; see [Managed wire-in vs native/global install](#managed-wire-in-vs-nativeglobal-install) for the shared invariants):
-
-- Pi does not include `shared-mcp` in its default bundles.
-- `.pi/agent-harness/` remains a harness-managed reference tree for non-native assets.
-- `.pi/extensions/` and `.pi/packages/` can be synthesized when an asset includes structured host-native config payloads.
-- MCP, extension, hook, and plugin assets default to managed references unless they carry compatible Pi-native payloads.
+### Per-host wire-in details
+
+Each host has a dedicated reference page covering adapter source, supported behavior, managed files, documented surfaces, and known limitations:
+
+| Host                         | Adapter source                            | Lifecycle host   | Details                                                                            |
+| ---------------------------- | ----------------------------------------- | ---------------- | ---------------------------------------------------------------------------------- |
+| **VS Code / GitHub Copilot** | `src/host-adapters/vscode.ts`             | `copilot-vscode` | [docs/reference/hosts/vscode-copilot.md](./docs/reference/hosts/vscode-copilot.md) |
+| **OpenCode**                 | `src/host-adapters/opencode.ts`           | `opencode`       | [docs/reference/hosts/opencode.md](./docs/reference/hosts/opencode.md)             |
+| **Cursor**                   | `src/host-adapters/cursor-native.ts`      | `copilot-vscode` | [docs/reference/hosts/cursor.md](./docs/reference/hosts/cursor.md)                 |
+| **Zed**                      | `src/host-adapters/zed-native.ts`         | `opencode`       | [docs/reference/hosts/zed.md](./docs/reference/hosts/zed.md)                       |
+| **Claude Code**              | `src/host-adapters/claude-code-native.ts` | `opencode`       | [docs/reference/hosts/claude-code.md](./docs/reference/hosts/claude-code.md)       |
+| **OpenAI Codex**             | `src/host-adapters/codex-native.ts`       | `opencode`       | [docs/reference/hosts/codex.md](./docs/reference/hosts/codex.md)                   |
+| **Pi**                       | `src/host-adapters/pi-native.ts`          | `opencode`       | [docs/reference/hosts/pi.md](./docs/reference/hosts/pi.md)                         |
+
+For the v2 host support matrix including lifecycle coverage, native install/verify/remove, project-local wiring, and known limitations, see the [v2 host support matrix](#v2-host-support-matrix) above. For full per-host detail including adapter implementation files, managed project-local locations, documented native surfaces, and host-specific boundaries, see the linked reference pages.
 
 ### Native adapter wire-plan fields
 
@@ -1661,14 +1465,20 @@ agent-harness/
 │   │   ├── discovery/
 │   │   └── wire/
 │   ├── host-adapters/
+│   │   ├── claude-code-native.ts
+│   │   ├── codex-native.ts
+│   │   ├── cursor-native.ts
 │   │   ├── extension-installer.ts
 │   │   ├── native-config.ts
+│   │   ├── native-utils.ts
 │   │   ├── native-wire.ts
 │   │   ├── opencode.ts
+│   │   ├── pi-native.ts
 │   │   ├── registry.ts
 │   │   ├── types.ts
 │   │   ├── vscode-settings.ts
-│   │   └── vscode.ts
+│   │   ├── vscode.ts
+│   │   └── zed-native.ts
 │   ├── install/
 │   ├── lib/
 │   ├── manifest-validation/
@@ -1716,7 +1526,7 @@ agent-harness/
 │       ├── FUTURE-IMPROVEMENTS.md
 │       ├── HOST-SURFACE-AUDIT.md
 │       ├── IMPLEMENTATION-PLAN.md
-│       ├── Roadmap.md
+│       ├── ROADMAP.md
 │       └── SOURCE-SYNC-DECOMPOSITION-PLAN.md
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
@@ -1930,7 +1740,7 @@ Known boundaries:
 - [`RECOMMENDATION-POLICY-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/RECOMMENDATION-POLICY-PLAYBOOK.md) - how to inspect and tweak ranking policy only after recall looks healthy
 - [`HOST-SURFACE-AUDIT.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/HOST-SURFACE-AUDIT.md) - checked-in matrix mapping host-facing paths/settings to documented, compatibility, harness-managed, or implementation-detail status
 - [`SECURITY.md`](https://github.com/ar27111994/agent-harness/blob/main/SECURITY.md) - vulnerability reporting and supported-version policy
-- [`Roadmap.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/Roadmap.md) - gap analysis and long-range direction
+- [`ROADMAP.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/ROADMAP.md) - gap analysis and long-range direction
 - [`IMPLEMENTATION-PLAN.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/IMPLEMENTATION-PLAN.md) - milestone-oriented execution plan
 - [`FUTURE-IMPROVEMENTS.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/FUTURE-IMPROVEMENTS.md) - follow-up ideas and architectural extensions
 - [`CONTRIBUTING.md`](https://github.com/ar27111994/agent-harness/blob/main/CONTRIBUTING.md) - contribution workflow and hygiene

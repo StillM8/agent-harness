@@ -150,6 +150,78 @@ function runHelpCommand(
   args: string[],
   workingDirectory: string,
 ): Promise<number> {
+  // Determine whether help was explicitly requested (--help / -h in original args).
+  // We need this before filtering because the nonFlagArgs filter removes them.
+  const wasHelpRequested =
+    args.includes("--help") || args.includes("-h") || args[0] === "help";
+
+  const nonFlagArgs = args.filter(
+    (arg) => arg !== "--help" && arg !== "-h" && arg !== "help",
+  );
+
+  // When --help appears at subcommand depth (e.g., "discover full --help"),
+  // route to the domain handler. Only discover and recommend handle --help
+  // internally for subcommand-specific help output. For mutating domains
+  // (mirror, install, activate, quarantine, rebuild, workspace, wire, setup),
+  // we substitute "help" to prevent mutation — the handler then shows its
+  // generic help without executing any phase.
+  if (nonFlagArgs.length >= 2) {
+    const [domain, subcommand, ...extra] = nonFlagArgs;
+    // Mutating domains don't inspect argv for --help — substitute "help" so
+    // they output help instead of executing the subcommand.
+    const MUTATING_DOMAINS = new Set([
+      "mirror",
+      "install",
+      "stage",
+      "activate",
+      "quarantine",
+      "rebuild",
+      "workspace",
+      "wire",
+      "setup",
+      "doctor",
+      "bundle",
+    ]);
+    const safeSubcommand = wasHelpRequested
+      ? MUTATING_DOMAINS.has(domain)
+        ? "help"
+        : subcommand
+      : subcommand;
+    const domainArgs = [safeSubcommand, ...extra];
+    if (wasHelpRequested && !MUTATING_DOMAINS.has(domain)) {
+      // discover and recommend inspect --help in their args
+      domainArgs.push("--help");
+    }
+    switch (domain) {
+      case "discover":
+        return runDiscover(domainArgs, workingDirectory, "");
+      case "recommend":
+        return runRecommend(domainArgs, workingDirectory, "");
+      case "mirror":
+      case "bundle":
+        return runMirror(domainArgs, workingDirectory, "");
+      case "install":
+      case "stage":
+        return runInstall(domainArgs, workingDirectory, "");
+      case "activate":
+        return runActivate(domainArgs, workingDirectory, "");
+      case "quarantine":
+        return runQuarantine(domainArgs, "");
+      case "rebuild":
+        return runRebuild(domainArgs, workingDirectory, "");
+      case "workspace":
+        return runWorkspace(domainArgs, workingDirectory, "");
+      case "wire":
+        return runWire(domainArgs, workingDirectory, "");
+      case "setup":
+      case "doctor":
+        return runSetup(domainArgs, "");
+      default:
+        printHelp();
+        return Promise.resolve(1);
+    }
+  }
+
   const domain = resolveHelpDomain(args);
 
   switch (domain) {
