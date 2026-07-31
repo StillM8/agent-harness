@@ -3,6 +3,11 @@ import {
   resolveHostAdapter,
   type HostAdapter,
 } from "./host-adapters/registry.js";
+import {
+  hasHelpFlag,
+  printSubcommandHelp,
+  type SubcommandHelpEntry,
+} from "./cli-help-format.js";
 import { collectActivatedAssetPrerequisiteDiagnostics } from "./lib/asset-prerequisites.js";
 import { printCommandHelp } from "./lib/cli-output.js";
 import { getOptionValue } from "./lib/cli-options.js";
@@ -44,6 +49,12 @@ export async function runSetup(
   projectRoot?: string,
 ): Promise<number> {
   const [command = "doctor", ...rest] = args;
+
+  // Detect --help flag and show subcommand-specific help (#383).
+  if (hasHelpFlag(rest)) {
+    printSetupSubcommandHelp(command);
+    return 0;
+  }
 
   switch (command) {
     case "doctor":
@@ -421,6 +432,48 @@ function printHosts(): void {
       `${adapter.id}\t${adapter.displayName}\taliases=${adapter.aliases.join(",")}\tlifecycle=${adapter.lifecycleHost}\trecommendation=${adapter.recommendationHost}\tbundles=${adapter.defaultBundleIds.join(",")}\twire=${wireKinds.join(",")}\tnativeInstall=${nativeInstallKinds.join(",") || "none"}\truntime=${adapter.runtime?.executable ?? "none"}\truntimeChecks=${runtimeChecks.join(",") || "none"}`,
     );
   }
+}
+
+/**
+ * Prints help for a specific setup subcommand (#383).
+ */
+function printSetupSubcommandHelp(subcommand: string): void {
+  const helpTexts: Record<string, SubcommandHelpEntry> = {
+    doctor: {
+      heading: "setup doctor — Check host CLI readiness",
+      lines: [
+        "Usage: agent-harness setup doctor [--host <host>]",
+        "",
+        "Checks whether the required host CLIs are installed and accessible on",
+        "PATH. Runs adapter preflights concurrently with per-adapter timeouts.",
+        "",
+        "Options:",
+        "  --host <host>   Limit check to a specific host adapter",
+        "",
+        "Env: AGENT_HARNESS_SETUP_DOCTOR_HOST_TIMEOUT_MS (default: 5000)",
+      ],
+    },
+    hosts: {
+      heading: "setup hosts — List registered host adapters",
+      lines: [
+        "Usage: agent-harness setup hosts",
+        "",
+        "Lists all registered host adapters with their lifecycle hosts,",
+        "wire hosts, and supported asset kinds.",
+      ],
+    },
+    login: {
+      heading: "setup login — Interactive host login",
+      lines: [
+        "Usage: agent-harness setup login [--provider <provider>]",
+        "",
+        "Guides you through interactive login for host-specific",
+        "authentication (API keys, OAuth, CLI auth).",
+      ],
+    },
+  };
+
+  printSubcommandHelp(subcommand, helpTexts, printSetupHelp);
 }
 
 function printSetupHelp(): void {

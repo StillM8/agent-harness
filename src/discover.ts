@@ -6,6 +6,11 @@ import {
   inspectCatalog,
   printCatalogStats,
 } from "./domains/discovery/catalog-inspection.js";
+import {
+  hasHelpFlag,
+  printSubcommandHelp,
+  type SubcommandHelpEntry,
+} from "./cli-help-format.js";
 import { printCommandHelp } from "./lib/cli-output.js";
 
 import {
@@ -113,15 +118,32 @@ export async function runDiscover(
 
   // Subcommands with dedicated help handlers get routed inside the switch.
   // For all other subcommands, --help/-h shows the parent discover help.
-  const hasHelpFlag = rest.includes("--help") || rest.includes("-h");
+  const helpRequested = hasHelpFlag(rest);
   const hasSpecificHelp = new Set([
     "full",
     "breadth",
     "recall",
     "candidate-pool",
+    "sources",
+    "demand-profile",
+    "catalog",
+    "sync",
+    "index",
+    "select",
+    "stats",
+    "enrich",
+    "ard-export",
+    "diff",
+    "environment-index",
   ]);
-  if (hasHelpFlag && !hasSpecificHelp.has(command)) {
+  if (helpRequested && !hasSpecificHelp.has(command)) {
     printDiscoverHelp();
+    return 0;
+  }
+
+  // Subcommand-specific help: print targeted help instead of executing.
+  if (helpRequested && hasSpecificHelp.has(command)) {
+    printDiscoverSubcommandHelp(command);
     return 0;
   }
 
@@ -224,13 +246,10 @@ export async function runDiscover(
       );
     }
     case "full": {
-      if (hasHelpFlag) {
-        printDiscoverFullHelp();
-        return 0;
-      }
       const aiEnrichmentFlags = parseAiEnrichmentFlags(rest);
       const quietMode = rest.includes("--quiet");
       const summaryMode = rest.includes("--summary");
+      const noSync = rest.includes("--no-sync");
       const maxBytesIndex = rest.indexOf("--max-scan-bytes");
       let maxBytes: number | undefined;
       if (maxBytesIndex >= 0) {
@@ -254,8 +273,20 @@ export async function runDiscover(
       await generateDemandProfile(workingDirectory, projectRoot, maxBytes);
       logDiscoverPhase("discover full", 2, 5, "Refreshing source index");
       await generateSourceIndex(projectRoot);
-      logDiscoverPhase("discover full", 3, 5, "Syncing indexed sources");
-      await syncIndexedSources(projectRoot);
+      if (noSync) {
+        logDiscoverPhase(
+          "discover full",
+          3,
+          5,
+          "Skipping source sync (--no-sync)",
+        );
+        console.warn(
+          "[discover full] --no-sync: skipping indexed source sync, using existing source-sync state.",
+        );
+      } else {
+        logDiscoverPhase("discover full", 3, 5, "Syncing indexed sources");
+        await syncIndexedSources(projectRoot);
+      }
       logDiscoverPhase("discover full", 4, 5, "Building discovery catalog");
       await generateCatalog(projectRoot);
       logDiscoverPhase("discover full", 5, 5, "Applying selection rules");
@@ -283,10 +314,6 @@ export async function runDiscover(
     case "breadth":
     case "recall":
     case "candidate-pool":
-      if (hasHelpFlag) {
-        printDiscoverBreadthHelp();
-        return 0;
-      }
       await runDiscoveryBreadth(workingDirectory, projectRoot);
       return 0;
     case "enrich":
@@ -1026,6 +1053,160 @@ function assessDiscoveryBreadth(input: {
   };
 }
 
+/**
+ * Prints help for a specific discover subcommand.
+ */
+function printDiscoverSubcommandHelp(subcommand: string): void {
+  const helpTexts: Record<string, SubcommandHelpEntry> = {
+    sources: {
+      heading: "discover sources — Refresh the discovery source index",
+      lines: [
+        "Usage: agent-harness discover sources",
+        "",
+        "Scans all configured discovery sources (registries, repos, marketplaces,",
+        "source packs) and writes a refreshed source-index to:",
+        "  discover/output/source-index.json",
+        "",
+        "The source index is used by subsequent 'discover sync' and 'discover full'",
+        "runs. Re-run this command after adding or removing sources in",
+        "discover/sources.json or discover/source-packs/.",
+        "",
+        "Options:",
+        "  --state-root <path>   Override state directory",
+      ],
+    },
+    "demand-profile": {
+      heading: "discover demand-profile — Scan workspace for demand signals",
+      lines: [
+        "Usage: agent-harness discover demand-profile",
+        "",
+        "Scans the current working directory for language, framework, package-manager,",
+        "and concern signals. Writes the result to:",
+        "  discover/output/demand-profile.json",
+        "",
+        "The demand profile drives catalog selection and recommendation scoring.",
+      ],
+    },
+    catalog: {
+      heading: "discover catalog — Build the discovery asset catalog",
+      lines: [
+        "Usage: agent-harness discover catalog",
+        "",
+        "Harvests all configured local and remote discovery sources and writes the",
+        "full asset catalog to:",
+        "  discover/output/catalog.assets.jsonl",
+        "",
+        "Run 'discover sync' first to populate remote source data.",
+      ],
+    },
+    sync: {
+      heading: "discover sync — Synchronize discovered sources",
+      lines: [
+        "Usage: agent-harness discover sync",
+        "",
+        "Fetches and persists data from all configured discovery sources. Uses the",
+        "local index when fresh, performs live harvest otherwise.",
+        "",
+        "Options:",
+        "  --full               Run full sync (otherwise uses cached index when fresh)",
+        "  --state-root <path>   Override state directory",
+      ],
+    },
+    index: {
+      heading: "discover index — Build full offline catalog index",
+      lines: [
+        "Usage: agent-harness discover index",
+        "",
+        "Fully paginates all indexed sources to build a comprehensive offline catalog.",
+        "This is slow but thorough — intended for scheduled CI runs, not interactive use.",
+        "",
+        "Env: AGENT_HARNESS_SOURCE_SYNC_MAX_PAGES_FOR_INDEX_BUILD (default: 500, 0=unlimited)",
+        "      AGENT_HARNESS_DISCOVERY_INDEX_MAX_AGE_DAYS (default: 7)",
+      ],
+    },
+    select: {
+      heading: "discover select — Apply selection rules to the catalog",
+      lines: [
+        "Usage: agent-harness discover select",
+        "",
+        "Applies canonical selection rules (demand relevance, deduplication, diversity",
+        "caps) to the asset catalog and writes selected/rejected outputs to:",
+        "  discover/output/catalog.selected.jsonl",
+        "  discover/output/catalog.rejected.jsonl",
+        "",
+        "Prerequisite: 'discover catalog' must have been run first.",
+      ],
+    },
+    stats: {
+      heading: "discover stats — Print catalog statistics",
+      lines: [
+        "Usage: agent-harness discover stats",
+        "",
+        "Prints summary counts from the selected catalog grouped by source, asset kind,",
+        "host target, and authority tier.",
+      ],
+    },
+    enrich: {
+      heading: "discover enrich — Run AI-assisted enrichment on the catalog",
+      lines: [
+        "Usage: agent-harness discover enrich",
+        "",
+        "Runs a bounded AI-assisted enrichment pass against the selected catalog to",
+        "improve classification confidence, capability extraction, and deduplication.",
+        "",
+        "Env: AGENT_HARNESS_AI_ENRICHMENT_URL",
+        "      AGENT_HARNESS_AI_ENRICHMENT_API_KEY",
+        "      AGENT_HARNESS_AI_ENRICHMENT_MODE (default: manual)",
+        "      AGENT_HARNESS_AI_ENRICHMENT_MODEL (default: gpt-4o-mini)",
+      ],
+    },
+    "ard-export": {
+      heading: "discover ard-export — Export catalog to ARD format",
+      lines: [
+        "Usage: agent-harness discover ard-export",
+        "",
+        "Maps the selected catalog to the ARD v0.9 ai-catalog.json format and writes:",
+        "  .well-known/ai-catalog.json",
+        "",
+        "ARD-compliant registries can then discover and index agent-harness as a",
+        "publisher.",
+      ],
+    },
+    diff: {
+      heading: "discover diff — Compare discovery outputs against a baseline",
+      lines: [
+        "Usage: agent-harness discover diff --baseline <stateRoot>",
+        "",
+        "Compares current discovery outputs against a baseline state root.",
+        "Use --json for machine-readable output.",
+      ],
+    },
+    "environment-index": {
+      heading: "discover environment-index — Write query metadata",
+      lines: [
+        "Usage: agent-harness discover environment-index",
+        "",
+        "Writes experimental read-only query metadata for the current workspace to:",
+        "  discover/output/environment-index.json",
+      ],
+    },
+  };
+
+  printSubcommandHelp(subcommand, helpTexts, () => {
+    if (subcommand === "full") {
+      printDiscoverFullHelp();
+    } else if (
+      subcommand === "breadth" ||
+      subcommand === "recall" ||
+      subcommand === "candidate-pool"
+    ) {
+      printDiscoverBreadthHelp();
+    } else {
+      printDiscoverHelp();
+    }
+  });
+}
+
 function printDiscoverHelp(): void {
   printCommandHelp({
     heading: "discover commands:",
@@ -1160,6 +1341,7 @@ function printDiscoverFullHelp(): void {
         lines: [
           "--ai-enrich         Run AI enrichment after selection",
           "--no-ai-enrich      Skip AI enrichment",
+          "--no-sync           Skip indexed source sync (use existing state)",
           "--quiet             Suppress expected source health warnings",
           "--summary           Print aggregate warning breakdown by reason",
           "--max-scan-bytes N   Override the demand scan byte budget (default: 48 MB)",

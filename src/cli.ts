@@ -160,36 +160,18 @@ function runHelpCommand(
   );
 
   // When --help appears at subcommand depth (e.g., "discover full --help"),
-  // route to the domain handler. Only discover and recommend handle --help
-  // internally for subcommand-specific help output. For mutating domains
-  // (mirror, install, activate, quarantine, rebuild, workspace, wire, setup),
-  // we substitute "help" to prevent mutation — the handler then shows its
-  // generic help without executing any phase.
+  // route to the domain handler. The original subcommand is preserved and
+  // "--help" is appended so domain handlers can show subcommand-specific
+  // help instead of executing (#383). Handlers must detect --help and
+  // print help text without performing any mutation.
   if (nonFlagArgs.length >= 2) {
     const [domain, subcommand, ...extra] = nonFlagArgs;
-    // Mutating domains don't inspect argv for --help — substitute "help" so
-    // they output help instead of executing the subcommand.
-    const MUTATING_DOMAINS = new Set([
-      "mirror",
-      "install",
-      "stage",
-      "activate",
-      "quarantine",
-      "rebuild",
-      "workspace",
-      "wire",
-      "setup",
-      "doctor",
-      "bundle",
-    ]);
-    const safeSubcommand = wasHelpRequested
-      ? MUTATING_DOMAINS.has(domain)
-        ? "help"
-        : subcommand
-      : subcommand;
-    const domainArgs = [safeSubcommand, ...extra];
-    if (wasHelpRequested && !MUTATING_DOMAINS.has(domain)) {
-      // discover and recommend inspect --help in their args
+    // Preserve the original subcommand so domain handlers can show
+    // subcommand-specific help. Mutating domains receive the subcommand +
+    // --help flag — handlers must detect --help and show help text instead
+    // of executing the subcommand (#383).
+    const domainArgs = [subcommand, ...extra];
+    if (wasHelpRequested) {
       domainArgs.push("--help");
     }
     switch (domain) {

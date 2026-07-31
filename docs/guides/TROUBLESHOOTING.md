@@ -169,6 +169,68 @@ Two fixes address this:
 
 ---
 
+## Expected run durations
+
+Some commands are inherently slow due to network I/O and processing volume. The
+following durations are normal and do not indicate a hang or failure:
+
+| Command                     | Expected Duration | Notes                                   |
+| --------------------------- | ----------------- | --------------------------------------- |
+| `discover full` (first run) | 5–10 minutes      | Source sync iterates 70+ remote sources |
+| `discover sync`             | 2–5 minutes       | Subsequent runs use cached local index  |
+| `discover index`            | 10–30 minutes     | Full pagination of all indexed sources  |
+| `test:self-hosting`         | 2–3 minutes       | Runs full pipeline on the repo itself   |
+| `npm run validate:release`  | 5–15 minutes      | All quality gates + smoke tests         |
+
+For `discover full`, the sync phase prints per-source progress to stderr (e.g.
+`[discover sync] 3/12 npm … done (7242ms)`). Use `--no-sync` to skip source sync for
+local-only discovery. CI pipelines should set `timeout-minutes: 30` or higher.
+
+For `test:self-hosting`, the test timeout is configured in the CI quality
+workflow. If running locally, use:
+
+```bash
+node --test --test-timeout=300000 dist/tests/self-hosting.js
+```
+
+---
+
+## Windows git-bash (MSYS) — doubled drive letter in module path
+
+**Symptom:** On Windows with git-bash or MSYS2, running the CLI from source fails:
+
+```
+Error: Cannot find module 'C:\c\Projects\agent-harness\dist\cli.js'
+```
+
+The path shows `C:\c\...` (doubled drive letter) instead of `C:\...`.
+
+**Root cause:** MSYS/bash auto-converts `/c/Projects/...` to `C:/Projects/...`,
+but Node's module resolver can re-apply the drive letter prefix, producing the
+broken `C:\c\...` path.
+
+**Fix:** Use one of these workarounds:
+
+1. **Native Windows path** (recommended):
+
+   ```bash
+   node "C:\Projects\agent-harness\dist\cli.js" --version
+   ```
+
+2. **cygpath conversion** (for scripts):
+
+   ```bash
+   node "$(cygpath -w /c/Projects/agent-harness/dist/cli.js)" --version
+   ```
+
+3. **Global npm install** (for persistent use):
+   ```bash
+   npm install -g @ar27111994/agent-harness
+   agent-harness --version
+   ```
+
+---
+
 ## Filing an issue
 
 Before filing, include:

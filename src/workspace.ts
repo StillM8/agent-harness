@@ -2,6 +2,7 @@
 
 import { fileURLToPath } from "node:url";
 
+import { hasHelpFlag } from "./cli-help-format.js";
 import { resolveProjectRoot } from "./files.js";
 import { getOptionValues } from "./lib/cli-options.js";
 import {
@@ -36,6 +37,14 @@ export async function runWorkspace(
   projectRoot: string,
 ): Promise<number> {
   const [target = "help", ...rest] = args;
+
+  // Detect --help flag and show target-specific or parent help (#383).
+  // Must precede any argument parsing that could throw on invalid flags.
+  if (hasHelpFlag(rest)) {
+    printWorkspaceSubcommandHelp(target);
+    return 0;
+  }
+
   const sessionIntents = getOptionValues(rest, "--intent").map((v) =>
     parseSessionIntent(v),
   );
@@ -116,6 +125,42 @@ export async function runWorkspace(
       requireSuccess: aiEnrichmentFlags.requireSuccess,
     }),
   );
+}
+
+/**
+ * Prints help for a specific workspace target or parent help (#383).
+ */
+function printWorkspaceSubcommandHelp(target: string): void {
+  const hostAdapter = resolveHostAdapter(target);
+  if (hostAdapter) {
+    printCommandHelp({
+      heading: `workspace ${getPreferredHostCommand(hostAdapter.id)} — Run full pipeline for ${hostAdapter.displayName}`,
+      entries: [],
+      sections: [
+        {
+          title: "",
+          lines: [
+            `Usage: agent-harness workspace ${getPreferredHostCommand(hostAdapter.id)} [--intent <intent>]`,
+            "",
+            `Runs the complete discover → recommend → mirror → stage → activate →`,
+            `wire pipeline for ${hostAdapter.displayName}. All lifecycle state is`,
+            `written under the configured state root.`,
+            "",
+            "Options:",
+            "  --intent <intent>           Session intent (general, frontend, backend, etc.)",
+            "  --force                     Force enrichment provider call, bypassing cache",
+            "  --state-root <path>         Override state directory",
+            "  --no-dotenv                 Skip .env file loading",
+            "  --ai-enrich                 Request AI enrichment",
+            "  --no-ai-enrich              Skip AI enrichment",
+            "  --require-ai-enrich         Fail if AI enrichment is unavailable",
+          ],
+        },
+      ],
+    });
+  } else {
+    printWorkspaceHelp();
+  }
 }
 
 function printWorkspaceHelp(): void {

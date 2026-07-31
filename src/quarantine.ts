@@ -1,6 +1,11 @@
 import { join } from "node:path";
 
 import {
+  hasHelpFlag,
+  printSubcommandHelp,
+  type SubcommandHelpEntry,
+} from "./cli-help-format.js";
+import {
   readJsonFileOrNull,
   readJsonLinesFile,
   readTextFileOrNull,
@@ -41,6 +46,12 @@ export async function runQuarantine(
   projectRoot: string,
 ): Promise<number> {
   const [command = "help", ...rest] = args;
+
+  // Detect --help flag and show subcommand-specific help (#383).
+  if (hasHelpFlag(rest)) {
+    printQuarantineSubcommandHelp(command);
+    return 0;
+  }
 
   switch (command) {
     case "list":
@@ -475,6 +486,84 @@ async function readMirrorIndex(
     join(projectRoot, ...MIRROR_INDEX_PATH),
     assertMirrorIndexEntry,
   );
+}
+
+/**
+ * Prints help for a specific quarantine subcommand (#383).
+ */
+function printQuarantineSubcommandHelp(subcommand: string): void {
+  const helpTexts: Record<string, SubcommandHelpEntry> = {
+    list: {
+      heading: "quarantine list — List quarantined mirror artifacts",
+      lines: [
+        "Usage: agent-harness quarantine list",
+        "",
+        "Lists all mirror artifacts currently in quarantine, showing their",
+        "quarantine reason, risk assessment, and current review status.",
+      ],
+    },
+    inspect: {
+      heading: "quarantine inspect — Inspect a quarantined artifact",
+      lines: [
+        "Usage: agent-harness quarantine inspect --asset <assetId>",
+        "",
+        "Prints detailed quarantine information for a specific artifact,",
+        "including the full risk profile and review history.",
+      ],
+    },
+    report: {
+      heading: "quarantine report — Write quarantine state report",
+      lines: [
+        "Usage: agent-harness quarantine report",
+        "",
+        "Writes a full quarantine state report summarizing all quarantined",
+        "artifacts, their review statuses, and aggregate statistics.",
+        "",
+        "Output: state/quarantine/report.json",
+      ],
+    },
+    approve: {
+      heading: "quarantine approve — Approve a quarantined artifact",
+      lines: [
+        "Usage: agent-harness quarantine approve --asset <assetId> [--reason <reason>] [--reviewer <name>]",
+        "",
+        "Approves a quarantined artifact, releasing it from quarantine",
+        "and making it eligible for mirror acquisition.",
+        "",
+        "Options:",
+        "  --reason <reason>   Review reason or justification",
+        "  --reviewer <name>    Reviewer name or bot identifier",
+      ],
+    },
+    reject: {
+      heading: "quarantine reject — Reject a quarantined artifact",
+      lines: [
+        "Usage: agent-harness quarantine reject --asset <assetId> [--reason <reason>] [--reviewer <name>]",
+        "",
+        "Permanently rejects a quarantined artifact, blocking it from",
+        "future mirror acquisition.",
+        "",
+        "Options:",
+        "  --reason <reason>   Review reason or justification",
+        "  --reviewer <name>    Reviewer name or bot identifier",
+      ],
+    },
+    pin: {
+      heading: "quarantine pin — Pin a quarantine review decision",
+      lines: [
+        "Usage: agent-harness quarantine pin --asset <assetId> [--reason <reason>] [--reviewer <name>]",
+        "",
+        "Pins the current review decision for a quarantined artifact,",
+        "preserving it across future catalog updates.",
+        "",
+        "Options:",
+        "  --reason <reason>   Review reason or justification",
+        "  --reviewer <name>    Reviewer name or bot identifier",
+      ],
+    },
+  };
+
+  printSubcommandHelp(subcommand, helpTexts, printQuarantineHelp);
 }
 
 function printQuarantineHelp(): void {

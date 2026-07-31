@@ -1,5 +1,10 @@
 import { join } from "node:path";
 
+import {
+  hasHelpFlag,
+  printSubcommandHelp,
+  type SubcommandHelpEntry,
+} from "./cli-help-format.js";
 import { getRuntimeConfig } from "./config/runtime.js";
 import { readJsonFileOrNull, removePath, toPosixPath } from "./files.js";
 import { runDiscover } from "./discover.js";
@@ -28,7 +33,13 @@ export async function runRebuild(
   workingDirectory: string,
   projectRoot: string,
 ): Promise<number> {
-  const [command = "help"] = args;
+  const [command = "help", ...rest] = args;
+
+  // Detect --help flag and show subcommand-specific help (#383).
+  if (hasHelpFlag(rest)) {
+    printRebuildSubcommandHelp(command);
+    return 0;
+  }
 
   switch (command) {
     case "clean":
@@ -143,6 +154,38 @@ async function discoverBundleIds(projectRoot: string): Promise<string[]> {
   }
 
   return bundleIds;
+}
+
+/**
+ * Prints help for a specific rebuild subcommand (#383).
+ */
+function printRebuildSubcommandHelp(subcommand: string): void {
+  const helpTexts: Record<string, SubcommandHelpEntry> = {
+    clean: {
+      heading: "rebuild clean — Remove all generated state",
+      lines: [
+        "Usage: agent-harness rebuild clean",
+        "",
+        "Removes all generated lifecycle state (install/, activate/,",
+        "state/install/, state/mirror/) while preserving configuration",
+        "files (discover/sources.json, discover/selections.json).",
+      ],
+    },
+    full: {
+      heading: "rebuild full — Full clean rebuild from sources",
+      lines: [
+        "Usage: agent-harness rebuild full",
+        "",
+        "Performs a complete rebuild: clean → discover demand-profile → sources →",
+        "catalog → select → recommend report → mirror plan → mirror locks →",
+        "mirror acquire → install bundle → install reconcile → activate host.",
+        "",
+        "This is equivalent to running the full pipeline from scratch.",
+      ],
+    },
+  };
+
+  printSubcommandHelp(subcommand, helpTexts, printRebuildHelp);
 }
 
 function printRebuildHelp(): void {

@@ -12,6 +12,11 @@ import {
   toPosixPath,
   writeJsonFile,
 } from "./files.js";
+import {
+  hasHelpFlag,
+  printSubcommandHelp,
+  type SubcommandHelpEntry,
+} from "./cli-help-format.js";
 import { listHostAdapters } from "./host-adapters/registry.js";
 import { printCommandHelp } from "./lib/cli-output.js";
 import { getOptionValue, getOptionValues } from "./lib/cli-options.js";
@@ -104,6 +109,12 @@ export async function runActivate(
   projectRoot: string,
 ): Promise<number> {
   const [command = "help", ...rest] = args;
+
+  // Detect --help flag and show subcommand-specific help (#383).
+  if (hasHelpFlag(rest)) {
+    printActivateSubcommandHelp(command);
+    return 0;
+  }
 
   switch (command) {
     case "host":
@@ -528,6 +539,68 @@ function printActivateHelp(): void {
       },
     ],
   });
+}
+
+/**
+ * Prints help for a specific activate subcommand (#383).
+ */
+function printActivateSubcommandHelp(subcommand: string): void {
+  const helpTexts: Record<string, SubcommandHelpEntry> = {
+    host: {
+      heading: "activate host — Materialize active host views",
+      lines: [
+        "Usage: agent-harness activate host [--host <host>] [--intent <intent>]",
+        "",
+        "Materializes active host views from installed bundles. Builds host-specific",
+        "runtime views (MCP server configs, skill registries, instruction sets) from",
+        "the installed asset bundles.",
+        "",
+        "Options:",
+        "  --host <host>                           Target host",
+        "  --intent <intent>                       Session intent (repeatable)",
+        "  --recommendation-host <host-policy-id>   Override recommendation host policy",
+        "",
+        "Supported hosts: copilot-vscode, opencode, shared",
+      ],
+    },
+    diff: {
+      heading: "activate diff — Compare activation states",
+      lines: [
+        "Usage: agent-harness activate diff [--host <host>]",
+        "",
+        "Compares the current host activation view against the previous",
+        "activation snapshot, reporting added, removed, and changed assets.",
+      ],
+    },
+    explain: {
+      heading: "activate explain — Explain activation state",
+      lines: [
+        "Usage: agent-harness activate explain --asset <assetId> [--host <host>]",
+        "",
+        "Explains whether a specific asset is active for a host and why.",
+      ],
+    },
+    rollback: {
+      heading: "activate rollback — Roll back to previous generation",
+      lines: [
+        "Usage: agent-harness activate rollback [--host <host>]",
+        "",
+        "Points a host back to a previous install generation, reverting",
+        "the active asset set to an earlier known-good state.",
+      ],
+    },
+    reset: {
+      heading: "activate reset — Remove activation outputs",
+      lines: [
+        "Usage: agent-harness activate reset",
+        "",
+        "Removes all activation outputs, resetting the host runtime views",
+        "to an empty state.",
+      ],
+    },
+  };
+
+  printSubcommandHelp(subcommand, helpTexts, printActivateHelp);
 }
 
 function getDefaultBundleIdsForHost(host: ActivationHost): string[] {

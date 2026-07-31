@@ -90,7 +90,12 @@ export type {
  * Re-exported state helpers from the source-sync sub-module tree.
  * Imported here so external callers can use a single import path.
  */
-export { loadSourceSyncState, getIndexedSourceIds, loadIndexedCatalogEntries };
+export {
+  loadSourceSyncState,
+  getIndexedSourceIds,
+  loadIndexedCatalogEntries,
+  synchronizeIndexedSource,
+};
 
 /** Number of consecutive failures before source-health escalates to error. */
 const MAX_CONSECUTIVE_FAILURES_BEFORE_ERROR = 3;
@@ -137,10 +142,25 @@ export async function syncIndexedSources(
   );
   let entriesDirty = false;
   const sourceStates: SourceSyncSourceState[] = [];
-
-  for (const source of sourceRegistry.sources.filter(
+  const enabledSources = sourceRegistry.sources.filter(
     (entry) => entry.enabled,
-  )) {
+  );
+  const totalSources = enabledSources.length;
+  let sourceIndex = 0;
+
+  for (const source of enabledSources) {
+    sourceIndex++;
+    const sourceLabel = source.endpoints?.repo ?? source.id;
+    const progressLabel = `[discover sync] ${sourceIndex}/${totalSources} ${sourceLabel}`;
+
+    // Per-source progress: print source name before sync starts (#382).
+    // Use process.stderr so progress lines don't contaminate stdout when
+    // the CLI is invoked in JSON-output mode.
+    if (totalSources > 1) {
+      process.stderr.write(`${progressLabel} … `);
+    }
+
+    const syncStart = Date.now();
     const previousState = existingState.sources.find(
       (entry) => entry.sourceId === source.id,
     );
@@ -188,6 +208,19 @@ export async function syncIndexedSources(
         }
       }
       entriesDirty ||= context.entriesDirty;
+
+      // Per-source completion: report sync duration (#382).
+      const syncDuration = Date.now() - syncStart;
+      if (totalSources > 1) {
+        const statusMap: Record<string, string> = {
+          complete: "done",
+          failed: "failed",
+        };
+        const statusLabel =
+          statusMap[synchronizedState?.status ?? ""] ??
+          (synchronizedState ? synchronizedState.status : "skipped");
+        process.stderr.write(`${statusLabel} (${syncDuration}ms)\n`);
+      }
     } catch (error) {
       // Stale-data fallback + persistence tracking.
       const previousFailures = (previousState?.consecutiveFailures ?? 0) + 1;
@@ -205,6 +238,13 @@ export async function syncIndexedSources(
       const shouldFallBackToStale =
         hasPriorEntries &&
         previousFailures <= MAX_CONSECUTIVE_FAILURES_BEFORE_ERROR;
+
+      // Per-source completion on error: report failure/stale status (#382).
+      const syncDuration = Date.now() - syncStart;
+      if (totalSources > 1) {
+        const statusLabel = shouldFallBackToStale ? "stale" : "failed";
+        process.stderr.write(`${statusLabel} (${syncDuration}ms)\n`);
+      }
 
       sourceStates.push({
         sourceId: source.id,
@@ -254,9 +294,6 @@ async function synchronizeIndexedSource(
   // another standards-body registry) follow this pattern: check `source.kind`
   // before falling through to the id-switch. The two axes never overlap because
   // kind-guard sources don't appear in the id-switch.
-  // Requires a real ARD endpoint to exercise in integration; unit-tested via
-  // syncArdRegistrySource in registries/ard-registry.ts.
-  /* c8 ignore next 5 */
   if (source.kind === "ard-registry") {
     const { syncArdRegistrySource } =
       await import("./registries/ard-registry.js");

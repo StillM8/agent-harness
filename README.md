@@ -96,6 +96,7 @@ The core model is deliberately boring in the best way: one command surface, a ho
 - [Source coverage playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/SOURCE-COVERAGE-PLAYBOOK.md)
 - [Catalog breadth guide](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/CATALOG-BREADTH.md)
 - [Semantic scoring guide](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/SEMANTIC-SCORING.md)
+- [Source pack seeder guide](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/SOURCE-PACK-SEEDER.md)
 - [AI enrichment playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/AI-ENRICHMENT-PLAYBOOK.md)
 - [Asset update playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/ASSET-UPDATE-PLAYBOOK.md)
 - [Logging strategy](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/LOGGING-STRATEGY.md)
@@ -109,6 +110,8 @@ The core model is deliberately boring in the best way: one command surface, a ho
 - [v1 to v2 upgrade guide](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/V1-TO-V2-UPGRADE.md)
 - [Scheduled maintenance workflow](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/MAINTENANCE-WORKFLOW.md)
 - [Release process](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/RELEASE-PROCESS.md)
+- [Adapter development guide](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/ADAPTER-DEVELOPMENT.md) — creating new host adapters
+- [CLI cheat sheet](https://github.com/ar27111994/agent-harness/blob/main/docs/cheatsheet.md) — quick reference for common workflows
 
 ## What this project does
 
@@ -281,6 +284,15 @@ npm install
 ```bash
 npm run build
 ```
+
+> **Windows git-bash (MSYS) users:** Use native Windows paths when invoking the CLI.
+> MSYS path translation (`/c/Projects/...` → `C:/Projects/...`) is normally correct,
+> but Node's module resolver can re-apply the drive letter, producing a doubled path
+> (`C:\c\Projects\...`). Use `"C:\Projects\agent-harness\dist\cli.js"`
+> or `node "$(cygpath -w /c/Projects/agent-harness/dist/cli.js)"`. For persistent
+> use, add the project to your `PATH` via native Windows syntax or use
+> `npx @ar27111994/agent-harness` from the npm global install. See
+> [Troubleshooting](docs/guides/TROUBLESHOOTING.md) for more Windows-specific guidance.
 
 ### Optional local environment
 
@@ -1368,6 +1380,10 @@ AGENT_HARNESS_INSTALL_BATCH_SIZE=250
 AGENT_HARNESS_SCAN_MAX_DEPTH=14
 AGENT_HARNESS_SCAN_MAX_FILES=20000
 AGENT_HARNESS_SCAN_MAX_BYTES=50000000
+AGENT_HARNESS_MAX_ENTRIES_PER_SOURCE=200
+AGENT_HARNESS_SETUP_DOCTOR_HOST_TIMEOUT_MS=5000
+AGENT_HARNESS_DISCOVERY_INDEX_MAX_AGE_DAYS=7
+AGENT_HARNESS_SOURCE_SYNC_MAX_PAGES_FOR_INDEX_BUILD=500
 ```
 
 The runtime config exposes diagnostics as a boolean flag at `diagnostics.debugEnabled`; there is no full log-level hierarchy today. The current `AGENT_HARNESS_DEBUG` env var maps directly to `diagnostics.debugEnabled`, so diagnostics can be controlled either through that env var or by reading the resolved runtime config object.
@@ -1445,6 +1461,7 @@ agent-harness/
 │   ├── ISSUE_TEMPLATE/
 │   └── workflows/
 ├── discover/
+│   ├── README.md
 │   ├── recommendation-policy/
 │   ├── schema/
 │   ├── seeds/
@@ -1500,13 +1517,19 @@ agent-harness/
 │   ├── wire.ts
 │   └── workspace.ts
 ├── docs/
+│   ├── cheatsheet.md
 │   ├── demo/
 │   ├── guides/
+│   │   ├── ADAPTER-DEVELOPMENT.md
+│   │   ├── CATALOG-BREADTH.md
 │   │   ├── HARNESS-MAINTENANCE-GUIDE.md
 │   │   ├── LOGGING-STRATEGY.md
 │   │   ├── MAINTENANCE-WORKFLOW.md
 │   │   ├── RELEASE-PROCESS.md
 │   │   ├── SAFE-DEFAULTS.md
+│   │   ├── SEMANTIC-SCORING.md
+│   │   ├── SOURCE-PACK-SEEDER.md
+│   │   ├── TROUBLESHOOTING.md
 │   │   ├── TRUST-CENTER.md
 │   │   ├── V1-TO-V2-UPGRADE.md
 │   │   └── V2-CONTRACT.md
