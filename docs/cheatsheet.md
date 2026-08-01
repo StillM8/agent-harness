@@ -98,6 +98,11 @@ agent-harness setup login                      # Interactive host login
 ```bash
 agent-harness rebuild clean                    # Clean generated state
 agent-harness rebuild full                     # Full rebuild from sources
+agent-harness quarantine list                  # List quarantined mirror artifacts
+agent-harness quarantine approve --asset <id>  # Approve with warning
+agent-harness quarantine reject --asset <id>   # Reject while keeping quarantine
+agent-harness quarantine pin --asset <id>      # Pin a quarantine decision
+agent-harness bundle explain <bundleId>        # Explain bundle lock contents
 ```
 
 ## Workspace (One-Shot)
@@ -116,6 +121,7 @@ agent-harness workspace codex                  # Full pipeline for Codex
 
 ```bash
 --state-root <path>       # Override state directory (default: .agent-harness)
+--timeout-seconds <n>     # Deadline in seconds for long operations (10–3600)
 --intent <intent>         # Workspace intent hint (general, frontend, backend, etc.)
 --host <host>             # Target host (vscode, opencode, cursor, zed, claude-code, pi, codex)
 --preview                 # Preview without applying changes
@@ -136,18 +142,19 @@ AGENT_HARNESS_SCAN_MAX_DEPTH=14                # Max directory depth
 AGENT_HARNESS_SOURCE_SYNC_MAX_PAGES_FOR_INDEX_BUILD=500  # Pages per source in index build
 AGENT_HARNESS_MAX_ENTRIES_PER_SOURCE=200       # Max catalog entries per source
 AGENT_HARNESS_DISCOVERY_INDEX_MAX_AGE_DAYS=7   # Index freshness threshold
+AGENT_HARNESS_TIMEOUT_SECONDS=120              # Deadline for long operations (10–3600)
 ```
 
 ## Quick Troubleshooting
 
-| Symptom                                  | Check                                                   |
-| ---------------------------------------- | ------------------------------------------------------- |
-| `setup doctor` host not found            | Host CLI on PATH? Run `setup hosts` to list adapters    |
-| Empty recommendations                    | Run `discover full` first; check `demand-profile.json`  |
-| `install refresh` ENOENT                 | Run `mirror acquire` first to populate bundles          |
-| Slow first `discover full`               | Normal — first run syncs all sources; subsequent faster |
-| Windows git-bash path error (`C:\c\...`) | Use native Windows paths or `cygpath -w`                |
-| `recommend explain` no output            | Asset may be rejected; check `selection-report.json`    |
+| Symptom                                    | Check                                                                                      |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `setup doctor` host not found              | Host CLI on PATH? Run `setup hosts` to list adapters                                       |
+| Empty recommendations                      | Run `discover full` first; check `demand-profile.json`                                     |
+| `install refresh` ENOENT                   | Run `mirror acquire` first to populate bundles                                             |
+| Slow first `discover full`                 | Normal — first run syncs all sources; subsequent faster                                    |
+| Windows git-bash path error (`C:\\c\\...`) | MSYS paths are auto-normalised; if issues persist use native Windows paths or `cygpath -w` |
+| `recommend explain` no output              | Asset may be rejected; check `selection-report.json`                                       |
 
 ## See Also
 

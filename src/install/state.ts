@@ -43,6 +43,7 @@ export async function updateInstallProgressState(
   allAssets: BundleLock["assets"],
   installedAssets: InstalledBundleManifest["packages"],
   lastBatchAssetIds: string[],
+  skippedAssetIds: string[] = [],
 ): Promise<void> {
   const currentState = (await readJsonFileOrNull<InstallProgressState>(
     join(projectRoot, ...INSTALL_PROGRESS_STATE_OUTPUT_PATH),
@@ -54,18 +55,33 @@ export async function updateInstallProgressState(
   };
 
   currentState.updatedAt = new Date().toISOString();
+  const uniqueInstalled = [
+    ...new Set(installedAssets.map((asset) => asset.assetId)),
+  ];
+  const uniqueSkipped = [...new Set(skippedAssetIds)];
+  // Merge with previously skipped IDs, then remove any that are now
+  // installed or no longer part of this bundle (prevents stale entries).
+  const allAssetIds = new Set(allAssets.map((asset) => asset.assetId));
+  const previousSkipped =
+    currentState.bundles[bundleId]?.skippedAssetIds ?? [];
+  const mergedSkipped = [
+    ...new Set([...previousSkipped, ...uniqueSkipped]),
+  ].filter(
+    (id) => !uniqueInstalled.includes(id) && allAssetIds.has(id),
+  );
   currentState.bundles[bundleId] = {
     host,
     batchSize,
     totalAssets: allAssets.length,
-    installedAssets: [...new Set(installedAssets.map((asset) => asset.assetId))]
-      .length,
+    installedAssets: uniqueInstalled.length,
     remainingAssets: Math.max(
       0,
-      allAssets.length -
-        [...new Set(installedAssets.map((asset) => asset.assetId))].length,
+      allAssets.length - uniqueInstalled.length - mergedSkipped.length,
     ),
-    lastBatchAssetIds: [...new Set(lastBatchAssetIds)],
+    lastBatchAssetIds: lastBatchAssetIds.filter(
+      (id) => !uniqueSkipped.includes(id),
+    ),
+    skippedAssetIds: mergedSkipped,
   };
 
   await writeJsonFileWithSnapshot(
@@ -150,6 +166,7 @@ export async function reconcileInstallState(projectRoot: string): Promise<void> 
         lastBatchAssetIds: uniqueInstalledAssetIds.slice(
           -Math.min(50, uniqueInstalledAssetIds.length),
         ),
+        skippedAssetIds: [],
       };
     }
   }

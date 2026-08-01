@@ -420,15 +420,150 @@ export function compareAssetCatalogEntries(
 }
 
 /**
- * Provides split into keywords for the lifecycle pipeline.
+ * English stopwords + language-neutral noise tokens.
+ * Filtered from capability extraction via splitIntoKeywords.
+ * Tickets: #400, #406.
+ */
+export const STOPWORD_TOKENS = new Set([
+  "a",
+  "an",
+  "the",
+  "and",
+  "or",
+  "but",
+  "in",
+  "on",
+  "at",
+  "to",
+  "for",
+  "of",
+  "with",
+  "by",
+  "from",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "being",
+  "have",
+  "has",
+  "had",
+  "do",
+  "does",
+  "did",
+  "will",
+  "would",
+  "could",
+  "should",
+  "may",
+  "might",
+  "can",
+  "shall",
+  "not",
+  "no",
+  "nor",
+  "so",
+  "if",
+  "then",
+  "than",
+  "that",
+  "this",
+  "these",
+  "those",
+  "it",
+  "its",
+  "he",
+  "she",
+  "they",
+  "them",
+  "their",
+  "we",
+  "us",
+  "our",
+  "my",
+  "your",
+  "his",
+  "her",
+  "me",
+  "you",
+  "all",
+  "each",
+  "every",
+  "both",
+  "few",
+  "more",
+  "most",
+  "other",
+  "some",
+  "such",
+  "only",
+  "own",
+  "same",
+  "just",
+  "about",
+  "up",
+  "out",
+  "as",
+  "into",
+  "over",
+  "under",
+  "after",
+  "before",
+  "between",
+  "through",
+  "during",
+  "above",
+  "below",
+  "any",
+  "what",
+  "which",
+  "who",
+  "whom",
+  "where",
+  "when",
+  "why",
+  "how",
+  "very",
+  "too",
+  "also",
+  "now",
+  "here",
+  "there",
+  "one",
+  "two",
+  "zero",
+]);
+
+/** Single-character programming language identifiers that should survive token filtering. */
+const LANGUAGE_ID_TOKENS = new Set(["c", "r"]);
+
+/**
+ * Normalises common punctuation-based language aliases before generic
+ * token filtering so they survive the stopword and length checks.
+ */
+function normaliseLanguageAliases(value: string): string {
+  return value.replace(/c\+\+/giu, "cpp").replace(/f#/giu, "fsharp");
+}
+
+/**
+ * Splits a string into lowercase keyword tokens, filtering out stopwords,
+ * single-character tokens (except language identifiers), and numeric-only tokens.
+ * Used by all capability extraction paths.
  */
 export function splitIntoKeywords(value: string): string[] {
-  return value
+  return normaliseLanguageAliases(value)
     .toLowerCase()
     .replace(/\.md$/u, "")
     .replace(/\.(ts|js|mts|cts)$/u, "")
-    .split(/[^a-z0-9]+/u)
-    .filter((token) => token.length >= 1);
+    .split(/[^a-z0-9+#]+/u)
+    .filter((token) => {
+      if (token.length < 2 && !LANGUAGE_ID_TOKENS.has(token)) return false;
+      if (/^\d+$/u.test(token)) return false;
+      if (STOPWORD_TOKENS.has(token)) return false;
+      return true;
+    });
 }
 
 /**

@@ -263,6 +263,7 @@ void test("updateInstallProgressState deduplicates installed assets and writes a
       allAssets,
       installedPackages,
       ["asset-a", "asset-a", "asset-b"],
+      ["asset-b"],
     );
     await updateInstallProgressState(
       projectRoot,
@@ -279,8 +280,12 @@ void test("updateInstallProgressState deduplicates installed assets and writes a
     );
 
     assert.equal(progressState.bundles["copilot-core"]?.installedAssets, 1);
-    assert.equal(progressState.bundles["copilot-core"]?.remainingAssets, 1);
+    assert.equal(progressState.bundles["copilot-core"]?.remainingAssets, 0);
     assert.deepEqual(progressState.bundles["copilot-core"]?.lastBatchAssetIds, [
+      "asset-b",
+    ]);
+    // Skipped IDs from previous call are preserved across updates
+    assert.deepEqual(progressState.bundles["copilot-core"]?.skippedAssetIds, [
       "asset-b",
     ]);
     assert.equal(
@@ -1235,11 +1240,15 @@ void test("installBundles installs verified mirror content and preserves existin
     );
     assert.equal(progressState.bundles["copilot-core"]?.totalAssets, 3);
     assert.equal(progressState.bundles["copilot-core"]?.installedAssets, 2);
-    assert.equal(progressState.bundles["copilot-core"]?.remainingAssets, 1);
+    assert.equal(progressState.bundles["copilot-core"]?.remainingAssets, 0);
     assert.deepEqual(progressState.bundles["copilot-core"]?.lastBatchAssetIds, [
       "asset-b",
-      "asset-c",
     ]);
+    assert.deepEqual(
+      progressState.bundles["copilot-core"]?.skippedAssetIds,
+      ["asset-c"],
+      "asset-c (no catalog entry) should be recorded as skipped",
+    );
     assert.deepEqual(currentGeneration.bundleIds, ["copilot-core"]);
     assert.deepEqual(currentGeneration.packageManifestPaths, [
       assetAPath.replace(/\\/gu, "/"),
@@ -1251,7 +1260,7 @@ void test("installBundles installs verified mirror content and preserves existin
   }
 });
 
-void test("installBundles rejects mirror artifacts with unexpected files", async () => {
+void test("installBundles skips malformed mirror artifacts gracefully (#409)", async () => {
   const projectRoot = await mkdtemp(
     join(tmpdir(), "agent-harness-install-bundle-"),
   );
@@ -1302,9 +1311,95 @@ void test("installBundles rejects mirror artifacts with unexpected files", async
       } satisfies BundleLock,
     );
 
-    await assert.rejects(
+    // #409: Malformed artifacts are now skipped with a warning instead of
+    // aborting. The function should resolve without throwing.
+    await assert.doesNotReject(
       installBundles(projectRoot, ["--bundle", "copilot-core"]),
-      /unexpected file: rogue\.txt/u,
+    );
+
+    // Verify progress state tracks the skipped asset
+    const progressState = await readJsonFile<InstallProgressState>(
+      join(projectRoot, ...INSTALL_PROGRESS_STATE_OUTPUT_PATH),
+    );
+    assert.deepEqual(
+      progressState.bundles["copilot-core"]?.skippedAssetIds,
+      ["asset-z"],
+      "malformed artifact should be recorded as skipped",
+    );
+    assert.equal(progressState.bundles["copilot-core"]?.installedAssets, 0);
+    assert.equal(
+      progressState.bundles["copilot-core"]?.remainingAssets,
+      0,
+      "skipped asset subtracts from remaining (processed for termination)",
+    );
+  } finally {
+    await rm(projectRoot, { force: true, recursive: true });
+  }
+});
+
+void test("installBundles skips artifact with missing manifest.json (#409)", async (t) => {
+  const projectRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-install-bundle-"),
+  );
+  const entry = buildAsset("asset-no-manifest");
+  const mirrorId = "sha256-asset-no-manifest";
+  const rawDir = join(projectRoot, "mirror", "raw", sanitizeMirrorId(mirrorId));
+  const warnings: string[] = [];
+
+  try {
+    // Create the raw mirror directory with asset.json and content but NO manifest.json.
+    // This simulates a partially-acquired artifact where the manifest was never written.
+    await writeTextFile(join(rawDir, "content.txt"), `fixture:${entry.id}\n`);
+    await writeTextFile(
+      join(rawDir, "asset.json"),
+      `${JSON.stringify(entry, null, 2)}\n`,
+    );
+
+    // Mirror index still references the (now-missing) manifest hash.
+    await writeJsonLinesFile(join(projectRoot, "mirror", "index.jsonl"), [
+      buildMirrorIndexEntry("asset-no-manifest", {
+        mirrorId,
+        contentHash: "hash-no-manifest",
+      }),
+    ]);
+    await writeJsonLinesFile(
+      join(projectRoot, "discover", "output", "catalog.selected.jsonl"),
+      [entry],
+    );
+    await writeJsonFile(
+      join(projectRoot, "mirror", "bundles", "copilot-core.lock.json"),
+      {
+        schemaVersion: 1,
+        bundleId: "copilot-core",
+        generatedAt: new Date().toISOString(),
+        host: "copilot-vscode",
+        assets: [
+          {
+            assetId: "asset-no-manifest",
+            mirrorId,
+            projectionType: "native-skill",
+            activationEligible: true,
+          },
+        ],
+      } satisfies BundleLock,
+    );
+
+    t.mock.method(globalThis.console, "warn", (...args: unknown[]) => {
+      warnings.push(args.map((value) => String(value)).join(" "));
+    });
+
+    // #409: Missing manifest.json should be caught, warned about with the
+    // assetId, and skipped — the install pipeline should continue.
+    await assert.doesNotReject(
+      installBundles(projectRoot, ["--bundle", "copilot-core"]),
+    );
+
+    // Verify the warning includes the assetId for diagnosis.
+    assert.ok(
+      warnings.some(
+        (w) => w.includes("asset-no-manifest") && w.includes("malformed"),
+      ),
+      "warning should identify the malformed asset by assetId",
     );
   } finally {
     await rm(projectRoot, { force: true, recursive: true });
@@ -1499,6 +1594,7 @@ void test("writeInstallGenerations tolerates missing bundle manifests and empty 
           installedAssets: 1,
           remainingAssets: 0,
           lastBatchAssetIds: ["asset-a"],
+          skippedAssetIds: [],
         },
         "shared-mcp": {
           host: "copilot-vscode",
@@ -1507,6 +1603,7 @@ void test("writeInstallGenerations tolerates missing bundle manifests and empty 
           installedAssets: 1,
           remainingAssets: 0,
           lastBatchAssetIds: ["missing-asset"],
+          skippedAssetIds: [],
         },
       },
     } satisfies InstallProgressState);

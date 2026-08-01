@@ -35,6 +35,7 @@ import {
 import { sanitizeAssetId } from "../lib/safe-paths.js";
 import { readSharedMcpAssetIds } from "../lib/shared-mcp.js";
 import { patchVsCodeSettings, readVsCodeSettings } from "./vscode-settings.js";
+import { printWirePreviewManifest } from "./native-wire.js";
 
 /**
  * Provides wire vs code for the lifecycle pipeline.
@@ -92,6 +93,7 @@ export async function wireVsCode(options: {
   );
 
   if (mode === "preview") {
+    printWirePreviewManifest(preview);
     return;
   }
 

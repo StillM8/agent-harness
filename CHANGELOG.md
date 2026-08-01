@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [2.0.0] - 2026-06-09
+## [2.0.0] - 2026-07-31
 
 ### Breaking Changes
 
@@ -15,7 +15,27 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **MSYS path normalisation** — `--state-root /c/Projects/...` is now correctly resolved to `C:\Projects\...` on Windows, preventing silent data misdirection to phantom `C:\c\...` paths (#397)
+- **Stopword filtering in capabilities** — `splitIntoKeywords` now filters English stopwords and single-character tokens, preventing noise like "the", "a", "is" from appearing in ARD capabilities and representative queries (#400, #406)
+- **Discover stats fallback** — when `catalog.assets.jsonl` is missing but `catalog.selected.jsonl` exists, breakdowns are now built from the available selection instead of showing empty maps (#398)
+- **Install malformed-artifact resilience** — `installBundles` now skips malformed mirror artifacts with a warning (including the assetId for diagnosis) instead of aborting the entire install pipeline (#409)
+- **ARD trust manifests** — `deriveArdTrustManifest` now generates identity-based trust manifests for all official-first-party, official-compatible, and trusted-community sources, and includes publisher-verified attestations (#399)
+- **Dependency directory exclusion** — GitHub repo harvesting now skips files under `node_modules/`, `vendor/`, `.venv/`, `__pycache__/`, and other dependency directories, preventing catalog pollution (#405)
+- **Wire plan preview output** — `wire cursor --preview` and `wire vscode --preview` now print a structured plan preview (matching the OpenCode format) instead of showing only preflight diagnostics (#403)
+- **CI maintenance noise reduction** — dormant-source false positives from ephemeral CI state roots are filtered; broken sources (severity=error) now surface as bot-plan issues ahead of drift warnings; discovery state cache is persisted between CI runs via GitHub Actions cache (#412, #413, #414)
+- **Codex native install** — the Codex host adapter now supports native extension installation via the same mechanism as VS Code/Cursor, replacing the previous `nativeInstall=none` (#407)
+- **Help output restructured** — `--help` now includes a Quick Start section at the top and groups commands by lifecycle phase (Discover, Recommend, Mirror & Install, Activate & Wire, Workspace, Setup & Doctor) instead of a dense 40+ command flat list (#410)
+- **`--timeout-seconds` global flag** — long-running operations (recommend report, discover catalog) can now be given a configurable deadline via `--timeout-seconds <n>` (clamped 10–3,600) or the `AGENT_HARNESS_TIMEOUT_SECONDS` env var, preventing silent timeout failures on large catalogs (#402, #404)
+- **Swift Package Index source disabled** — the `swift-package-index` source is now disabled (sitemap returns 403 Forbidden), eliminating a permanent severe source-health error from every maintenance run (#411)
+- **CHANGELOG date corrected** — `[2.0.0]` date updated to `2026-07-31` to reflect the actual release timeline (#408)
 - **ard-export Prettier compliance** — `discover ard-export` now formats `.well-known/ai-catalog.json` with Prettier inline, so the output passes `npm run format:check` immediately after generation (#348)
+- **Asset-kind diversity threshold** — the diversity penalty for overrepresented asset kinds now applies to the 3rd candidate of the same kind rather than the 4th; prevents extensions from crowding out skills and agents in top-N recommendations (#401 follow-up)
+- **MSYS bare drive letter** — `/c` without a trailing slash is now correctly resolved to `C:\` on Windows alongside the existing `/c/X` → `C:\X` normalisation (#397 follow-up)
+- **Language identifier preservation** — `splitIntoKeywords` now preserves single-character programming language identifiers (`C`, `R`) and normalises punctuation-based aliases (`C++` → `cpp`, `F#` → `fsharp`) before generic token filtering, ensuring language tokens survive stopword and length checks (#400/#406 follow-up)
+- **Catalog file-existence detection** — `discover stats` now distinguishes a genuinely absent raw catalog file (falls back to selected+rejected for breakdowns) from a present-but-empty file (preserves empty breakdown with `catalogSource: raw-catalog`) instead of using the array-length heuristic (#398 follow-up)
+- **Install progress skipped-asset tracking** — `InstallProgressState` now records `skippedAssetIds` per bundle (malformed, missing, or uninstallable artifacts), excludes them from `lastBatchAssetIds`, and preserves them in the remaining-asset count so a completed bundle cannot silently omit required batch work (#409 follow-up)
+- **Structured source-health reason codes** — dormant CI sources now carry `reasonCode: "ephemeral-ci-state-root"` instead of a bare boolean `ciDetected` flag; the maintenance bot plan matches on the structured code, making the filter self-documenting and extensible for future conditions (#412 follow-up)
+- **CLI help quarantine expansion** — `--help` now lists `quarantine approve`, `quarantine reject`, and `quarantine pin` alongside `quarantine list`, and splits Quarantine and Rebuild & Bundle into separate labelled groups (#410 follow-up)
 - **Workspace pipeline silent failure** — `workspace <host>` now exits non-zero and stops at the recommend phase when recommendations cannot be produced, instead of silently continuing through mirror/install/activate with empty output (#349)
 - **`isAborted()` coverage** — removed `/* c8 ignore */` markers; the helper is now exported and tested through the preflight pipeline with aborted `AbortSignal` (#355)
 - **Setup doctor Pi cold-start timeout** — raised default `preflightTimeoutMs` from 10 s to 15 s, eliminating spurious timeout warnings on Pi's first invocation (#350)

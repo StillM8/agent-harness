@@ -14,6 +14,10 @@ import { getRecommendationHosts } from "./hosts.js";
 import { loadRecommendationPolicy } from "./policy.js";
 import { buildDemandContext, buildSynonymLookup } from "./signals.js";
 import {
+  getActiveDeadline,
+  assertNotDeadlineExceeded,
+} from "../lib/deadline.js";
+import {
   buildCandidateRecommendationBase,
   buildPolicySearchContext,
 } from "./candidates.js";
@@ -128,6 +132,13 @@ export function buildRecommendationReport(
   // reduces synonym-canonicalization cost from O(entries × synonyms) to O(1)
   // per entry (a Map.get lookup).
   const synonymLookup = buildSynonymLookup(policy);
+
+  process.stderr.write(
+    `[recommend] Building candidate pool (${entries.length} entries)...\n`,
+  );
+
+  const deadline = getActiveDeadline();
+
   const candidateBases = entries
     .filter((entry) => entry.compatibilityMode !== "incompatible")
     .map((entry) =>
@@ -140,16 +151,27 @@ export function buildRecommendationReport(
       ),
     )
     .filter((base): base is CandidateRecommendationBase => base !== null);
+
+  assertNotDeadlineExceeded(deadline, "recommend candidate-pool build");
+
+  process.stderr.write(
+    `[recommend] Ranking ${candidateBases.length} candidates across ${recommendationHosts.length} hosts...\n`,
+  );
+
   const topByHost = Object.fromEntries(
-    recommendationHosts.map((host) => [
-      host,
-      buildTopRecommendationsForHost(
+    recommendationHosts.map((host) => {
+      process.stderr.write(`[recommend]   Ranking for ${host}...\n`);
+      assertNotDeadlineExceeded(deadline, `recommend ranking for ${host}`);
+      return [
         host,
-        candidateBases,
-        demandContext,
-        policy,
-      ),
-    ]),
+        buildTopRecommendationsForHost(
+          host,
+          candidateBases,
+          demandContext,
+          policy,
+        ),
+      ];
+    }),
   ) as Record<RecommendationHost, RecommendationEntry[]>;
   const hostSummaries = Object.fromEntries(
     recommendationHosts.map((host) => [

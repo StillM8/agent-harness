@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const outputPath =
   process.argv[2] ?? join("discover", "output", "maintenance-bot-plan.json");
+
+// ── main ──
 const reports = {
   sourceDrift: await readJsonOrNull(
     join("discover", "output", "source-drift.json"),
@@ -20,6 +23,7 @@ const reports = {
 };
 
 const issues = [
+  ...buildBrokenSourceIssues(reports.sourceHealth),
   ...buildSourceDriftIssues(reports.sourceDrift),
   ...buildSourceCandidateIssues(reports.sourceCandidates),
   ...buildSourceVerificationIssues(reports.sourceVerification),
@@ -40,11 +44,20 @@ const plan = {
   ],
 };
 
-await mkdir(dirname(outputPath), { recursive: true });
-await writeFile(outputPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
-console.log(`Maintenance bot plan written to ${outputPath}`);
+/* c8 ignore start — direct-execution guard, tested via manual invocation */
+if (
+  process.argv[1] &&
+  fileURLToPath(import.meta.url).endsWith(
+    process.argv[1].replace(/\\/g, "/").split("/").pop() ?? "",
+  )
+) {
+  await mkdir(dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+  console.log(`Maintenance bot plan written to ${outputPath}`);
+}
+/* c8 ignore stop */
 
-async function readJsonOrNull(path) {
+export async function readJsonOrNull(path) {
   try {
     return JSON.parse(await readFile(path, "utf8"));
   } catch (error) {
@@ -55,9 +68,22 @@ async function readJsonOrNull(path) {
   }
 }
 
-function buildSourceDriftIssues(report) {
+export function buildSourceDriftIssues(report) {
+  // #412: Filter out dormant sources when CI mode is detected.
+  // In ephemeral CI state roots, repo-kind sources have no GitHub API
+  // cache and will always appear dormant — these are not real drift.
+  // Uses the structured reasonCode field instead of substring matching.
   return (report?.sources ?? [])
     .filter((source) => source.severity !== "ok")
+    .filter((source) => {
+      if (
+        source.status === "dormant" &&
+        source.reasonCode === "ephemeral-ci-state-root"
+      ) {
+        return false;
+      }
+      return true;
+    })
     .map((source) => ({
       title: `Review source drift: ${source.sourceId}`,
       labels: ["maintenance", "source-drift", source.severity],
@@ -75,7 +101,28 @@ function buildSourceDriftIssues(report) {
     }));
 }
 
-function buildSourceCandidateIssues(report) {
+/**
+ * #413: Build issues for broken sources (severity=error) from source-health.json.
+ * These are HIGHER priority than dormant drift and appear first in the issue list.
+ */
+export function buildBrokenSourceIssues(report) {
+  return (report?.sources ?? [])
+    .filter((source) => source.severity === "error")
+    .map((source) => ({
+      title: `Fix broken source: ${source.sourceId}`,
+      labels: ["maintenance", "broken-source", "error"],
+      evidence: {
+        sourceId: source.sourceId,
+        status: source.status,
+        severity: source.severity,
+        reasons: source.reasons,
+        suggestedAction: source.suggestedAction,
+        harvestedEntries: source.harvestedEntries,
+      },
+    }));
+}
+
+export function buildSourceCandidateIssues(report) {
   return (report?.candidates ?? [])
     .filter((candidate) => candidate.reviewRequired)
     .map((candidate) => ({
@@ -85,7 +132,7 @@ function buildSourceCandidateIssues(report) {
     }));
 }
 
-function buildSourceVerificationIssues(report) {
+export function buildSourceVerificationIssues(report) {
   return (report?.entries ?? [])
     .filter(
       (entry) => entry.effectiveAuthorityTier !== entry.originalAuthorityTier,
@@ -97,7 +144,7 @@ function buildSourceVerificationIssues(report) {
     }));
 }
 
-function buildReportOnlyPullRequests(sourceHealth, issues) {
+export function buildReportOnlyPullRequests(sourceHealth, issues) {
   const hasBlockingHealthFindings = (sourceHealth?.severeCount ?? 0) > 0;
   const hasReportOnlyUpdates =
     Boolean(sourceHealth) && issues.length === 0 && !hasBlockingHealthFindings;

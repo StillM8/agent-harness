@@ -40,6 +40,15 @@ export interface SourceHealthEntry {
     | "refresh-sync"
     | "disable-or-replace"
     | "verify-official-owner";
+  /** True when this report was generated in a CI/automation environment
+   *  where the state root is ephemeral and lacks persistent caches.
+   *  CI bot workflows use this flag to suppress false-positive dormant
+   *  source warnings instead of fragile reason-text matching. */
+  ciDetected: boolean;
+  /** Structured reason code for the source's health status.
+   *  "ephemeral-ci-state-root": the source appears dormant because the
+   *    CI runner's state root lacks a persistent GitHub API cache. */
+  reasonCode?: string;
 }
 
 /**
@@ -107,6 +116,15 @@ export function buildSourceHealthReport(
   rejectedEntries: AssetCatalogEntry[],
   sourceSyncState?: SourceSyncState,
 ): SourceHealthReport {
+  // #412: Detect CI/automation environments via explicit env var or
+  // ephemeral state-root path patterns.  CI bot workflows use this flag
+  // instead of fragile reason-text matching to suppress false-positive
+  // dormant source warnings.
+  const ciDetected =
+    process.env.AGENT_HARNESS_CI === "true" ||
+    process.env.CI === "true" ||
+    isEphemeralStateRoot();
+
   const catalogBySource = groupBySource(catalogEntries);
   const selectedBySource = groupBySource(selectedEntries);
   const rejectedBySource = groupBySource(rejectedEntries);
@@ -251,6 +269,11 @@ export function buildSourceHealthReport(
         duplicateRate,
         reasons,
         suggestedAction,
+        ciDetected,
+        reasonCode:
+          ciDetected && status === "dormant"
+            ? "ephemeral-ci-state-root"
+            : undefined,
       };
     })
     .sort((left, right) => left.sourceId.localeCompare(right.sourceId));
@@ -324,3 +347,38 @@ function defaultSyncStatus(kind: SourceDefinition["kind"]): string {
   }
   return "unsupported";
 }
+
+/**
+ * Detects whether the given state-root path is ephemeral (CI/temp).
+ *
+ * Checks common temp-directory and CI-runner path patterns.
+ * When the state root is ephemeral, dormant repo sources are expected
+ * (no GitHub API cache) and should not generate bot issues.
+ *
+ * @param stateRoot — absolute path to check; defaults to AGENT_HARNESS_STATE_ROOT
+ *                    env-var, falling back to process.cwd() at runtime.
+ */
+export function isEphemeralStateRoot(stateRoot?: string): boolean {
+  const resolvedRoot =
+    stateRoot ?? process.env.AGENT_HARNESS_STATE_ROOT ?? process.cwd();
+  const normalized = resolvedRoot.toLowerCase().replace(/\\/gu, "/");
+  return (
+    normalized.includes("/tmp/") ||
+    normalized === "/tmp" ||
+    normalized.includes("/temp/") ||
+    normalized.includes("appdata/local/temp") ||
+    normalized.startsWith("/private/tmp/") ||
+    normalized.includes("/_temp/") ||
+    normalized.includes("/github/workspace/") ||
+    normalized.includes("/home/runner/work/")
+  );
+}
+
+/** Exports internals for unit testing. */
+export const sourceHealthInternals = {
+  groupBySource,
+  computeDuplicateRate,
+  defaultCoverageMode,
+  defaultSyncStatus,
+  isEphemeralStateRoot,
+} as const;

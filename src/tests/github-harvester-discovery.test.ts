@@ -1455,3 +1455,194 @@ void test("OMS PKI verification does not award trust when signature does not ver
     await rm(projectRoot, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// isDependencyDirectoryPath — dependency directory exclusion (#405)
+// ---------------------------------------------------------------------------
+
+const { isDependencyDirectoryPath } = githubHarvesterInternals;
+
+void test("isDependencyDirectoryPath detects node_modules prefix", () => {
+  assert.equal(isDependencyDirectoryPath("node_modules/foo"), true);
+  assert.equal(isDependencyDirectoryPath("node_modules/pkg/index.js"), true);
+});
+
+void test("isDependencyDirectoryPath detects vendor directory", () => {
+  assert.equal(isDependencyDirectoryPath("vendor/lib.js"), true);
+});
+
+void test("isDependencyDirectoryPath detects .venv directory", () => {
+  assert.equal(isDependencyDirectoryPath(".venv/bin/activate"), true);
+});
+
+void test("isDependencyDirectoryPath detects __pycache__", () => {
+  assert.equal(
+    isDependencyDirectoryPath("__pycache__/module.cpython-311.pyc"),
+    true,
+  );
+});
+
+void test("isDependencyDirectoryPath detects nested dependency dirs", () => {
+  assert.equal(isDependencyDirectoryPath("project/node_modules/pkg"), true);
+});
+
+void test("isDependencyDirectoryPath returns false for non-dependency paths", () => {
+  assert.equal(isDependencyDirectoryPath("src/main.ts"), false);
+  assert.equal(isDependencyDirectoryPath("README.md"), false);
+  assert.equal(isDependencyDirectoryPath("skills/testing/skill.md"), false);
+  assert.equal(isDependencyDirectoryPath(""), false);
+});
+
+void test("isDependencyDirectoryPath handles case variants", () => {
+  assert.equal(isDependencyDirectoryPath("Node_Modules/foo"), true);
+  assert.equal(isDependencyDirectoryPath("NODE_MODULES/pkg"), true);
+  assert.equal(isDependencyDirectoryPath("Vendor/lib"), true);
+  assert.equal(isDependencyDirectoryPath(".VENV/bin"), true);
+});
+
+void test("isDependencyDirectoryPath handles Windows backslash paths", () => {
+  assert.equal(isDependencyDirectoryPath("node_modules\\foo"), true);
+  assert.equal(isDependencyDirectoryPath("vendor\\lib.js"), true);
+  assert.equal(isDependencyDirectoryPath("src\\main.ts"), false);
+});
+
+void test("isDependencyDirectoryPath handles all 8 dependency patterns", () => {
+  const patterns = [
+    "node_modules",
+    "vendor",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".tox",
+  ];
+  for (const pattern of patterns) {
+    assert.equal(
+      isDependencyDirectoryPath(`${pattern}/some/file`),
+      true,
+      `should detect ${pattern}`,
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// buildGitHubCatalogEntry — returns null for dependency directory entries (#405)
+// ---------------------------------------------------------------------------
+
+void test("buildGitHubCatalogEntry returns null for node_modules entry", () => {
+  const { buildGitHubCatalogEntry } = githubHarvesterInternals;
+
+  const snapshot = {
+    sourceId: "test",
+    owner: "test-owner",
+    repo: "test-repo",
+    fetchedAt: new Date().toISOString(),
+    repoSummary: {
+      name: "test-repo",
+      fullName: "test-owner/test-repo",
+      description: null,
+      defaultBranch: "main",
+      updatedAt: null,
+      pushedAt: null,
+      stars: 0,
+      language: null,
+      topics: [],
+      archived: false,
+      htmlUrl: "https://github.com/test-owner/test-repo",
+    },
+    readme: { path: "README.md", content: "" },
+    tree: {
+      sha: "tree-sha",
+      truncated: false,
+      entries: [
+        {
+          path: "node_modules/pkg/index.js",
+          type: "blob",
+          size: 100,
+          sha: "a",
+        },
+        { path: "src/index.ts", type: "blob", size: 200, sha: "b" },
+      ],
+    },
+  } as unknown as GitHubRepoSnapshot;
+
+  const source = {
+    id: "test-source",
+    kind: "repo",
+    authorityTier: "unverified-community",
+    hosts: ["opencode"],
+    assetKinds: ["skill"],
+    discoveryMode: "catalog",
+  } as unknown as SourceDefinition;
+
+  const selectionRegistry = {
+    assetKinds: new Set(["skill", "agent"]),
+    hostCompatibility: {},
+  } as unknown as SelectionRegistry;
+
+  const nodeModulesEntry = snapshot.tree.entries[0];
+  const result = buildGitHubCatalogEntry(
+    snapshot,
+    source,
+    nodeModulesEntry,
+    null,
+    selectionRegistry,
+    new Map(),
+  );
+  assert.equal(result, null, "node_modules entry should be skipped");
+});
+
+void test("buildGitHubCatalogEntry returns null for vendor entry", () => {
+  const { buildGitHubCatalogEntry } = githubHarvesterInternals;
+
+  const snapshot = {
+    sourceId: "test",
+    owner: "test-owner",
+    repo: "test-repo",
+    fetchedAt: new Date().toISOString(),
+    repoSummary: {
+      name: "test-repo",
+      fullName: "test-owner/test-repo",
+      description: null,
+      defaultBranch: "main",
+      updatedAt: null,
+      pushedAt: null,
+      stars: 0,
+      language: null,
+      topics: [],
+      archived: false,
+      htmlUrl: "https://github.com/test-owner/test-repo",
+    },
+    readme: { path: "README.md", content: "" },
+    tree: {
+      sha: "tree-sha",
+      truncated: false,
+      entries: [{ path: "vendor/lib.js", type: "blob", size: 100, sha: "a" }],
+    },
+  } as unknown as GitHubRepoSnapshot;
+
+  const source = {
+    id: "test-source",
+    kind: "repo",
+    authorityTier: "unverified-community",
+    hosts: ["opencode"],
+    assetKinds: ["skill"],
+    discoveryMode: "catalog",
+  } as unknown as SourceDefinition;
+
+  const selectionRegistry = {
+    assetKinds: new Set(["skill"]),
+    hostCompatibility: {},
+  } as unknown as SelectionRegistry;
+
+  const result = buildGitHubCatalogEntry(
+    snapshot,
+    source,
+    snapshot.tree.entries[0],
+    null,
+    selectionRegistry,
+    new Map(),
+  );
+  assert.equal(result, null, "vendor entry should be skipped");
+});

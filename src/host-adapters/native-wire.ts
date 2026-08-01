@@ -212,6 +212,7 @@ export async function wireNativeHost(
   );
 
   if (options.mode === "preview") {
+    printWirePreviewManifest(preview);
     return;
   }
 
@@ -734,11 +735,58 @@ function buildNativeExtensionInstallActionLines(
 }
 
 /**
+ * Prints a wire preview manifest to stdout for preview mode.
+ * Shared between native-wire and vscode wire flows. Ticket: #403.
+ */
+export function printWirePreviewManifest(preview: WirePreviewManifest): void {
+  process.stdout.write(`${formatWirePreviewManifest(preview)}\n`);
+}
+
+/**
+ * Formats a WirePreviewManifest as a human-readable plan preview.
+ *
+ * Produces structured output matching the style of OpenCode's wire preview,
+ * with host info, target paths, and notes. Ticket: #403.
+ */
+export function formatWirePreviewManifest(
+  preview: WirePreviewManifest,
+): string {
+  const lines: string[] = [];
+  const divider = "─".repeat(60);
+
+  lines.push(divider);
+  lines.push(`  wire ${preview.host} — plan preview`);
+  lines.push(`  host: ${preview.host}  •  generated: ${preview.generatedAt}`);
+  lines.push(`  workspace: ${preview.workspaceRoot}`);
+  lines.push("");
+
+  if (preview.targetPaths.length > 0) {
+    lines.push(`  Target paths (${preview.targetPaths.length}):`);
+    for (const targetPath of preview.targetPaths) {
+      lines.push(`    ${targetPath}`);
+    }
+    lines.push("");
+  }
+
+  if (preview.notes.length > 0) {
+    lines.push("  Notes:");
+    for (const note of preview.notes) {
+      lines.push(`    ${note}`);
+    }
+    lines.push("");
+  }
+
+  lines.push(divider);
+  return lines.join("\n");
+}
+
+/**
  * Exposes focused native wire helpers for behavioral coverage.
  */
 export const nativeWireInternals = {
   cleanupFailedNativeHostApply,
   describeJsonValue,
+  formatWirePreviewManifest,
   mergeJsonObjects,
   mergeStringArraysPreservingOrder,
   isBenignRemoveDirectoryRace,
