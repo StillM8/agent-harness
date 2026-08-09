@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { loadDotEnvFile } from "./config/env-file.js";
 import { clearRuntimeConfig } from "./config/runtime.js";
@@ -9,6 +9,7 @@ import { resolveProjectRoot } from "./files.js";
 import { clearGitHubState } from "./github.js";
 import { runInstall } from "./install.js";
 import { printCommandHelp } from "./lib/cli-output.js";
+import { printUnknownArgumentError } from "./cli-help-format.js";
 import { runMirror } from "./mirror.js";
 import { runRecommend } from "./recommend.js";
 import { runQuarantine } from "./quarantine.js";
@@ -24,15 +25,20 @@ import {
   setActiveDeadline,
 } from "./lib/deadline.js";
 
-/** Returns the package version from the installed package.json. */
-async function readPackageVersion(): Promise<string> {
+/**
+ * Returns the package version from the installed package.json.
+ *
+ * `pkgRoot` is injectable for tests: the default resolves the real package
+ * root from this module, and callers may point at an arbitrary package
+ * directory to exercise the missing-file / missing-version fallbacks.
+ */
+async function readPackageVersion(
+  pkgRoot: string = resolveProjectRoot(fileURLToPath(import.meta.url)),
+): Promise<string> {
   try {
     const { readFile } = await import("node:fs/promises");
     const { join } = await import("node:path");
-    const pkgPath = join(
-      resolveProjectRoot(fileURLToPath(import.meta.url)),
-      "package.json",
-    );
+    const pkgPath = join(pkgRoot, "package.json");
     const raw = await readFile(pkgPath, "utf8");
     const pkg = JSON.parse(raw) as { version?: string };
     return pkg.version ?? "0.0.0";
@@ -88,6 +94,20 @@ async function main(): Promise<number> {
     ),
   );
 
+  return runDomainCommand(domain, args, workingDirectory, projectRoot);
+}
+
+/**
+ * Dispatches a parsed domain token to its runner. Extracted from `main` so
+ * in-process tests can exercise every dispatch branch (#428) without
+ * spawning a child CLI (subprocess execution is invisible to c8 coverage).
+ */
+export async function runDomainCommand(
+  domain: string | undefined,
+  args: string[],
+  workingDirectory: string,
+  projectRoot: string,
+): Promise<number> {
   switch (domain) {
     case "discover":
       return runDiscover(args, workingDirectory, projectRoot);
@@ -131,7 +151,9 @@ async function main(): Promise<number> {
       printHelp();
       return 0;
     default:
-      printHelp();
+      // Unknown option/command: print a conventional error naming the
+      // argument instead of dumping the full top-level help (#431).
+      printUnknownArgumentError(domain);
       return 1;
   }
 }
@@ -149,7 +171,7 @@ function isHelpRequest(args: string[]): boolean {
     args[0] === "help" ||
     args.includes("--help") ||
     args.includes("-h") ||
-    (args.length === 1 && HELP_DEFAULT_DOMAINS.has(args[0] ?? ""))
+    (args.length === 1 && HELP_DEFAULT_DOMAINS.has(args[0]))
   );
 }
 
@@ -197,8 +219,9 @@ function runHelpCommand(
         // bundle explain --help should show "bundle explain" help, not
         // "mirror explain" — route it to the bundle-explain handler.
         // Reject unknown subcommands consistently with the execution path.
+        // domainArgs[0] is guaranteed by the length>=2 gate above.
         if (domainArgs[0] !== "explain") {
-          printHelp();
+          printUnknownArgumentError(domainArgs[0]);
           return Promise.resolve(1);
         }
         return runMirror(
@@ -260,7 +283,7 @@ function runHelpCommand(
       printHelp();
       return Promise.resolve(0);
     default:
-      printHelp();
+      printUnknownArgumentError(domain);
       return Promise.resolve(1);
   }
 }
@@ -385,6 +408,8 @@ function printHelp(): void {
           "  discover select             Apply canonical selection policies",
           "  discover full               Run demand-profile -> sources -> sync -> catalog -> select",
           "  discover breadth            Widest discovery pass with candidate-pool guidance",
+          "  discover recall             Alias for discover breadth",
+          "  discover candidate-pool     Alias for discover breadth",
           "  discover stats              Print catalog and source statistics",
           "  discover diff               Compare outputs against a baseline state root",
           "  discover environment-index  Write experimental read-only query metadata index",
@@ -463,6 +488,8 @@ function printHelp(): void {
         title: "Quarantine — review and manage quarantined mirror artifacts:",
         lines: [
           "  quarantine list             List quarantined mirror artifacts pending review",
+          "  quarantine inspect          Show quarantined artifact metadata and content preview",
+          "  quarantine report           Write state/quarantine/quarantine-state.json",
           "  quarantine approve          Mark a quarantined artifact approved-with-warning",
           "  quarantine reject           Record a rejection while keeping quarantine status",
           "  quarantine pin              Pin a quarantine decision for future reviews",
@@ -489,18 +516,35 @@ function printHelp(): void {
   });
 }
 
-main()
-  .then((exitCode) => {
-    process.exitCode = exitCode;
-  })
-  .catch((error: unknown) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
+// Run the CLI only when executed directly (node dist/cli.js). When the
+// module is imported (in-process unit tests, #428), the dispatch helpers
+// must be importable without side effects — module-scope execution would
+// otherwise run a full CLI pass with the importing process' argv.
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  main()
+    .then((exitCode) => {
+      process.exitCode = exitCode;
+    })
+    .catch((error: unknown) => {
+      console.error(error);
+      process.exitCode = 1;
+    });
+}
 
 /**
  * Exposes narrow CLI internals for focused unit tests.
  */
 export const cliInternals = {
   mapBundleSubcommandForHelp,
+  runDomainCommand,
+  runHelpCommand,
+  parseGlobalOptions,
+  resolveHelpDomain,
+  isHelpRequest,
+  isVersionRequest,
+  readPackageVersion,
+  main,
 };

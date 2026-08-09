@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, symlink, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, symlink, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -677,4 +677,196 @@ void test("buildCodexHookSource returns hookFile when manifestDirectory undefine
     Record<string, unknown>
   >;
   assert.equal(hooks[0]?.source, hookPath);
+});
+
+void test("atomic writeJsonFile churn never exposes partial JSON to readers (#427/#428)", async () => {
+  const root = await mkdtempFixture("atomic-churn");
+  try {
+    const statePath = join(root, "state.json");
+    await writeJsonFile(statePath, { schemaVersion: 1, seq: 0 });
+
+    const writerCount = 8;
+    const rounds = 10;
+    const writers = Array.from({ length: writerCount }, (_, writerIndex) =>
+      (async () => {
+        for (let round = 0; round < rounds; round += 1) {
+          try {
+            await writeJsonFile(statePath, {
+              schemaVersion: 1,
+              writer: writerIndex,
+              seq: round,
+              payload: "x".repeat(2048),
+            });
+          } catch {
+            // The writers are a load generator: under this artificial churn
+            // a writer may exhaust its bounded retry window (locked
+            // destination) — that is EXPECTED and not under assertion. The
+            // invariant under test is reader atomicity, which the readers
+            // verify below.
+          }
+        }
+      })(),
+    );
+
+    // Readers run concurrently with the writers. The atomic-write contract is
+    // "old | absent | complete-new" — the Windows remove-and-retry window can
+    // legitimately expose an absent destination — but NEVER partial content.
+    let observedPartial = false;
+    let partialEvidence = "";
+    let observedInconsistent = false;
+    let observedReads = 0;
+    const readerErrors: string[] = [];
+    const readers = Array.from({ length: 4 }, () =>
+      (async () => {
+        for (let round = 0; round < rounds * 2; round += 1) {
+          let raw: string | null;
+          try {
+            raw = await readTextFileOrNull(statePath);
+          } catch (error) {
+            readerErrors.push(String(error));
+            continue;
+          }
+          if (raw === null) {
+            // Absent is part of the contract (remove-and-retry window).
+            continue;
+          }
+          observedReads += 1;
+          try {
+            const parsed = JSON.parse(raw) as {
+              schemaVersion: number;
+              writer: number;
+              seq: number;
+            };
+            if (parsed.schemaVersion !== 1) {
+              observedInconsistent = true;
+              partialEvidence = raw.slice(0, 300);
+            }
+          } catch {
+            observedPartial = true;
+            partialEvidence = raw.slice(0, 300);
+          }
+        }
+      })(),
+    );
+
+    await Promise.all([...writers, ...readers]);
+    // Sidecar evidence: the gate reporter can lose failure detail when a
+    // child exits abnormally, so persist the full diagnosis for triage.
+    await writeFile(
+      join(tmpdir(), `ah-churn-${process.pid}.json`),
+      JSON.stringify({
+        observedPartial,
+        partialEvidence,
+        observedInconsistent,
+        observedReads,
+        readerErrors,
+      }),
+      "utf8",
+    );
+    assert.equal(
+      observedPartial,
+      false,
+      `readers must never see partial JSON (evidence: ${partialEvidence || "none"})`,
+    );
+    assert.equal(
+      observedInconsistent,
+      false,
+      `readers must always see schema-valid docs (evidence: ${partialEvidence || "none"})`,
+    );
+    assert.ok(observedReads > 0, "readers made progress");
+    assert.deepEqual(
+      readerErrors,
+      [],
+      "readers must not hit transient open errors",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+void test("high-load atomic churn stress never exposes partial JSON to readers", async () => {
+  const root = await mkdtempFixture("atomic-churn-load");
+  try {
+    const statePath = join(root, "state.json");
+    await writeJsonFile(statePath, { schemaVersion: 1, seq: 0 });
+
+    // Heavier than the regular churn test: more writers, more rounds, and a
+    // larger payload widen the rename/remove window so reader atomicity is
+    // stress-tested rather than probed (review gap: the manual 45b4207
+    // stress was not committed).
+    const writerCount = 16;
+    const rounds = 20;
+    const writers = Array.from({ length: writerCount }, (_, writerIndex) =>
+      (async () => {
+        for (let round = 0; round < rounds; round += 1) {
+          try {
+            await writeJsonFile(statePath, {
+              schemaVersion: 1,
+              writer: writerIndex,
+              seq: round,
+              payload: "x".repeat(8192),
+            });
+          } catch {
+            // Writer retries may exhaust under artificial churn — expected.
+          }
+        }
+      })(),
+    );
+
+    let observedPartial = false;
+    let partialEvidence = "";
+    let observedInconsistent = false;
+    let observedReads = 0;
+    const readerErrors: string[] = [];
+    const readers = Array.from({ length: 8 }, () =>
+      (async () => {
+        for (let round = 0; round < rounds * 3; round += 1) {
+          let raw: string | null;
+          try {
+            raw = await readTextFileOrNull(statePath);
+          } catch (error) {
+            readerErrors.push(String(error));
+            continue;
+          }
+          if (raw === null) {
+            continue;
+          }
+          observedReads += 1;
+          try {
+            const parsed = JSON.parse(raw) as {
+              schemaVersion: number;
+              payload: string;
+            };
+            if (parsed.schemaVersion !== 1) {
+              observedInconsistent = true;
+              partialEvidence = raw.slice(0, 300);
+            }
+          } catch {
+            observedPartial = true;
+            partialEvidence = raw.slice(0, 300);
+          }
+        }
+      })(),
+    );
+
+    await Promise.all([...writers, ...readers]);
+    assert.equal(
+      observedPartial,
+      false,
+      `readers must never see partial JSON (evidence: ${partialEvidence || "none"})`,
+    );
+    assert.equal(
+      observedInconsistent,
+      false,
+      `readers must always see schema-valid docs (evidence: ${partialEvidence || "none"})`,
+    );
+    assert.ok(observedReads > 0, "readers made progress under load");
+    assert.deepEqual(
+      readerErrors,
+      [],
+      "readers must not hit transient open errors under load",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

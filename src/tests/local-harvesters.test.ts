@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   harvestLocalDirectorySource,
   harvestLocalManifestSource,
+  localHarvesterInternals,
 } from "../domains/discovery/local-harvesters.js";
 import { buildGeneratedLocalSources } from "../domains/discovery/local-sources.js";
 import type {
@@ -115,6 +116,7 @@ void test("local Cursor config harvesting recognizes native components", async (
   try {
     await writeText(join(root, ".cursorrules"), "Keep edits focused.\n");
     await writeText(join(root, "rules", "frontend.mdc"), "# Frontend\n");
+    await writeText(join(root, "rules", "security.md"), "# Security\n");
     await writeText(join(root, "commands", "review.md"), "Review changes.\n");
     await writeText(join(root, "agents", "security.md"), "# Security\n");
     await writeText(
@@ -132,6 +134,10 @@ void test("local Cursor config harvesting recognizes native components", async (
     await writeText(
       join(root, "mcp.json"),
       '{"mcpServers":{"repo":{"command":"node","args":["server.js"]}}}',
+    );
+    await writeText(
+      join(root, "plugins", "team", "mcp.json"),
+      '{"mcpServers":{"team":{"command":"node","args":["team.js"]}}}',
     );
     await writeText(
       join(root, "plugins", "team", ".cursor-plugin", "plugin.json"),
@@ -157,12 +163,14 @@ void test("local Cursor config harvesting recognizes native components", async (
 
     assert.equal(kindByPath.get(".cursorrules"), "instruction");
     assert.equal(kindByPath.get("rules/frontend.mdc"), "instruction");
+    assert.equal(kindByPath.get("rules/security.md"), "instruction");
     assert.equal(kindByPath.get("commands/review.md"), "prompt-pack");
     assert.equal(kindByPath.get("agents/security.md"), "agent");
     assert.equal(kindByPath.get("skills/api-designer/SKILL.md"), "skill");
     assert.equal(kindByPath.get("hooks.json"), "hook");
     assert.equal(kindByPath.get("plugins/team/hooks/deploy.json"), "hook");
     assert.equal(kindByPath.get("mcp.json"), "mcp-server");
+    assert.equal(kindByPath.get("plugins/team/mcp.json"), "mcp-server");
     assert.equal(
       kindByPath.get("plugins/team/.cursor-plugin/plugin.json"),
       "plugin",
@@ -310,3 +318,53 @@ function buildSelectionRegistry(): SelectionRegistry {
     duplicateGroups: [],
   };
 }
+
+void test("cursor config classifier handles adversarial path shapes deterministically (review 2026-08-09)", () => {
+  const source = buildLocalSource("local-cursor-config", "/fixture", [
+    "cursor",
+  ]);
+
+  const classify = (relativePath: string): string | null => {
+    const classified = localHarvesterInternals.classifyLocalDirectoryFile(
+      source,
+      relativePath,
+    );
+    return classified?.assetKind ?? null;
+  };
+
+  // Positive controls (valid layouts still classify after the segment-scan
+  // rewrite).
+  assert.equal(classify("rules/frontend.mdc"), "instruction");
+  assert.equal(classify("plugins/team/rules/x.mdc"), "instruction");
+  assert.equal(classify("plugins/team/agents/x.md"), "agent");
+  assert.equal(classify("plugins/team/commands/x.md"), "prompt-pack");
+  assert.equal(classify("plugins/team/hooks/x.json"), "hook");
+  assert.equal(classify("plugins/team/skills/deep/SKILL.md"), "skill");
+
+  // Adversarial shapes from the CodeQL js/polynomial-redos alert notes:
+  // strings starting with the target dir followed by many repetitions of
+  // "./<target>/." must terminate with the deterministic null (they are not
+  // valid Cursor layouts and previously fed nested-quantifier regexes).
+  const rulesRepetition = "./rules/".repeat(500) + "x.mdc";
+  assert.equal(classify(rulesRepetition), null);
+  assert.equal(classify("a/rules/".repeat(500) + "x.mdc"), null);
+  assert.equal(classify("./skills/".repeat(500) + "SKILL.md"), null);
+  assert.equal(classify("a/hooks/".repeat(500) + "x.json"), null);
+
+  // A long plugins-prefix chain IS a valid layout under the language
+  // ("plugins/" + any dirs + target), so it must classify — and terminate.
+  assert.equal(classify("plugins/".repeat(300) + "rules/x.mdc"), "instruction");
+  assert.equal(classify("plugins/".repeat(300) + "agents/x.md"), "agent");
+  assert.equal(
+    classify("plugins/".repeat(300) + "commands/x.md"),
+    "prompt-pack",
+  );
+  assert.equal(classify("plugins/".repeat(300) + "hooks/x.json"), "hook");
+  assert.equal(
+    classify("plugins/".repeat(300) + "skills/deep/SKILL.md"),
+    "skill",
+  );
+
+  // Pathological single segments (no slashes) terminate as unmatched.
+  assert.equal(classify(`${"r".repeat(100_000)}.mdc`), null);
+});

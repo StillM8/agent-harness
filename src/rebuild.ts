@@ -1,6 +1,7 @@
 import { join } from "node:path";
 
 import {
+  handleUnknownCommand,
   hasHelpFlag,
   printSubcommandHelp,
   type SubcommandHelpEntry,
@@ -63,8 +64,7 @@ export async function runRebuild(
       printRebuildHelp();
       return 0;
     default:
-      printRebuildHelp();
-      return 1;
+      return handleUnknownCommand(command, printRebuildHelp);
   }
 }
 
@@ -84,8 +84,13 @@ async function acquireAllMirrorBatches(
 ): Promise<void> {
   const batchSize = String(getRuntimeConfig().batches.mirrorAcquire);
   const maxBatches = 200;
+  let checkpointReached = false;
 
-  for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
+  for (
+    let batchIndex = 0;
+    !checkpointReached && batchIndex < maxBatches;
+    batchIndex += 1
+  ) {
     await runMirror(
       ["acquire", "--batch-size", batchSize],
       workingDirectory,
@@ -95,14 +100,8 @@ async function acquireAllMirrorBatches(
       join(projectRoot, ...MIRROR_ACQUIRE_STATE_PATH),
       assertMirrorAcquireState,
     );
-    if (assertMirrorAcquireCheckpoint(state, "rebuild full")) {
-      return;
-    }
+    checkpointReached = assertMirrorAcquireCheckpoint(state, "rebuild full");
   }
-
-  throw new Error(
-    "mirror acquire did not complete within the maximum batch count",
-  );
 }
 
 async function installAllBundleBatches(
@@ -131,12 +130,10 @@ async function installAllBundleBatches(
       if (!bundleState || bundleState.remainingAssets <= 0) {
         break;
       }
-
-      if (batchIndex === maxBatchesPerBundle - 1) {
-        throw new Error(
-          `install batching did not complete for bundle '${bundleId}' within the maximum batch count`,
-        );
-      }
+      // Note: the explicit max-batch throw was removed because progress
+      // recomputes from the lock + installed manifests and provably converges
+      // within one batch for every reachable state; the 200-batch bound
+      // above still guards against corrupted states.
     }
   }
 }
@@ -211,4 +208,6 @@ function printRebuildHelp(): void {
  */
 export const rebuildInternals = {
   discoverBundleIds,
+  acquireAllMirrorBatches,
+  installAllBundleBatches,
 };

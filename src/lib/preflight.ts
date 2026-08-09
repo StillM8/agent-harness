@@ -4,6 +4,7 @@ import { access } from "node:fs/promises";
 import { delimiter, dirname, join, win32 } from "node:path";
 
 import { getRuntimeConfig } from "../config/runtime.js";
+import type { collectActivatedAssetPrerequisiteDiagnostics } from "./asset-prerequisites.js";
 import type {
   HostAdapter,
   HostRuntimeSpec,
@@ -39,6 +40,18 @@ export interface RuntimeCommandResult {
   cancelled: boolean;
   exitCode: number | null;
   message: string;
+}
+
+/**
+ * Injection seam for the preflight function family used by the setup-doctor
+ * and workspace runners. Tests override individual members to drive
+ * deterministic preflight outcomes without depending on installed host
+ * CLIs; every member falls back to the real implementation when absent.
+ */
+export interface PreflightFunctionOverrides {
+  runHostPreflight?: typeof runHostPreflight;
+  runAdapterPreflight?: typeof runAdapterPreflight;
+  collectActivatedAssetPrerequisiteDiagnostics?: typeof collectActivatedAssetPrerequisiteDiagnostics;
 }
 
 /**
@@ -420,6 +433,7 @@ async function runRuntimeCommand(
   executable: string,
   args: string[],
   abortSignal?: AbortSignal,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<RuntimeCommandResult> {
   // Short-circuit when already aborted — don't spawn at all.
   if (isAborted(abortSignal)) {
@@ -437,7 +451,7 @@ async function runRuntimeCommand(
   // making a dedicated post-resolution re-check redundant.
   const resolvedExecutable = await resolveRuntimeExecutable(
     executable,
-    process.platform,
+    platform,
     findExecutableOnPath,
     abortSignal,
   );
@@ -445,9 +459,24 @@ async function runRuntimeCommand(
   const spawnSpec = buildRuntimeCommandSpawnSpec({
     args,
     executable,
-    platform: process.platform,
+    platform,
     resolvedExecutable,
   });
+
+  // Fail closed on wrapper targets: cmd.exe re-parses the raw command line
+  // of a .cmd/.bat invocation, so shell-metacharacter arguments (operators,
+  // redirection, %VAR% / !VAR! expansion, quotes) cannot be made safe by
+  // quoting. Legitimate wrapper callers (host CLI version probes) pass
+  // static literal arguments; anything else must be refused before a shell
+  // ever sees it.
+  const wrapperRefusal = buildWrapperRefusal(
+    resolvedExecutable,
+    args,
+    platform,
+  );
+  if (wrapperRefusal) {
+    return wrapperRefusal;
+  }
 
   return new Promise((resolve) => {
     const child = spawn(spawnSpec.executable, spawnSpec.args, {
@@ -524,6 +553,64 @@ function resolveFoundExecutable(
   return foundExecutable ?? executable;
 }
 
+/**
+ * Defines characters that cmd.exe (the target of .cmd/.bat wrappers)
+ * interprets even inside quoted arguments: operators, redirection, batch
+ * variable expansion, delayed expansion, and quote characters. Arguments
+ * containing any of these must never cross into a wrapper invocation —
+ * Windows batch-file argument parsing cannot be made safe for them by
+ * quoting alone (cmd.exe re-parses the raw command line). The NUL byte is
+ * checked separately to keep control characters out of the regex literal.
+ */
+const CMD_SHELL_META_PATTERN = /[&|<>^%!"\r\n]/u;
+
+/**
+ * Returns true when a value contains characters that cmd.exe interprets in
+ * wrapper command lines regardless of quoting.
+ */
+export function containsShellMetaCharacters(value: string): boolean {
+  return value.includes("\u0000") || CMD_SHELL_META_PATTERN.test(value);
+}
+
+/**
+ * Returns whether an executable path is a Windows shell wrapper (.cmd /
+ * .bat) that must be invoked through a shell.
+ */
+export function isWindowsShellWrapperPath(
+  executablePath: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform === "win32" && /\.(?:cmd|bat)$/iu.test(executablePath);
+}
+
+/**
+ * Returns the fail-closed refusal for a Windows shell wrapper invoked with
+ * shell-metacharacter arguments, or null when the command is safe to run.
+ *
+ * Extracted from {@link runRuntimeCommand} so the refusal decision (and the
+ * exact refusal payload) is exercised on every platform: the guard is
+ * parameterized by platform, letting tests force the win32 wrapper branch on
+ * non-Windows runners. callers keep passing `process.platform`.
+ */
+export function buildWrapperRefusal(
+  resolvedExecutable: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+): { cancelled: false; exitCode: number; message: string } | null {
+  if (
+    isWindowsShellWrapperPath(resolvedExecutable, platform) &&
+    args.some(containsShellMetaCharacters)
+  ) {
+    return {
+      cancelled: false,
+      exitCode: Number.MAX_SAFE_INTEGER,
+      message: `Refusing to run Windows shell wrapper with shell-metacharacter arguments: '${args.join("' '")}'. Host CLI wrapper arguments must be static literals.`,
+    };
+  }
+
+  return null;
+}
+
 interface RuntimeCommandSpawnSpecOptions {
   executable: string;
   args: string[];
@@ -535,8 +622,10 @@ function buildRuntimeCommandSpawnSpec(
   options: RuntimeCommandSpawnSpecOptions,
 ): { executable: string; args: string[] } {
   const platform = options.platform ?? process.platform;
-  const isWindowsShellWrapper =
-    platform === "win32" && /\.(?:cmd|bat)$/iu.test(options.resolvedExecutable);
+  const isWindowsShellWrapper = isWindowsShellWrapperPath(
+    options.resolvedExecutable,
+    platform,
+  );
 
   if (!isWindowsShellWrapper) {
     return {
@@ -618,11 +707,14 @@ export async function checkPathExists(
 export const preflightInternals = {
   buildRuntimeCommandSpawnSpec,
   buildWindowsPowerShellCommand,
+  buildWrapperRefusal,
   checkRuntimeCommand,
+  containsShellMetaCharacters,
   findExecutableOnPath,
   getExecutableAccessMode,
   getExecutableSearchExtensions,
   isAborted,
+  isWindowsShellWrapperPath,
   quotePowerShellLiteral,
   resolveFoundExecutable,
   resolveRuntimeExecutable,

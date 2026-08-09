@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { clearRuntimeConfigForTests } from "../config/runtime.js";
+import { restoreEnvVar } from "./env-test-utils.js";
 import { buildCatalogId } from "../domains/discovery/catalog-utils.js";
 import type { SourceSyncSourceState } from "../domains/discovery/source-sync.js";
 import { sourceSyncInternals } from "../domains/discovery/source-sync.js";
@@ -1351,7 +1352,7 @@ function installFetchMock(
       delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
       return;
     }
-    process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = previousFetchMockFlag;
+    restoreEnvVar("AGENT_HARNESS_TEST_FETCH_MOCKS", previousFetchMockFlag);
   };
 }
 
@@ -1539,4 +1540,159 @@ void test("synchronizeIndexedSource dispatches ard-registry kind-guard", async (
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+void test("syncSitemapPackageRegistrySource — unmapped registry kinds fail closed (no entries) while mapped kinds attribute correctly", async () => {
+  const cleanupFetch = installFetchMock(async (input) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+    switch (url) {
+      case "https://example.com/sitemap.xml":
+        return xmlResponse([
+          "<sitemapindex>",
+          "<sitemap><loc>https://example.com/leaf.xml</loc></sitemap>",
+          "</sitemapindex>",
+        ]);
+      case "https://example.com/leaf.xml":
+        return xmlResponse([
+          "<urlset>",
+          "<url><loc>https://example.com/packages/phoenix</loc></url>",
+          "<url><loc>https://example.com/packages/ecto</loc></url>",
+          "</urlset>",
+        ]);
+      default:
+        throw new Error(`Unexpected fetch: ${url}`);
+    }
+  });
+
+  try {
+    // Unknown registry id: sitemap items must NOT be attributed to any
+    // registry family (fail-closed, #424) — sync still completes structurally.
+    const unknownContext = buildSourceSyncContext();
+    const unknownResult =
+      await sourceSyncInternals.syncSitemapPackageRegistrySource(
+        buildSourceDefinition("unknown-registry", "package-registry", {
+          baseUrl: "https://example.com",
+          sitemapUrl: "https://example.com/sitemap.xml",
+        }),
+        unknownContext,
+        {
+          rootSitemapUrl: "https://example.com/sitemap.xml",
+          itemUrlPredicate: (url: URL) => url.pathname.startsWith("/packages/"),
+          packageNameFromUrl: (url: URL) => {
+            const segments = url.pathname.split("/").filter(Boolean);
+            return segments[segments.length - 1];
+          },
+        },
+      );
+    assert.equal(unknownResult.status, "complete");
+    assert.equal(
+      unknownResult.indexedEntryCount,
+      0,
+      "unmapped kind must attribute zero entries",
+    );
+    assert.equal(unknownContext.entriesById.size, 0);
+
+    // hex-registry: items are attributed to hex.pm with hex-kind ids.
+    const hexContext = buildSourceSyncContext();
+    const hexResult =
+      await sourceSyncInternals.syncSitemapPackageRegistrySource(
+        buildSourceDefinition("hex-registry", "package-registry", {
+          baseUrl: "https://hex.pm",
+          sitemapUrl: "https://example.com/sitemap.xml",
+        }),
+        hexContext,
+        {
+          rootSitemapUrl: "https://example.com/sitemap.xml",
+          itemUrlPredicate: (url: URL) => url.pathname.startsWith("/packages/"),
+          packageNameFromUrl: (url: URL) => {
+            const segments = url.pathname.split("/").filter(Boolean);
+            return segments[segments.length - 1];
+          },
+        },
+      );
+    assert.equal(hexResult.status, "complete");
+    assert.equal(hexResult.indexedEntryCount, 2);
+    for (const entry of hexContext.entriesById.values()) {
+      assert.match(entry.id, /^hex-registry:hex:/u);
+      assert.equal(entry.source.sourceId, "hex-registry");
+      assert.match(entry.source.originUrl, /^https:\/\/hex\.pm\/packages\//u);
+    }
+
+    // conan-registry: items are attributed to ConanCenter with conan-kind ids.
+    const conanContext = buildSourceSyncContext();
+    const conanResult =
+      await sourceSyncInternals.syncSitemapPackageRegistrySource(
+        buildSourceDefinition("conan-registry", "package-registry", {
+          baseUrl: "https://conan.io",
+          sitemapUrl: "https://example.com/sitemap.xml",
+        }),
+        conanContext,
+        {
+          rootSitemapUrl: "https://example.com/sitemap.xml",
+          itemUrlPredicate: (url: URL) => url.pathname.startsWith("/packages/"),
+          packageNameFromUrl: (url: URL) => {
+            const segments = url.pathname.split("/").filter(Boolean);
+            return segments[segments.length - 1];
+          },
+        },
+      );
+    assert.equal(conanResult.status, "complete");
+    assert.equal(conanResult.indexedEntryCount, 2);
+    for (const entry of conanContext.entriesById.values()) {
+      assert.match(entry.id, /^conan-registry:conan:/u);
+      assert.equal(entry.source.sourceId, "conan-registry");
+      assert.match(
+        entry.source.originUrl,
+        /^https:\/\/conan\.io\/center\/recipes\//u,
+      );
+    }
+  } finally {
+    cleanupFetch();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #439 — sync progress ETA helpers
+// ---------------------------------------------------------------------------
+
+void test("formatSyncEtaMs formats remaining durations for sync progress", () => {
+  assert.equal(sourceSyncInternals.formatSyncEtaMs(0), "~0s");
+  assert.equal(sourceSyncInternals.formatSyncEtaMs(999), "~1s");
+  assert.equal(sourceSyncInternals.formatSyncEtaMs(52_000), "~52s");
+  assert.equal(sourceSyncInternals.formatSyncEtaMs(125_000), "~2m 5s");
+  assert.equal(sourceSyncInternals.formatSyncEtaMs(180_000), "~3m");
+  assert.equal(sourceSyncInternals.formatSyncEtaMs(3_600_000), "~60m");
+  assert.equal(sourceSyncInternals.formatSyncEtaMs(-5), "~0s");
+  assert.equal(sourceSyncInternals.formatSyncEtaMs(Number.NaN), "~0s");
+  assert.equal(
+    sourceSyncInternals.formatSyncEtaMs(Number.POSITIVE_INFINITY),
+    "~0s",
+  );
+});
+
+void test("estimateRemainingSyncMs extrapolates average per-source duration", () => {
+  const past = Date.now() - 10_000;
+  // 2 sources completed in 10s → ~5s/source; 5 remaining → ~25s.
+  const remaining = sourceSyncInternals.estimateRemainingSyncMs(past, 2, 7);
+  assert.ok(remaining > 20_000 && remaining < 30_000);
+
+  // Nothing remaining (or nothing completed) → zero.
+  assert.equal(
+    sourceSyncInternals.estimateRemainingSyncMs(Date.now(), 2, 2),
+    0,
+  );
+  assert.equal(
+    sourceSyncInternals.estimateRemainingSyncMs(Date.now(), 0, 5),
+    0,
+  );
+  assert.equal(
+    sourceSyncInternals.estimateRemainingSyncMs(Date.now(), 3, 1),
+    0,
+  );
 });

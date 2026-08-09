@@ -2,7 +2,12 @@
 
 import { fileURLToPath } from "node:url";
 
-import { hasHelpFlag } from "./cli-help-format.js";
+import {
+  hasHelpFlag,
+  isFlagLike,
+  printUnknownArgumentError,
+  hasUnknownFlag,
+} from "./cli-help-format.js";
 import { resolveProjectRoot } from "./files.js";
 import {
   listHostAdapters,
@@ -48,11 +53,30 @@ export async function runWire(
 
   const hostAdapter = resolveHostAdapter(target);
   if (!hostAdapter) {
+    if (isFlagLike(target)) {
+      printUnknownArgumentError(target);
+      return 1;
+    }
     console.log(formatActionableDiagnostic(unknownHostDiagnostic(target)));
     printWireHelp();
     return 1;
   }
 
+  // Strict flag validation before any preflight work (#431): wire hosts only
+  // accept the three mode flags.
+  if (
+    hasUnknownFlag(
+      rest,
+      new Set(["--preview", "--apply", "--reset"]),
+      new Set(),
+      `agent-harness wire ${getPreferredHostCommand(hostAdapter.id)} --help`,
+    )
+  ) {
+    return 1;
+  }
+
+  // requiresLifecycleHostPaths is optional on HostAdapter; the fallback is
+  // live behavior for adapters that only declare mutatesHostPaths.
   const requiresLifecycleHostPaths =
     hostAdapter.requiresLifecycleHostPaths ?? hostAdapter.mutatesHostPaths;
   const diagnostics = [

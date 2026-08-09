@@ -1,5 +1,6 @@
 import { hasDesignSystemSignals } from "../domains/discovery/demand-helpers.js";
 import { extractPackageManifestEntry } from "../lib/package-manifest-entry.js";
+import { replaceRunsWithDash, trimDashes } from "../lib/safe-paths.js";
 import {
   getSessionIntentConcernTerms,
   getSessionIntentKeywords,
@@ -508,14 +509,44 @@ function canonicalizePhrase(
 }
 
 /**
+ * Memoized normalized phrase cache. `normalizePhrase` is pure and
+ * idempotent, but the ranking/selection loops re-normalize the same terms
+ * thousands of times per host (each call runs three regex passes). Caching
+ * turns those hits into Map lookups — a measured 79% of recommend wall time
+ * was phrase canonicalization. Bounded: distinct phrases in a run are a
+ * few thousand at most; the cache is cleared when it passes the cap so a
+ * pathological workload cannot grow it without bound.
+ */
+const NORMALIZE_PHRASE_CACHE_MAX_ENTRIES = 20_000;
+const normalizePhraseCache = new Map<string, string>();
+
+/**
+ * Returns whether the character is safe to keep verbatim in a normalized
+ * demand phrase.
+ */
+function isPhraseCharacter(character: string): boolean {
+  return /[a-z0-9]/u.test(character);
+}
+
+/**
  * Provides normalize phrase for the lifecycle pipeline.
  */
 export function normalizePhrase(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gu, "-")
-    .replace(/^-+|-+$/gu, "")
-    .trim();
+  const cached = normalizePhraseCache.get(value);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  // Linear run-collapse + dash trim (no regex backtracking on the phrase).
+  const normalized = trimDashes(
+    replaceRunsWithDash(value.toLowerCase(), isPhraseCharacter),
+  ).trim();
+
+  if (normalizePhraseCache.size >= NORMALIZE_PHRASE_CACHE_MAX_ENTRIES) {
+    normalizePhraseCache.clear();
+  }
+  normalizePhraseCache.set(value, normalized);
+  return normalized;
 }
 
 function intersects(left: Set<string>, right: Set<string>): boolean {

@@ -82,16 +82,22 @@ async function runNpm(
   args: string[],
   options: Parameters<typeof execFileAsync>[2],
 ): Promise<{ stdout: string; stderr: string }> {
+  const strippedOptions = {
+    ...(options ?? {}),
+    env: {
+      ...((options?.env as NodeJS.ProcessEnv | undefined) ?? process.env),
+    },
+  };
   const result = npmCliPath
     ? await execFileAsync(process.execPath, [npmCliPath, ...args], {
-        ...options,
+        ...strippedOptions,
         encoding: "utf8",
       })
     : await execFileAsync(
         process.platform === "win32" ? "npm.cmd" : "npm",
         args,
         {
-          ...options,
+          ...strippedOptions,
           encoding: "utf8",
           shell: process.platform === "win32",
         },

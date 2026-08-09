@@ -1,117 +1,119 @@
 import { join } from "node:path";
 import { copyFile, mkdir } from "node:fs/promises";
 
-import { isGitHubRepoSource } from "./github.js";
 import {
   inspectCatalog,
   printCatalogStats,
 } from "./domains/discovery/catalog-inspection.js";
 import {
+  handleUnknownCommand,
   hasHelpFlag,
-  printSubcommandHelp,
-  type SubcommandHelpEntry,
+  hasUnknownFlag,
 } from "./cli-help-format.js";
-import { printCommandHelp } from "./lib/cli-output.js";
 
-import {
-  readJsonFile,
-  readJsonLinesFile,
-  readJsonFileOrNull,
-  toPosixPath,
-  writeJsonFile,
-  writeJsonLinesFile,
-} from "./files.js";
+import { readJsonLinesFile, toPosixPath } from "./files.js";
 import { getRuntimeConfig } from "./config/runtime.js";
-import {
-  compareSelectionCandidates,
-  filterCatalogEntriesByDemandRelevance,
-  groupCatalogEntriesForSelection,
-  buildRejectionSummary,
-  buildSelectionReason,
-} from "./domains/discovery/catalog-selection.js";
-import {
-  compareAssetCatalogEntries,
-  compareSourcesByPriority,
-  enhanceTrustForEntry,
-  mergeRemoteCatalogEntries,
-} from "./domains/discovery/catalog-utils.js";
 import {
   orchestrateAiEnrichment,
   type AiEnrichmentOrchestrationResult,
 } from "./domains/discovery/ai-enrichment.js";
-import { writeAssetLifecycleFingerprintReport } from "./domains/discovery/asset-fingerprints.js";
-import { writeSourceCandidateQueue } from "./domains/discovery/candidate-queue.js";
-import { buildDemandProfile } from "./domains/discovery/demand-profile.js";
 import { writeDiscoverDiffReport } from "./domains/discovery/diff.js";
 import { writeEnvironmentIndex } from "./domains/discovery/environment-index.js";
 import { writeArdCatalog, getArdPublisherFqdn } from "./ard-catalog.js";
-import { harvestGitHubRepoSource } from "./domains/discovery/github-harvester.js";
 import { generateSourceIndex } from "./domains/discovery/source-index.js";
 import {
-  getIndexedSourceIds,
-  loadIndexedCatalogEntries,
   loadSourceSyncState,
   syncIndexedSources,
   type SourceSyncState,
 } from "./domains/discovery/source-sync.js";
 import {
-  harvestLocalDirectorySource,
-  harvestLocalManifestSource,
-} from "./domains/discovery/local-harvesters.js";
-import { loadSourceRegistry } from "./domains/discovery/source-registry.js";
-import {
   CATALOG_INDEX_OUTPUT_PATH,
-  CATALOG_OUTPUT_PATH,
-  DEMAND_PROFILE_OUTPUT_PATH,
-  REJECTED_CATALOG_OUTPUT_PATH,
-  UNKNOWN_SIGNALS_OUTPUT_PATH,
-  REMOTE_CATALOG_STATE_OUTPUT_PATH,
-  SELECTED_CATALOG_OUTPUT_PATH,
-  SELECTION_REPORT_OUTPUT_PATH,
   SOURCE_SYNC_ENTRIES_OUTPUT_PATH,
 } from "./domains/discovery/output-paths.js";
 import {
   isCatalogIndexFresh,
   writeCatalogIndexMeta,
 } from "./domains/discovery/catalog-index.js";
-import { harvestOfficialSkillIndexes } from "./domains/discovery/official-index-harvester.js";
-import { harvestPackageRegistrySource } from "./domains/discovery/package-registry-harvester.js";
-import { harvestReferenceSource } from "./domains/discovery/reference-source-harvester.js";
-import {
-  loadRemoteHarvestState,
-  writeRemoteHarvestState,
-} from "./domains/discovery/remote-state.js";
-import { writeSourceHealthReports } from "./domains/discovery/source-health.js";
 import type { SourceHealthReport } from "./domains/discovery/source-health.js";
-import { writeSourceUtilizationReport } from "./domains/discovery/source-utilization.js";
-import {
-  getActiveDeadline,
-  assertNotDeadlineExceeded,
-} from "./lib/deadline.js";
-import { writeSourceVerificationReport } from "./domains/discovery/source-verification.js";
-import { writeUnknownSignalReport } from "./domains/discovery/unknown-signals.js";
-import {
-  SemanticScorer,
-  buildDemandQueryText,
-} from "./domains/discovery/semantic-scoring.js";
-import {
-  assertAssetCatalogEntry,
-  assertDemandProfile,
-  assertSelectionRegistry,
-} from "./manifest-validation.js";
 
-import type {
-  AssetCatalogEntry,
-  DemandProfile,
-  SelectionDuplicateDecision,
-  SelectionRegistry,
-  SelectionReport,
-  SourceDefinition,
-  SourceIndex,
-} from "./types.js";
+import type { AssetCatalogEntry } from "./types.js";
 
 /**
  * Dispatches the discover CLI command group.
+ */
+import {
+  printDiscoverHelp,
+  printDiscoverSubcommandHelp,
+} from "./discover-help.js";
+import {
+  applyPerSourceCap,
+  computeAcceptanceRate,
+  computeDemandRelevantSourceIds,
+  computeSourceDiversityWarning,
+  getEnabledSourceIds,
+  printDiscoveryBreadthSummary,
+} from "./discover-pipeline.js";
+import {
+  generateCatalog,
+  generateDemandProfile,
+  generateSelectionOutputs,
+} from "./domains/discovery/catalog-generation.js";
+
+/**
+ * Re-exports demand profile construction for programmatic discovery callers.
+ */
+export { buildDemandProfile } from "./domains/discovery/demand-profile.js";
+
+const DISCOVER_AI_ENRICH_FLAGS = new Set([
+  "--ai-enrich",
+  "--no-ai-enrich",
+  "--force",
+  "--require-ai-enrich",
+]);
+const DISCOVER_FULL_KNOWN_FLAGS = new Set([
+  ...DISCOVER_AI_ENRICH_FLAGS,
+  "--quiet",
+  "--summary",
+  "--no-sync",
+  "--sync-all",
+  "--max-scan-bytes",
+]);
+const DISCOVER_FULL_FLAGS_WITH_VALUES = new Set(["--max-scan-bytes"]);
+
+/** Minimum number of sources before the first-run --no-sync hint appears. */
+const FIRST_RUN_SYNC_HINT_MIN_SOURCES = 6;
+
+/**
+ * Decides whether to proactively print the first-run `--no-sync` hint
+ * (#439). The hint must appear WITHOUT requiring a skipped-source condition:
+ * the first sync of many sources is the case where a 60-120s silent phase
+ * makes the pipeline look hung. Suppressed when the user already opted out
+ * (--no-sync/--sync-all), when quiet mode is active, or on non-first runs.
+ */
+function shouldShowFirstRunSyncHint(
+  priorSyncState: SourceSyncState | null,
+  effectiveSourceCount: number,
+  quietMode: boolean,
+  noSync: boolean,
+  syncAll: boolean,
+): boolean {
+  if (quietMode || noSync || syncAll) {
+    return false;
+  }
+  if (effectiveSourceCount < FIRST_RUN_SYNC_HINT_MIN_SOURCES) {
+    return false;
+  }
+  // Simplified null-aware check: priorSyncState is null on the very first
+  // run (no state file written yet) — that is a live first-run path, so both
+  // arms are exercised by the hint tests.
+  const hasPriorSync =
+    priorSyncState !== null && priorSyncState.sources.length > 0;
+  return !hasPriorSync;
+}
+
+/**
+ * Dispatches the discover command group: subcommand-specific help first,
+ * then the stateful pipeline subcommands and their strict-flag validation.
  */
 export async function runDiscover(
   args: string[],
@@ -177,13 +179,13 @@ export async function runDiscover(
       // When pageCap is 0, use an unlimited sentinel rather than omitting
       // the option — omission falls back to the runtime default (10 pages),
       // defeating the purpose of configuring unlimited index builds.
+      // pageCap is validated as a non-negative integer, so the only two
+      // cases are zero (unlimited) and positive (bounded).
       await syncIndexedSources(
         projectRoot,
         pageCap === 0
           ? { maxPagesPerRun: Number.MAX_SAFE_INTEGER }
-          : pageCap > 0
-            ? { maxPagesPerRun: pageCap }
-            : undefined,
+          : { maxPagesPerRun: pageCap },
       );
       // Copy the source-sync entries snapshot to catalog-index.jsonl so that
       // `discover sync` and `discover select` can read it without touching
@@ -209,6 +211,16 @@ export async function runDiscover(
       return 0;
     }
     case "sync": {
+      if (
+        hasUnknownFlag(
+          rest,
+          new Set(["--full"]),
+          new Set(),
+          "agent-harness discover sync --help",
+        )
+      ) {
+        return 1;
+      }
       const forceFullFlag = rest.includes("--full");
       if (!forceFullFlag && (await isCatalogIndexFresh(projectRoot))) {
         // The index is fresh but source-sync state may be stale or empty.
@@ -236,6 +248,16 @@ export async function runDiscover(
       return 0;
     }
     case "select": {
+      if (
+        hasUnknownFlag(
+          rest,
+          DISCOVER_AI_ENRICH_FLAGS,
+          new Set(),
+          "agent-harness discover select --help",
+        )
+      ) {
+        return 1;
+      }
       const aiEnrichmentFlags = parseAiEnrichmentFlags(rest);
       logDiscoverPhase("discover select", 1, 1, "Applying selection rules");
       await generateSelectionOutputs(projectRoot);
@@ -251,6 +273,16 @@ export async function runDiscover(
       );
     }
     case "full": {
+      if (
+        hasUnknownFlag(
+          rest,
+          DISCOVER_FULL_KNOWN_FLAGS,
+          DISCOVER_FULL_FLAGS_WITH_VALUES,
+          "agent-harness discover full --help",
+        )
+      ) {
+        return 1;
+      }
       const aiEnrichmentFlags = parseAiEnrichmentFlags(rest);
       const quietMode = rest.includes("--quiet");
       const summaryMode = rest.includes("--summary");
@@ -316,6 +348,26 @@ export async function runDiscover(
             );
           }
         }
+        // Proactive first-run hint (#439): before the (potentially minutes-
+        // long) sync phase starts, tell interactive users that cached-state
+        // opt-outs exist — even when no source was skipped.
+        const effectiveSyncSourceCount =
+          demandSourceIds?.size ??
+          (await getEnabledSourceIds(projectRoot)).length;
+        const priorSyncState = await loadSourceSyncState(projectRoot);
+        if (
+          shouldShowFirstRunSyncHint(
+            priorSyncState,
+            effectiveSyncSourceCount,
+            quietMode,
+            noSync,
+            syncAll,
+          )
+        ) {
+          process.stderr.write(
+            `[discover full] First-time sync of ${effectiveSyncSourceCount} sources may take several minutes — pass --no-sync to use cached discovery state or --sync-all to sync every enabled source.\n`,
+          );
+        }
         logDiscoverPhase("discover full", 3, 5, "Syncing indexed sources");
         await syncIndexedSources(
           projectRoot,
@@ -349,9 +401,30 @@ export async function runDiscover(
     case "breadth":
     case "recall":
     case "candidate-pool":
+      // These subcommands take no options; any flag is unknown (#431).
+      if (
+        hasUnknownFlag(
+          rest,
+          new Set(),
+          new Set(),
+          "agent-harness discover breadth --help",
+        )
+      ) {
+        return 1;
+      }
       await runDiscoveryBreadth(workingDirectory, projectRoot);
       return 0;
     case "enrich":
+      if (
+        hasUnknownFlag(
+          rest,
+          new Set(["--force", "--require-ai-enrich"]),
+          new Set(),
+          "agent-harness discover enrich --help",
+        )
+      ) {
+        return 1;
+      }
       return handleAiEnrichmentResult(
         await orchestrateAiEnrichment(projectRoot, {
           trigger: "manual",
@@ -362,6 +435,16 @@ export async function runDiscover(
         }),
       );
     case "stats":
+      if (
+        hasUnknownFlag(
+          rest,
+          new Set(),
+          new Set(),
+          "agent-harness discover stats --help",
+        )
+      ) {
+        return 1;
+      }
       await printCatalogStats(projectRoot);
       return 0;
     case "diff":
@@ -400,462 +483,10 @@ export async function runDiscover(
       printDiscoverHelp();
       return 0;
     default:
-      printDiscoverHelp();
-      return 1;
+      return handleUnknownCommand(command, printDiscoverHelp);
   }
 }
 
-async function generateDemandProfile(
-  scanRoot: string,
-  projectRoot: string,
-  maxBytes?: number,
-): Promise<DemandProfile> {
-  const demandProfile = await buildDemandProfile(scanRoot, { maxBytes });
-  const outputPath = join(projectRoot, ...DEMAND_PROFILE_OUTPUT_PATH);
-  await writeJsonFile(outputPath, demandProfile);
-
-  const unknownSignalsOutputPath = join(
-    projectRoot,
-    ...UNKNOWN_SIGNALS_OUTPUT_PATH,
-  );
-  const unknownSignalsReport = await writeUnknownSignalReport(
-    scanRoot,
-    unknownSignalsOutputPath,
-  );
-
-  console.log(`Demand profile written to ${toPosixPath(outputPath)}`);
-  console.log(
-    `Unknown signal backlog written to ${toPosixPath(unknownSignalsOutputPath)} (${unknownSignalsReport.summary.signalCount} signals)`,
-  );
-  return demandProfile;
-}
-
-/**
- * Re-exports demand profile construction for programmatic discovery callers.
- */
-export { buildDemandProfile } from "./domains/discovery/demand-profile.js";
-
-async function generateCatalog(projectRoot: string): Promise<{
-  catalogEntries: AssetCatalogEntry[];
-  enabledSources: SourceDefinition[];
-  sourceSyncState: SourceSyncState;
-}> {
-  const sourceRegistry = await loadSourceRegistry(projectRoot);
-  const selectionRegistry = await readJsonFile<SelectionRegistry>(
-    join(projectRoot, "discover", "selections.json"),
-    assertSelectionRegistry,
-  );
-  const demandProfile = await readJsonFileOrNull<DemandProfile>(
-    join(projectRoot, "discover", "output", "demand-profile.json"),
-    assertDemandProfile,
-  );
-  const enabledSources = sourceRegistry.sources
-    .filter((source) => source.enabled)
-    .sort(compareSourcesByPriority);
-  const sourceSyncState = await loadSourceSyncState(projectRoot);
-  const indexedSourceIds = getIndexedSourceIds(sourceSyncState);
-  const indexedCatalogEntries = await loadIndexedCatalogEntries(projectRoot);
-  const indexedCatalogEntriesBySourceId = new Map<
-    string,
-    AssetCatalogEntry[]
-  >();
-  for (const entry of indexedCatalogEntries) {
-    const sourceEntries = indexedCatalogEntriesBySourceId.get(
-      entry.source.sourceId,
-    );
-    if (sourceEntries) {
-      sourceEntries.push(entry);
-    } else {
-      indexedCatalogEntriesBySourceId.set(entry.source.sourceId, [entry]);
-    }
-  }
-  const remoteHarvestState = await loadRemoteHarvestState(projectRoot);
-  const repoBatchSize = getRuntimeConfig().batches.remoteHarvest;
-  const cachedRemoteCatalogEntries = await readJsonLinesFile<AssetCatalogEntry>(
-    join(projectRoot, ...REMOTE_CATALOG_STATE_OUTPUT_PATH),
-    assertAssetCatalogEntry,
-  );
-
-  const catalogEntries: AssetCatalogEntry[] = [];
-  const repoSources = enabledSources.filter((source) => source.kind === "repo");
-  const nonRepoSources = enabledSources.filter(
-    (source) => source.kind !== "repo",
-  );
-
-  const totalSources = nonRepoSources.length + repoSources.length;
-  let processedSources = 0;
-  const deadline = getActiveDeadline();
-
-  process.stderr.write(
-    `[discover catalog] Building catalog from ${totalSources} enabled sources\n`,
-  );
-
-  for (const source of nonRepoSources) {
-    processedSources++;
-    process.stderr.write(
-      `[discover catalog] ${processedSources}/${totalSources} ${source.id} (${source.kind})\n`,
-    );
-    assertNotDeadlineExceeded(deadline, `discover catalog source ${source.id}`);
-    if (indexedSourceIds.has(source.id)) {
-      const indexedEntries =
-        indexedCatalogEntriesBySourceId.get(source.id) ?? [];
-      appendCatalogEntries(catalogEntries, indexedEntries);
-      continue;
-    }
-
-    switch (source.kind) {
-      case "local-manifest":
-        appendCatalogEntries(
-          catalogEntries,
-          await harvestLocalManifestSource(
-            source,
-            demandProfile,
-            selectionRegistry,
-            projectRoot,
-          ),
-        );
-        break;
-      case "local-directory":
-        appendCatalogEntries(
-          catalogEntries,
-          await harvestLocalDirectorySource(
-            source,
-            demandProfile,
-            selectionRegistry,
-            projectRoot,
-          ),
-        );
-        break;
-      case "package-registry":
-        appendCatalogEntries(
-          catalogEntries,
-          await harvestPackageRegistrySource(
-            source,
-            demandProfile,
-            selectionRegistry,
-          ),
-        );
-        break;
-      case "docs":
-      case "marketplace":
-      case "registry":
-        appendCatalogEntries(
-          catalogEntries,
-          await harvestReferenceSource(
-            source,
-            demandProfile,
-            selectionRegistry,
-          ),
-        );
-        break;
-      default:
-        break;
-    }
-  }
-
-  const repoSlice = repoSources.slice(
-    remoteHarvestState.nextRepoOffset,
-    remoteHarvestState.nextRepoOffset + repoBatchSize,
-  );
-  const harvestedRepoEntries: AssetCatalogEntry[] = [];
-
-  for (const source of repoSlice) {
-    processedSources++;
-    process.stderr.write(
-      `[discover catalog] ${processedSources}/${totalSources} ${source.id} (repo)\n`,
-    );
-    assertNotDeadlineExceeded(deadline, `discover catalog repo ${source.id}`);
-    if (isGitHubRepoSource(source)) {
-      appendCatalogEntries(
-        harvestedRepoEntries,
-        await harvestGitHubRepoSource(
-          source,
-          demandProfile,
-          selectionRegistry,
-          projectRoot,
-        ),
-      );
-    }
-  }
-
-  process.stderr.write(
-    `[discover catalog] Writing catalog (${catalogEntries.length} entries)...\n`,
-  );
-
-  const repoSliceSourceIds = new Set(repoSlice.map((source) => source.id));
-  const mergedRemoteCatalogEntries = mergeRemoteCatalogEntries(
-    cachedRemoteCatalogEntries,
-    harvestedRepoEntries,
-    repoSliceSourceIds,
-  );
-  await writeJsonLinesFile(
-    join(projectRoot, ...REMOTE_CATALOG_STATE_OUTPUT_PATH),
-    mergedRemoteCatalogEntries,
-  );
-
-  appendCatalogEntries(catalogEntries, mergedRemoteCatalogEntries);
-
-  appendCatalogEntries(
-    catalogEntries,
-    await harvestOfficialSkillIndexes(projectRoot, demandProfile),
-  );
-
-  const sortedEntries = [
-    ...new Map(
-      catalogEntries.map((entry) => [entry.id, enhanceTrustForEntry(entry)]),
-    ).values(),
-  ].sort(compareAssetCatalogEntries);
-  const outputPath = join(projectRoot, ...CATALOG_OUTPUT_PATH);
-  await writeJsonLinesFile(outputPath, sortedEntries);
-  await writeSourceUtilizationReport(
-    projectRoot,
-    enabledSources,
-    sortedEntries,
-    sourceSyncState,
-  );
-  await writeRemoteHarvestState(projectRoot, {
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    nextRepoOffset:
-      remoteHarvestState.nextRepoOffset + repoBatchSize >= repoSources.length
-        ? 0
-        : remoteHarvestState.nextRepoOffset + repoBatchSize,
-    completedSourceIds: repoSlice.map((source) => source.id),
-  });
-
-  console.log(
-    `Catalog written to ${toPosixPath(outputPath)} (${sortedEntries.length} entries)`,
-  );
-
-  return {
-    catalogEntries: sortedEntries,
-    enabledSources,
-    sourceSyncState,
-  };
-}
-
-function appendCatalogEntries(
-  target: AssetCatalogEntry[],
-  entries: readonly AssetCatalogEntry[],
-): void {
-  for (const entry of entries) {
-    target.push(entry);
-  }
-}
-
-async function generateSelectionOutputs(
-  projectRoot: string,
-  options: { quietMode?: boolean; summaryMode?: boolean } = {},
-): Promise<{
-  selectionReport: SelectionReport;
-  selectedEntries: AssetCatalogEntry[];
-  rejectedEntries: AssetCatalogEntry[];
-  sourceHealthReport: SourceHealthReport;
-}> {
-  const selectionRegistry = await readJsonFile<SelectionRegistry>(
-    join(projectRoot, "discover", "selections.json"),
-    assertSelectionRegistry,
-  );
-  const catalogEntries = await readJsonLinesFile<AssetCatalogEntry>(
-    join(projectRoot, ...CATALOG_OUTPUT_PATH),
-    assertAssetCatalogEntry,
-  );
-  const demandProfile = await readJsonFileOrNull<DemandProfile>(
-    join(projectRoot, ...DEMAND_PROFILE_OUTPUT_PATH),
-    assertDemandProfile,
-  );
-  const config = getRuntimeConfig();
-
-  const relevanceFilter = await applyRelevanceFilter(
-    catalogEntries,
-    demandProfile,
-    config,
-  );
-  const groupedEntries = groupCatalogEntriesForSelection(
-    relevanceFilter.selectedEntries,
-  );
-  const selectedEntries: AssetCatalogEntry[] = [];
-  // Track rejection reason alongside each rejected entry so we can build
-  // rejectionSummary and sampleRejected without a second pass.
-  const rejectionLog: Array<{ assetId: string; reason: string }> = [];
-  const duplicateDecisions: SelectionDuplicateDecision[] = [];
-
-  for (const entry of relevanceFilter.rejectedEntries) {
-    rejectionLog.push({ assetId: entry.id, reason: "demand-relevance" });
-  }
-
-  for (const [groupKey, groupEntries] of groupedEntries) {
-    const sortedGroupEntries = [...groupEntries].sort((left, right) =>
-      compareSelectionCandidates(left, right, selectionRegistry),
-    );
-    const selectedEntry = sortedGroupEntries[0];
-
-    if (!selectedEntry) {
-      continue;
-    }
-
-    selectedEntries.push(selectedEntry);
-
-    if (sortedGroupEntries.length > 1) {
-      const rejectedGroupEntries = sortedGroupEntries.slice(1);
-      for (const entry of rejectedGroupEntries) {
-        rejectionLog.push({ assetId: entry.id, reason: "duplicate" });
-      }
-      duplicateDecisions.push({
-        duplicateGroup: groupKey,
-        selectedAssetId: selectedEntry.id,
-        rejectedAssetIds: rejectedGroupEntries.map((entry) => entry.id),
-        selectionReason: buildSelectionReason(selectedEntry, selectionRegistry),
-      });
-    }
-  }
-
-  // Per-source entry cap — prevent a single source from dominating the
-  // selected set. Sort by descending source priority first so higher-quality
-  // entries are retained when the cap removes lower-quality same-source entries.
-  selectedEntries.sort(
-    (a, b) => b.source.sourcePriority - a.source.sourcePriority,
-  );
-  const MAX_ENTRIES_PER_SOURCE = config.discovery.maxEntriesPerSource;
-  const { kept: cappedSelectedEntries, capped: capRejections } =
-    applyPerSourceCap(selectedEntries, MAX_ENTRIES_PER_SOURCE);
-  for (const { assetId } of capRejections) {
-    rejectionLog.push({ assetId, reason: "source-cap" });
-  }
-  const sourceDiversityWarning = computeSourceDiversityWarning(
-    cappedSelectedEntries,
-    MAX_ENTRIES_PER_SOURCE,
-  );
-
-  // Derive the flat rejected-entries list from the log so we have a single
-  // source of truth (the log) driving both the JSONL output and the report.
-  // Filter directly over catalogEntries using the id set — avoids allocating
-  // a full-catalog [id, entry][] tuple array and a throwaway Map.
-  const rejectedEntryIds = new Set(rejectionLog.map((r) => r.assetId));
-  const rejectedEntries = catalogEntries.filter((e) =>
-    rejectedEntryIds.has(e.id),
-  );
-
-  // Build rejectionSummary — stable reason → count covering 100% of rejections.
-  const rejectionSummary = buildRejectionSummary(rejectionLog);
-
-  // sampleRejected — stratified sample of up to REJECTION_SAMPLE_SIZE entries,
-  // guaranteeing at least one entry per distinct rejection reason.
-  const sampleRejected: typeof rejectionLog = [];
-  const seenReasons = new Set<string>();
-  // Pass 1: take one representative per reason (cap at REJECTION_SAMPLE_SIZE
-  // in the unlikely but possible case where there are more than
-  // REJECTION_SAMPLE_SIZE distinct rejection reasons).
-  for (const entry of rejectionLog) {
-    if (sampleRejected.length >= REJECTION_SAMPLE_SIZE) break;
-    if (!seenReasons.has(entry.reason)) {
-      seenReasons.add(entry.reason);
-      sampleRejected.push(entry);
-    }
-  }
-  // Pass 2: top up to REJECTION_SAMPLE_SIZE with the earliest un-sampled entries.
-  // Use a Set of sampled object references so the membership check stays O(1).
-  const sampledSet = new Set(sampleRejected);
-  for (const entry of rejectionLog) {
-    if (sampleRejected.length >= REJECTION_SAMPLE_SIZE) break;
-    if (!sampledSet.has(entry)) {
-      sampleRejected.push(entry);
-      sampledSet.add(entry);
-    }
-  }
-
-  const sortedSelectedEntries = cappedSelectedEntries.sort(
-    compareAssetCatalogEntries,
-  );
-  const sortedRejectedEntries = rejectedEntries.sort(
-    compareAssetCatalogEntries,
-  );
-  const selectionReport: SelectionReport = {
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    inputCount: catalogEntries.length,
-    selectedCount: sortedSelectedEntries.length,
-    rejectedCount: sortedRejectedEntries.length,
-    acceptanceRate: computeAcceptanceRate(
-      catalogEntries.length,
-      sortedSelectedEntries.length,
-    ),
-    duplicateDecisions: duplicateDecisions.sort((left, right) =>
-      left.duplicateGroup.localeCompare(right.duplicateGroup),
-    ),
-    rejectionSummary,
-    sampleRejected,
-    ...(sourceDiversityWarning !== undefined ? { sourceDiversityWarning } : {}),
-  };
-
-  await writeJsonLinesFile(
-    join(projectRoot, ...SELECTED_CATALOG_OUTPUT_PATH),
-    sortedSelectedEntries,
-  );
-  await writeJsonLinesFile(
-    join(projectRoot, ...REJECTED_CATALOG_OUTPUT_PATH),
-    sortedRejectedEntries,
-  );
-  await writeJsonFile(
-    join(projectRoot, ...SELECTION_REPORT_OUTPUT_PATH),
-    selectionReport,
-  );
-  const fingerprintReport =
-    await writeAssetLifecycleFingerprintReport(projectRoot);
-  const sourceRegistry = await loadSourceRegistry(projectRoot);
-  const sourceVerificationReport = await writeSourceVerificationReport(
-    projectRoot,
-    sourceRegistry.sources,
-  );
-  const sourceSyncState = await loadSourceSyncState(projectRoot);
-  const enabledSources = sourceRegistry.sources.filter(
-    (source) => source.enabled,
-  );
-  const sourceHealthReport = await writeSourceHealthReports(
-    projectRoot,
-    enabledSources,
-    sortedSelectedEntries,
-    sortedRejectedEntries,
-    sourceSyncState,
-  );
-  const sourceCandidateQueue = await writeSourceCandidateQueue(
-    projectRoot,
-    enabledSources,
-  );
-
-  console.log(
-    `Selection outputs written to ${toPosixPath(join(projectRoot, "discover", "output"))} (${sortedSelectedEntries.length} selected, ${sortedRejectedEntries.length} rejected)`,
-  );
-  console.log(
-    `Asset lifecycle fingerprints written (${fingerprintReport.assetCount} assets, ${fingerprintReport.duplicateGroupCount} duplicate groups)`,
-  );
-  console.log(
-    `Source verification report written (${sourceVerificationReport.demotedSourceCount} deterministic demotions)`,
-  );
-  if (!options.quietMode && !options.summaryMode) {
-    console.log(
-      `Source health reports written (${sourceHealthReport.severeCount} severe, ${sourceHealthReport.warningCount} warnings)`,
-    );
-  }
-  console.log(
-    `Source candidate queue written (${sourceCandidateQueue.candidateCount} candidates, ${sourceCandidateQueue.reviewRequiredCount} review-required)`,
-  );
-
-  return {
-    selectionReport,
-    selectedEntries: sortedSelectedEntries,
-    rejectedEntries: sortedRejectedEntries,
-    sourceHealthReport,
-  };
-}
-
-/**
- * Prints a filtered or summarized source health summary based on mode flags.
- * Only called when `--quiet` or `--summary` is active on `discover full`.
- *
- * - `--quiet`: suppresses expected warnings; prints only errors or all-clear.
- * - `--summary`: prints aggregate warning breakdown by reason.
- */
 function printSourceHealthSummary(
   report: SourceHealthReport,
   options: { quietMode: boolean; summaryMode: boolean },
@@ -967,674 +598,6 @@ async function runDiscoveryBreadth(
   });
 }
 
-function printDiscoveryBreadthSummary(input: {
-  demandProfile: DemandProfile;
-  sourceIndex: SourceIndex;
-  enabledSources: SourceDefinition[];
-  catalogEntries: AssetCatalogEntry[];
-  selectionReport: SelectionReport;
-}): void {
-  const demandSignalCount = countDemandSignals(input.demandProfile);
-  const indexedSourceCount = input.sourceIndex.enabledSources.filter(
-    (source) => source.coverageMode === "indexed",
-  ).length;
-  const operationalSourceCount = countOperationalSources(input.catalogEntries);
-  const assessment = assessDiscoveryBreadth({
-    demandProfile: input.demandProfile,
-    catalogEntries: input.catalogEntries,
-    operationalSourceCount,
-    selectionReport: input.selectionReport,
-    sourceCount: input.enabledSources.length,
-  });
-
-  console.log("Discovery breadth complete.");
-  console.log(`Assessment: ${assessment.kind}`);
-  console.log(`Reason: ${assessment.reason}`);
-  console.log(
-    `Signals: ${demandSignalCount} across ${input.demandProfile.evidence.length} evidence file(s)`,
-  );
-  console.log(
-    `Sources: ${input.sourceIndex.sourceCount} enabled (${indexedSourceCount} indexed, ${operationalSourceCount} operational)`,
-  );
-  console.log(
-    `Selection: ${input.catalogEntries.length} catalog entries -> ${input.selectionReport.selectedCount} selected / ${input.selectionReport.rejectedCount} rejected`,
-  );
-  console.log("Next steps:");
-  for (const nextStep of assessment.nextSteps) {
-    console.log(`- ${nextStep}`);
-  }
-}
-
-function countDemandSignals(demandProfile: DemandProfile): number {
-  return new Set([
-    ...demandProfile.signals.languages,
-    ...demandProfile.signals.packageManagers,
-    ...demandProfile.signals.frameworks,
-    ...demandProfile.signals.concerns,
-    ...demandProfile.signals.tooling,
-  ]).size;
-}
-
-function countOperationalSources(catalogEntries: AssetCatalogEntry[]): number {
-  const operationalSourceIds = new Set<string>();
-
-  for (const entry of catalogEntries) {
-    if (
-      entry.evidence.manifestFound ||
-      entry.status.mirrorEligible ||
-      entry.status.installEligible ||
-      entry.status.activationEligible
-    ) {
-      operationalSourceIds.add(entry.source.sourceId);
-    }
-  }
-
-  return operationalSourceIds.size;
-}
-
-function assessDiscoveryBreadth(input: {
-  demandProfile: DemandProfile;
-  sourceCount: number;
-  operationalSourceCount: number;
-  catalogEntries: AssetCatalogEntry[];
-  selectionReport: SelectionReport;
-}): {
-  kind:
-    | "detection-limited"
-    | "source-coverage-limited"
-    | "selection-limited"
-    | "ranking-ready";
-  reason: string;
-  nextSteps: string[];
-} {
-  const demandSignalCount = countDemandSignals(input.demandProfile);
-
-  if (input.demandProfile.evidence.length === 0 || demandSignalCount === 0) {
-    return {
-      kind: "detection-limited",
-      reason:
-        "The demand profile is too sparse to trust candidate-pool breadth yet.",
-      nextSteps: [
-        "Confirm you are running from the real workspace root.",
-        "Inspect discover/output/demand-profile.json and verify real manifests are visible.",
-        "Check .gitignore, .ignore, and .agent-harnessignore for accidentally hidden manifests.",
-      ],
-    };
-  }
-
-  if (
-    input.sourceCount === 0 ||
-    input.catalogEntries.length === 0 ||
-    input.operationalSourceCount === 0
-  ) {
-    return {
-      kind: "source-coverage-limited",
-      reason:
-        "The active discovery universe is not producing a broad operational catalog yet.",
-      nextSteps: [
-        "Inspect discover/output/source-index.json and discover/output/source-utilization.json.",
-        "If the checked-in source universe is still too narrow, widen the active state-root discovery inputs: discover/sources.json, discover/source-packs/*.json, discover/official-skills-indexes.json, and discover/official-upstreams.json.",
-        "Rerun 'agent-harness discover breadth' after changing the active state-root discovery inputs.",
-      ],
-    };
-  }
-
-  if (
-    input.selectionReport.selectedCount === 0 ||
-    (input.catalogEntries.length >= 25 &&
-      input.selectionReport.selectedCount <=
-        Math.max(3, Math.floor(input.catalogEntries.length * 0.05)))
-  ) {
-    return {
-      kind: "selection-limited",
-      reason:
-        "Discovery is producing candidates, but the selected set is still narrow enough that selection filtering may be the bottleneck.",
-      nextSteps: [
-        "Inspect discover/output/selection-report.json plus catalog.selected.jsonl and catalog.rejected.jsonl.",
-        "Only change recommendation policy after confirming the right assets are missing from the selected set.",
-        "If the selected set already contains the right assets, the next step is ranking rather than more breadth.",
-      ],
-    };
-  }
-
-  return {
-    kind: "ranking-ready",
-    reason:
-      "The candidate pool looks broad enough to judge recommendation quality instead of recall first.",
-    nextSteps: [
-      "Run 'agent-harness recommend report' next.",
-      "If the final ordering still feels wrong, inspect 'agent-harness recommend explain --host <host> --asset <asset-id>' and 'agent-harness recommend policy:print --host <host>'.",
-      "Use the recommendation policy playbook only after confirming that breadth/selection are not the bottleneck.",
-    ],
-  };
-}
-
-/**
- * Prints help for a specific discover subcommand.
- */
-function printDiscoverSubcommandHelp(subcommand: string): void {
-  const helpTexts: Record<string, SubcommandHelpEntry> = {
-    sources: {
-      heading: "discover sources — Refresh the discovery source index",
-      lines: [
-        "Usage: agent-harness discover sources",
-        "",
-        "Scans all configured discovery sources (registries, repos, marketplaces,",
-        "source packs) and writes a refreshed source-index to:",
-        "  discover/output/source-index.json",
-        "",
-        "The source index is used by subsequent 'discover sync' and 'discover full'",
-        "runs. Re-run this command after adding or removing sources in",
-        "discover/sources.json or discover/source-packs/.",
-        "",
-        "Options:",
-        "  --state-root <path>   Override state directory",
-      ],
-    },
-    "demand-profile": {
-      heading: "discover demand-profile — Scan workspace for demand signals",
-      lines: [
-        "Usage: agent-harness discover demand-profile",
-        "",
-        "Scans the current working directory for language, framework, package-manager,",
-        "and concern signals. Writes the result to:",
-        "  discover/output/demand-profile.json",
-        "",
-        "The demand profile drives catalog selection and recommendation scoring.",
-      ],
-    },
-    catalog: {
-      heading: "discover catalog — Build the discovery asset catalog",
-      lines: [
-        "Usage: agent-harness discover catalog",
-        "",
-        "Harvests all configured local and remote discovery sources and writes the",
-        "full asset catalog to:",
-        "  discover/output/catalog.assets.jsonl",
-        "",
-        "Run 'discover sync' first to populate remote source data.",
-      ],
-    },
-    sync: {
-      heading: "discover sync — Synchronize discovered sources",
-      lines: [
-        "Usage: agent-harness discover sync [--full]",
-        "",
-        "Fetches and persists data from all configured discovery sources. Uses the",
-        "local index when fresh, performs live harvest otherwise.",
-        "",
-        "Options:",
-        "  --full               Run full sync (otherwise uses cached index when fresh)",
-        "  --state-root <path>   Override state directory",
-      ],
-    },
-    index: {
-      heading: "discover index — Build full offline catalog index",
-      lines: [
-        "Usage: agent-harness discover index",
-        "",
-        "Fully paginates all indexed sources to build a comprehensive offline catalog.",
-        "This is slow but thorough — intended for scheduled CI runs, not interactive use.",
-        "",
-        "Env: AGENT_HARNESS_SOURCE_SYNC_MAX_PAGES_FOR_INDEX_BUILD (default: 500, 0=unlimited)",
-        "      AGENT_HARNESS_DISCOVERY_INDEX_MAX_AGE_DAYS (default: 7)",
-      ],
-    },
-    select: {
-      heading: "discover select — Apply selection rules to the catalog",
-      lines: [
-        "Usage: agent-harness discover select [--ai-enrich] [--no-ai-enrich] [--require-ai-enrich] [--force]",
-        "",
-        "Applies canonical selection rules (demand relevance, deduplication, diversity",
-        "caps) to the asset catalog and writes selected/rejected outputs to:",
-        "  discover/output/catalog.selected.jsonl",
-        "  discover/output/catalog.rejected.jsonl",
-        "",
-        "Prerequisite: 'discover catalog' must have been run first.",
-        "",
-        "AI enrichment options:",
-        "  --ai-enrich          Run AI enrichment after selection",
-        "  --no-ai-enrich       Skip AI enrichment (respects runtime config default)",
-        "  --require-ai-enrich  Fail if AI enrichment is unavailable or fails",
-        "  --force              Re-run enrichment even if already cached",
-      ],
-    },
-    stats: {
-      heading: "discover stats — Print catalog statistics",
-      lines: [
-        "Usage: agent-harness discover stats",
-        "",
-        "Prints summary counts from the selected catalog grouped by source, asset kind,",
-        "host target, and authority tier.",
-      ],
-    },
-    enrich: {
-      heading: "discover enrich — Run AI-assisted enrichment on the catalog",
-      lines: [
-        "Usage: agent-harness discover enrich [--force] [--require-ai-enrich]",
-        "",
-        "Runs a bounded AI-assisted enrichment pass against the selected catalog to",
-        "improve classification confidence, capability extraction, and deduplication.",
-        "",
-        "Options:",
-        "  --force              Re-run enrichment even if already cached",
-        "  --require-ai-enrich  Fail if AI enrichment is unavailable or fails",
-        "",
-        "Env: AGENT_HARNESS_AI_ENRICHMENT_URL",
-        "      AGENT_HARNESS_AI_ENRICHMENT_API_KEY",
-        "      AGENT_HARNESS_AI_ENRICHMENT_MODE (default: manual)",
-        "      AGENT_HARNESS_AI_ENRICHMENT_MODEL (default: gpt-4o-mini)",
-      ],
-    },
-    "ard-export": {
-      heading: "discover ard-export — Export catalog to ARD format",
-      lines: [
-        "Usage: agent-harness discover ard-export",
-        "",
-        "Maps the selected catalog to the ARD v0.9 ai-catalog.json format and writes:",
-        "  .well-known/ai-catalog.json",
-        "",
-        "ARD-compliant registries can then discover and index agent-harness as a",
-        "publisher.",
-      ],
-    },
-    inspect: {
-      heading: "discover inspect — Print catalog entries with optional filters",
-      lines: [
-        "Usage: agent-harness discover inspect [--source <sourceId>] [--id <assetId>] [--limit <n>]",
-        "",
-        "Prints catalog entries from the latest discovery run with optional",
-        "source, asset ID, and count filters.",
-        "",
-        "Options:",
-        "  --source <sourceId>  Filter to entries from this source",
-        "  --id <assetId>       Show a specific asset entry",
-        "  --limit <n>          Max entries to print (default: 20)",
-      ],
-    },
-    diff: {
-      heading: "discover diff — Compare discovery outputs against a baseline",
-      lines: [
-        "Usage: agent-harness discover diff --baseline <stateRoot>",
-        "",
-        "Compares current discovery outputs against a baseline state root.",
-        "Use --json for machine-readable output.",
-      ],
-    },
-    "environment-index": {
-      heading: "discover environment-index — Write query metadata",
-      lines: [
-        "Usage: agent-harness discover environment-index",
-        "",
-        "Writes experimental read-only query metadata for the current workspace to:",
-        "  discover/output/environment-index.json",
-      ],
-    },
-  };
-
-  printSubcommandHelp(subcommand, helpTexts, () => {
-    if (subcommand === "full") {
-      printDiscoverFullHelp();
-    } else if (
-      subcommand === "breadth" ||
-      subcommand === "recall" ||
-      subcommand === "candidate-pool"
-    ) {
-      printDiscoverBreadthHelp();
-    } else {
-      printDiscoverHelp();
-    }
-  });
-}
-
-function printDiscoverHelp(): void {
-  printCommandHelp({
-    heading: "discover commands:",
-    entries: [
-      {
-        command: "demand-profile",
-        description:
-          "Scan the working directory and write discover/output/demand-profile.json",
-      },
-      {
-        command: "sources",
-        description:
-          "Summarize enabled discovery sources into discover/output/source-index.json",
-      },
-      {
-        command: "sync",
-        description:
-          "Persist indexed discovery results — uses local index when fresh, live harvest otherwise (see 'discover index')",
-      },
-      {
-        command: "index",
-        description:
-          "Build a full offline catalog index by fully paginating all indexed sources (slow, scheduled — run once or in CI)",
-      },
-      {
-        command: "catalog",
-        description: "Harvest local sources into discover/catalog.assets.jsonl",
-      },
-      {
-        command: "select",
-        description:
-          "Apply canonical selection rules and write selected/rejected JSONL outputs",
-      },
-      {
-        command: "full",
-        description:
-          "Run demand-profile, sources, sync, catalog, and select in one pass",
-      },
-      {
-        command: "breadth",
-        description:
-          "Run the widest practical discovery pass and print candidate-pool guidance",
-      },
-      {
-        command: "recall",
-        description: "Alias for discover breadth",
-      },
-      {
-        command: "candidate-pool",
-        description: "Alias for discover breadth",
-      },
-      {
-        command: "stats",
-        description:
-          "Print catalog summary counts grouped by source, kind, host, and authority",
-      },
-      {
-        command: "diff",
-        description:
-          "Compare discovery outputs against --baseline <stateRoot> (--json for agents)",
-      },
-      {
-        command: "environment-index",
-        description:
-          "Write experimental read-only query metadata to discover/output/environment-index.json",
-      },
-      {
-        command: "ard-export",
-        description:
-          "Export selected catalog to ARD ai-catalog.json format at .well-known/ai-catalog.json",
-      },
-      {
-        command: "enrich",
-        description:
-          "Run bounded AI-assisted enrichment against the selected catalog",
-      },
-      {
-        command: "inspect",
-        description:
-          "Print catalog entries filtered by --source <id> or --id <assetId>",
-      },
-    ],
-    sections: [
-      {
-        title: "AI enrichment options:",
-        lines: [
-          "--ai-enrich         Explicitly request enrichment after select/full",
-          "--no-ai-enrich      Explicitly skip enrichment for this select/full run",
-          "--force             Bypass cache reuse and automatic policy skips, forcing a new provider call when enrichment runs",
-          "--require-ai-enrich Fail the command when enrichment does not complete or reuse successfully",
-        ],
-      },
-    ],
-  });
-}
-
-/**
- * Prints help for `discover full`.
- */
-function printDiscoverFullHelp(): void {
-  printCommandHelp({
-    heading: "discover full — Run the complete discovery pipeline in one pass",
-    entries: [
-      {
-        command: "Usage:",
-        description:
-          "  agent-harness discover full [--no-sync] [--sync-all] [--ai-enrich] [--no-ai-enrich] [--quiet] [--summary] [--max-scan-bytes N]",
-      },
-      {
-        command: "Steps executed in order:",
-        description: "",
-      },
-      {
-        command: "  1. demand-profile",
-        description: "Scan the working directory for demand signals",
-      },
-      {
-        command: "  2. sources",
-        description: "Refresh the source index",
-      },
-      {
-        command: "  3. sync",
-        description: "Sync indexed sources to local state",
-      },
-      {
-        command: "  4. catalog",
-        description: "Build the unified asset catalog",
-      },
-      {
-        command: "  5. select",
-        description: "Apply canonical selection rules",
-      },
-    ],
-    sections: [
-      {
-        title: "Options:",
-        lines: [
-          "--ai-enrich         Run AI enrichment after selection",
-          "--no-ai-enrich      Skip AI enrichment",
-          "--no-sync           Skip indexed source sync (use existing state)",
-          "--sync-all          Sync all enabled sources (skip demand-based filtering)",
-          "--quiet             Suppress expected source health warnings",
-          "--summary           Print aggregate warning breakdown by reason",
-          "--max-scan-bytes N   Override the demand scan byte budget (default: 48 MB)",
-        ],
-      },
-      {
-        title: "Outputs:",
-        lines: [
-          "discover/output/demand-profile.json",
-          "discover/output/source-index.json",
-          "discover/output/catalog.assets.jsonl",
-          "discover/output/catalog.selected.jsonl",
-          "discover/output/catalog.rejected.jsonl",
-          "discover/output/selection-report.json",
-        ],
-      },
-    ],
-  });
-}
-
-/**
- * Prints help for `discover breadth` (aliases: recall, candidate-pool).
- */
-function printDiscoverBreadthHelp(): void {
-  printCommandHelp({
-    heading:
-      "discover breadth — Run the widest practical discovery pass (aliases: recall, candidate-pool)",
-    entries: [
-      {
-        command: "Description:",
-        description: "",
-      },
-      {
-        command:
-          "  Runs demand-profile followed by a maximally broad discovery",
-        description: "",
-      },
-      {
-        command:
-          "  pass that prioritizes candidate-pool coverage over precision.",
-        description: "",
-      },
-      {
-        command:
-          "  Useful for surveying available assets before narrowing down.",
-        description: "",
-      },
-    ],
-    sections: [
-      {
-        title: "Options:",
-        lines: [
-          "--state-root <path>  Write state under this path",
-          "--ai-enrich          Run AI enrichment after breadth scan",
-        ],
-      },
-      {
-        title: "Aliases:",
-        lines: [
-          "discover recall           Same as discover breadth",
-          "discover candidate-pool   Same as discover breadth",
-        ],
-      },
-    ],
-  });
-}
-
-/**
- * Applies demand-relevance filtering to the catalog, using semantic similarity
- * scoring when enabled and available, falling back to keyword-overlap gating.
- *
- * All scorer branching lives here so `generateSelectionOutputs` stays clean.
- */
-async function applyRelevanceFilter(
-  catalogEntries: AssetCatalogEntry[],
-  demandProfile: DemandProfile | null,
-  config: ReturnType<typeof getRuntimeConfig>,
-): Promise<{
-  selectedEntries: AssetCatalogEntry[];
-  rejectedEntries: AssetCatalogEntry[];
-}> {
-  if (config.discovery.semanticScoringEnabled) {
-    const scorer = new SemanticScorer({
-      minSimilarity: config.discovery.semanticScoringMinSimilarity,
-    });
-    await scorer.tryInit();
-    if (scorer.available) {
-      const semanticResult = await scorer.filterAndRank(
-        catalogEntries,
-        demandProfile,
-      );
-      if (semanticResult) {
-        console.log(
-          `[semantic-scoring] scored ${catalogEntries.length} entries ` +
-            `(threshold=${config.discovery.semanticScoringMinSimilarity}, ` +
-            `query="${buildDemandQueryText(demandProfile).slice(0, 60)}...")`,
-        );
-        return {
-          selectedEntries: semanticResult.selected,
-          rejectedEntries: semanticResult.rejected,
-        };
-      }
-      console.warn(
-        "[semantic-scoring] scorer unavailable after init — falling back to keyword gate",
-      );
-    } else {
-      console.warn(
-        "[semantic-scoring] @xenova/transformers not installed — falling back to keyword gate",
-      );
-    }
-  }
-  return filterCatalogEntriesByDemandRelevance(catalogEntries, demandProfile);
-}
-
-/**
- * Applies a per-source entry cap to a pre-sorted list of catalog entries.
- *
- * Entries are visited in the order provided; the first `maxPerSource` entries
- * for each `source.sourceId` are kept, and any excess are returned in the
- * `capped` array so callers can add rejection-log entries.
- *
- * @param entries - Pre-sorted selected entries (insertion order preserved).
- * @param maxPerSource - Maximum entries to retain per unique `source.sourceId`.
- * @returns `{ kept, capped }` — kept entries in original order; capped entries
- *   as `{ assetId }` objects suitable for rejection logging.
- */
-export function applyPerSourceCap(
-  entries: AssetCatalogEntry[],
-  maxPerSource: number,
-): { kept: AssetCatalogEntry[]; capped: Array<{ assetId: string }> } {
-  const sourceCountMap = new Map<string, number>();
-  const kept: AssetCatalogEntry[] = [];
-  const capped: Array<{ assetId: string }> = [];
-  for (const entry of entries) {
-    const sourceId = entry.source.sourceId;
-    const count = sourceCountMap.get(sourceId) ?? 0;
-    // 0 means unlimited — skip the cap check entirely.
-    if (maxPerSource > 0 && count >= maxPerSource) {
-      capped.push({ assetId: entry.id });
-    } else {
-      sourceCountMap.set(sourceId, count + 1);
-      kept.push(entry);
-    }
-  }
-  return { kept, capped };
-}
-
-/** Threshold fraction above which a source triggers a diversity warning. */
-const SOURCE_DIVERSITY_WARNING_THRESHOLD = 0.2;
-
-/**
- * Maximum number of sample rejected entries in SelectionReport.sampleRejected.
- * Guarantees at least one entry per distinct rejection reason.
- */
-const REJECTION_SAMPLE_SIZE = 20;
-
-/**
- * Returns a human-readable warning when any single source contributes more
- * than 20% of the provided (already-capped) selected entries.  Returns
- * `undefined` when the set is well-diversified or empty.
- *
- * @param cappedEntries - Selected entries after the per-source cap.
- * @param maxPerSource - The cap value in effect, included in the message so
- *   the operator knows which knob to turn.
- */
-export function computeSourceDiversityWarning(
-  cappedEntries: AssetCatalogEntry[],
-  maxPerSource: number,
-): string | undefined {
-  if (cappedEntries.length === 0) {
-    return undefined;
-  }
-  const sourceCounts = new Map<string, number>();
-  for (const entry of cappedEntries) {
-    const id = entry.source.sourceId;
-    sourceCounts.set(id, (sourceCounts.get(id) ?? 0) + 1);
-  }
-  for (const [sourceId, count] of sourceCounts.entries()) {
-    const fraction = count / cappedEntries.length;
-    if (fraction > SOURCE_DIVERSITY_WARNING_THRESHOLD) {
-      const pct = Math.round(fraction * 100);
-      return (
-        `Source "${sourceId}" contributes ${pct}% of selected entries ` +
-        `(${count}/${cappedEntries.length}). ` +
-        `Consider lowering AGENT_HARNESS_MAX_ENTRIES_PER_SOURCE ` +
-        `(currently ${maxPerSource}) to improve diversity.`
-      );
-    }
-  }
-  return undefined;
-}
-
-/**
- * Computes the acceptance rate as a fraction 0–1.
- * Returns 0 when inputCount is 0 to avoid division by zero.
- * Rounded to 4 decimal places for diagnostic use.
- */
-export function computeAcceptanceRate(
-  inputCount: number,
-  selectedCount: number,
-): number {
-  if (inputCount === 0) {
-    return 0;
-  }
-  return Number((selectedCount / inputCount).toFixed(4));
-}
-
 /**
  * Exposes narrow discover internals for focused per-source-cap tests.
  */
@@ -1644,6 +607,9 @@ export const discoverInternals = {
   computeSourceDiversityWarning,
   computeDemandRelevantSourceIds,
   getEnabledSourceIds,
+  shouldShowFirstRunSyncHint,
+  printSourceHealthSummary,
+  handleAiEnrichmentResult,
 };
 
 /**
@@ -1651,219 +617,3 @@ export const discoverInternals = {
  * These sources provide universal assets (MCP servers, skills directories)
  * that apply to any project.
  */
-const UNIVERSAL_SOURCE_IDS = new Set([
-  "mcp-registry",
-  "skills-sh",
-  "ui-skills",
-  "clawhub",
-]);
-
-/**
- * Maps demand profile technology signals to source IDs that should be synced.
- * Sources not in the returned set are skipped during sync unless --sync-all is
- * passed (#419 — demand-based source filtering for faster first-run sync).
- */
-function computeDemandRelevantSourceIds(
-  demandProfile: DemandProfile,
-): ReadonlySet<string> {
-  const sourceIds = new Set<string>(UNIVERSAL_SOURCE_IDS);
-  const signals = demandProfile.signals;
-
-  // Languages → registry sources
-  const languageSignals = new Set(
-    signals.languages.map((lang) => lang.toLowerCase()),
-  );
-  // Frameworks, package managers, and tooling also indicate ecosystem.
-  // Normalize to lowercase for case-insensitive matching.
-  const ecosystemTerms = new Set([
-    ...signals.frameworks.map((fw) => fw.toLowerCase()),
-    ...signals.packageManagers.map((pm) => pm.toLowerCase()),
-    ...signals.tooling.map((t) => t.toLowerCase()),
-  ]);
-
-  // ── JavaScript / TypeScript ecosystem ──
-  // npm, yarn (classic/berry), pnpm, bun, deno, node, tsx, ts-node, vite,
-  // webpack, esbuild, turbopack, nx, lerna, turbo, rush, etc.
-  if (
-    languageSignals.has("typescript") ||
-    languageSignals.has("javascript") ||
-    ecosystemTerms.has("npm") ||
-    ecosystemTerms.has("yarn") ||
-    ecosystemTerms.has("pnpm") ||
-    ecosystemTerms.has("bun") ||
-    ecosystemTerms.has("deno") ||
-    ecosystemTerms.has("node") ||
-    ecosystemTerms.has("node.js")
-  ) {
-    sourceIds.add("npm-registry");
-  }
-
-  // ── Python ecosystem ──
-  // pip, poetry, uv, pdm, pipenv, conda, rye, hatch
-  if (
-    languageSignals.has("python") ||
-    ecosystemTerms.has("pip") ||
-    ecosystemTerms.has("poetry") ||
-    ecosystemTerms.has("uv") ||
-    ecosystemTerms.has("pdm") ||
-    ecosystemTerms.has("pipenv") ||
-    ecosystemTerms.has("conda") ||
-    ecosystemTerms.has("rye") ||
-    ecosystemTerms.has("hatch")
-  ) {
-    sourceIds.add("pypi-registry");
-  }
-
-  // ── Rust ecosystem ──
-  // cargo, rustup, rust-analyzer
-  if (languageSignals.has("rust") || ecosystemTerms.has("cargo")) {
-    sourceIds.add("cargo-registry");
-  }
-
-  // ── Java / Kotlin / Scala ecosystem ──
-  // maven, gradle, sbt, ant, leiningen
-  if (
-    languageSignals.has("java") ||
-    languageSignals.has("kotlin") ||
-    languageSignals.has("scala") ||
-    ecosystemTerms.has("maven") ||
-    ecosystemTerms.has("gradle") ||
-    ecosystemTerms.has("sbt") ||
-    ecosystemTerms.has("ant")
-  ) {
-    sourceIds.add("maven-registry");
-  }
-
-  // ── .NET ecosystem ──
-  // nuget, dotnet, msbuild, paket
-  if (
-    languageSignals.has("c#") ||
-    languageSignals.has("csharp") ||
-    languageSignals.has("f#") ||
-    languageSignals.has("fsharp") ||
-    ecosystemTerms.has("nuget") ||
-    ecosystemTerms.has("dotnet")
-  ) {
-    sourceIds.add("nuget-registry");
-  }
-
-  // ── Go ecosystem ──
-  if (languageSignals.has("go") || languageSignals.has("golang")) {
-    sourceIds.add("go-registry");
-  }
-
-  // ── PHP ecosystem ──
-  // composer, laravel, symfony
-  if (
-    languageSignals.has("php") ||
-    ecosystemTerms.has("composer") ||
-    ecosystemTerms.has("laravel") ||
-    ecosystemTerms.has("symfony")
-  ) {
-    sourceIds.add("packagist-registry");
-  }
-
-  // ── Ruby ecosystem ──
-  // gem, bundler, rails, rbenv, rvm
-  if (
-    languageSignals.has("ruby") ||
-    ecosystemTerms.has("gem") ||
-    ecosystemTerms.has("bundler") ||
-    ecosystemTerms.has("rails") ||
-    ecosystemTerms.has("rbenv") ||
-    ecosystemTerms.has("rvm")
-  ) {
-    sourceIds.add("rubygems-registry");
-  }
-
-  // ── Swift ecosystem ──
-  // swiftpm, xcode
-  if (
-    languageSignals.has("swift") ||
-    ecosystemTerms.has("swiftpm") ||
-    ecosystemTerms.has("xcode")
-  ) {
-    sourceIds.add("swift-package-index");
-  }
-
-  // ── VS Code ecosystem ──
-  if (
-    ecosystemTerms.has("vscode") ||
-    ecosystemTerms.has("vs code") ||
-    ecosystemTerms.has("visual studio code") ||
-    ecosystemTerms.has("detector:codepilot") ||
-    ecosystemTerms.has("detector:vscode")
-  ) {
-    sourceIds.add("vscode-marketplace");
-  }
-
-  // ── Cursor ecosystem ──
-  if (ecosystemTerms.has("cursor") || ecosystemTerms.has("detector:cursor")) {
-    sourceIds.add("cursor-marketplace");
-  }
-
-  // ── Pi agent ecosystem ──
-  if (
-    ecosystemTerms.has("pi") ||
-    ecosystemTerms.has("detector:pi") ||
-    signals.concerns.some((c) =>
-      ["pi-agent", "pi-skill"].includes(c.toLowerCase()),
-    )
-  ) {
-    sourceIds.add("pi-packages");
-  }
-
-  // ── Zed ecosystem ──
-  if (ecosystemTerms.has("zed") || ecosystemTerms.has("detector:zed")) {
-    sourceIds.add("zed-extension-registry");
-  }
-
-  // ── Dart / Flutter ecosystem ──
-  if (
-    languageSignals.has("dart") ||
-    ecosystemTerms.has("flutter") ||
-    ecosystemTerms.has("pub")
-  ) {
-    sourceIds.add("pub-dev-registry");
-  }
-
-  // ── Elixir / Erlang ecosystem ──
-  if (
-    languageSignals.has("elixir") ||
-    languageSignals.has("erlang") ||
-    ecosystemTerms.has("mix") ||
-    ecosystemTerms.has("hex") ||
-    ecosystemTerms.has("rebar")
-  ) {
-    sourceIds.add("hex-registry");
-  }
-
-  // ── C / C++ ecosystem ──
-  if (
-    languageSignals.has("c") ||
-    languageSignals.has("c++") ||
-    languageSignals.has("cpp") ||
-    ecosystemTerms.has("cmake") ||
-    ecosystemTerms.has("meson") ||
-    ecosystemTerms.has("conan")
-  ) {
-    sourceIds.add("conan-registry");
-  }
-
-  // Always include local sources (project-specific)
-  sourceIds.add("local-antigravity-manifest");
-
-  return sourceIds;
-}
-
-/**
- * Returns the IDs of all enabled sources in the source registry.
- * Used to compute accurate filtered/skipped counts for the demand-based
- * filtering progress hint (#419).
- */
-async function getEnabledSourceIds(projectRoot: string): Promise<string[]> {
-  const sourceRegistry = await loadSourceRegistry(projectRoot);
-  return sourceRegistry.sources
-    .filter((source) => source.enabled)
-    .map((source) => source.id);
-}

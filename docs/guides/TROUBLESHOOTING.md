@@ -174,27 +174,35 @@ Two fixes address this:
 Some commands are inherently slow due to network I/O and processing volume. The
 following durations are normal and do not indicate a hang or failure:
 
-| Command                     | Expected Duration | Notes                                                        |
-| --------------------------- | ----------------- | ------------------------------------------------------------ |
-| `discover full` (first run) | ~60s (typical)    | Demand-based filtering syncs only ecosystem-relevant sources |
-| `discover full --sync-all`  | 5–10 minutes      | Full sync of all 170+ sources (legacy behaviour)             |
-| `discover sync`             | 2–5 minutes       | Subsequent runs use cached local index                       |
-| `discover index`            | 10–30 minutes     | Full pagination of all indexed sources                       |
-| `test:self-hosting`         | 2–3 minutes       | Runs full pipeline on the repo itself                        |
-| `npm run validate:release`  | 5–15 minutes      | All quality gates + smoke tests                              |
+| Command                     | Expected Duration | Notes                                                              |
+| --------------------------- | ----------------- | ------------------------------------------------------------------ |
+| `discover full` (first run) | ~60s (typical)    | Demand-based filtering syncs only ecosystem-relevant sources       |
+| `discover full --sync-all`  | 5–10 minutes      | Full sync of all 170+ sources (legacy behaviour)                   |
+| `discover sync`             | 2–5 minutes       | Subsequent runs use cached local index                             |
+| `discover index`            | 10–30 minutes     | Full pagination of all indexed sources                             |
+| `test:self-hosting`         | 4–7 minutes       | Runs full pipeline on the repo itself (measured ~5m40s on Windows) |
+| `npm run validate:release`  | 5–15 minutes      | All quality gates + smoke tests                                    |
 
 For `discover full`, the sync phase prints per-source progress to stderr (e.g.
-`[discover sync] 3/12 npm … done (7242ms)`) and a demand-based filtering summary
-(`Detected TypeScript project. Syncing 12/47 demand-relevant sources`).
+`[discover sync] 3/12 npm … done (7242ms, ~2m 5s remaining)`) and a demand-based
+filtering summary (`Detected TypeScript project. Syncing 12/47 demand-relevant
+sources`). On a first run (no cached sync state) with 6+ sources to sync, the
+pipeline also prints a proactive hint before syncing:
+`First-time sync of N sources may take several minutes — pass --no-sync to use
+cached discovery state or --sync-all to sync every enabled source.`
 Use `--no-sync` to skip source sync for local-only discovery or `--sync-all`
 for legacy full sync of all sources. CI pipelines should set `timeout-minutes: 30`
-or higher when using `--sync-all`.
+or higher when using `--sync-all`; agent sessions with a 120s command timeout
+should pass `--no-sync` on first runs of `discover full`.
 
-For `test:self-hosting`, the test timeout is configured in the CI quality
-workflow. If running locally, use:
+For `test:self-hosting`, the per-test budget (450s) lives in `package.json`
+(`node --test --test-timeout=450000 dist/tests/self-hosting.js`); the CI quality
+job grants a 30-minute workflow timeout as headroom for loaded runners. If
+running locally under heavy CPU contention, raise the `--test-timeout` value
+proportionally rather than re-measuring:
 
 ```bash
-node --test --test-timeout=300000 dist/tests/self-hosting.js
+node --test --test-timeout=450000 dist/tests/self-hosting.js
 ```
 
 ---

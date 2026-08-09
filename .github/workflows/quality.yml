@@ -31,7 +31,7 @@ jobs:
         # actions/setup-node@v4
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -45,6 +45,12 @@ jobs:
 
       - name: Run unit and integration tests with coverage
         run: npm run test:coverage
+
+      - name: Guard coverage exclusion list
+        # #428: fails if a product module is added to .c8rc.json's exclude
+        # list without justification — the "100% coverage" claim must cover
+        # the whole product, not a shrinking measured subset.
+        run: node ./scripts/check-coverage-exclusions.mjs
 
       - name: Publish coverage summary
         shell: bash

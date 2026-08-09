@@ -8,6 +8,7 @@ import { manageNativeInstall } from "./install/native.js";
 import { manageInstallRefresh } from "./install/refresh.js";
 import { reconcileInstallState, resetInstallState } from "./install/state.js";
 import {
+  handleUnknownCommand,
   hasHelpFlag,
   printSubcommandHelp,
   type SubcommandHelpEntry,
@@ -60,8 +61,7 @@ export async function runInstall(
       printInstallHelp();
       return 0;
     default:
-      printInstallHelp();
-      return 1;
+      return handleUnknownCommand(command, printInstallHelp);
   }
 }
 

@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { hasHelpFlag } from "./cli-help-format.js";
+import {
+  hasHelpFlag,
+  isFlagLike,
+  printUnknownArgumentError,
+  hasUnknownFlag,
+} from "./cli-help-format.js";
 import { resolveProjectRoot } from "./files.js";
 import { getOptionValues } from "./lib/cli-options.js";
 import {
@@ -24,8 +29,26 @@ import {
   formatPreflightDiagnostics,
   runAdapterPreflight,
   runHostPreflight,
+  type PreflightFunctionOverrides,
 } from "./lib/preflight.js";
 import { runWorkspacePipeline } from "./pipeline.js";
+
+const WORKSPACE_KNOWN_FLAGS = new Set([
+  "--intent",
+  "--ai-enrich",
+  "--no-ai-enrich",
+  "--force",
+  "--require-ai-enrich",
+]);
+const WORKSPACE_FLAGS_WITH_VALUES = new Set(["--intent"]);
+
+/**
+ * Preflight functions the workspace runner delegates to, exposed through the
+ * shared `PreflightFunctionOverrides` seam so tests can exercise the
+ * prerequisite-diagnostics surface deterministically without depending on
+ * installed host CLIs.
+ */
+export type WorkspacePreflightFunctions = PreflightFunctionOverrides;
 
 /**
  * Runs the end-to-end lifecycle for a registered adapter and then applies its
@@ -35,6 +58,7 @@ export async function runWorkspace(
   args: string[],
   workingDirectory: string,
   projectRoot: string,
+  preflight: Partial<WorkspacePreflightFunctions> = {},
 ): Promise<number> {
   const [target = "help", ...rest] = args;
 
@@ -59,8 +83,23 @@ export async function runWorkspace(
     return 0;
   }
 
+  if (
+    hasUnknownFlag(
+      rest,
+      WORKSPACE_KNOWN_FLAGS,
+      WORKSPACE_FLAGS_WITH_VALUES,
+      "agent-harness workspace <host> --help",
+    )
+  ) {
+    return 1;
+  }
+
   const hostAdapter = resolveHostAdapter(target);
   if (!hostAdapter) {
+    if (isFlagLike(target)) {
+      printUnknownArgumentError(target);
+      return 1;
+    }
     printWorkspaceHelp();
     return 1;
   }
@@ -69,13 +108,21 @@ export async function runWorkspace(
     `[workspace ${getPreferredHostCommand(hostAdapter.id)}] Starting ${hostAdapter.displayName} workspace pipeline...`,
   );
 
+  const hostPreflight = preflight.runHostPreflight ?? runHostPreflight;
+  const adapterPreflight = preflight.runAdapterPreflight ?? runAdapterPreflight;
+  const collectPrerequisites =
+    preflight.collectActivatedAssetPrerequisiteDiagnostics ??
+    collectActivatedAssetPrerequisiteDiagnostics;
+
+  // requiresLifecycleHostPaths is optional on HostAdapter; the fallback is
+  // live behavior for adapters that only declare mutatesHostPaths.
   const requiresLifecycleHostPaths =
     hostAdapter.requiresLifecycleHostPaths ?? hostAdapter.mutatesHostPaths;
   const diagnostics = [
-    ...(await runHostPreflight(hostAdapter.lifecycleHost, {
+    ...(await hostPreflight(hostAdapter.lifecycleHost, {
       requireHostPaths: requiresLifecycleHostPaths,
     })),
-    ...(await runAdapterPreflight(hostAdapter)),
+    ...(await adapterPreflight(hostAdapter)),
   ];
   if (diagnostics.length > 0) {
     console.log(formatPreflightDiagnostics(diagnostics));
@@ -92,12 +139,11 @@ export async function runWorkspace(
     bundleIds: hostAdapter.defaultBundleIds,
   });
 
-  const prerequisiteDiagnostics =
-    await collectActivatedAssetPrerequisiteDiagnostics(
-      projectRoot,
-      hostAdapter,
-      { missingEnvSeverity: "error" },
-    );
+  const prerequisiteDiagnostics = await collectPrerequisites(
+    projectRoot,
+    hostAdapter,
+    { missingEnvSeverity: "error" },
+  );
   if (prerequisiteDiagnostics.length > 0) {
     console.log(formatPreflightDiagnostics(prerequisiteDiagnostics));
   }
@@ -227,7 +273,18 @@ function getPreferredHostCommand(adapterId: string): string {
   return adapterId === "copilot-vscode" ? "vscode" : adapterId;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+/**
+ * Exposes workspace internals for focused test coverage.
+ * Not part of the public API.
+ */
+export const workspaceInternals = {
+  handleAiEnrichmentResult,
+};
+
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   const [, , ...args] = process.argv;
   const projectRoot = resolveProjectRoot(fileURLToPath(import.meta.url));
   const workingDirectory = process.cwd();

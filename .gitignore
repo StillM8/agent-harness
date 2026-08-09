@@ -7,10 +7,13 @@ coverage/
 !.env.example
 
 activate/
+!src/activate/
+!src/activate/**
 install/
 !src/install/
 !src/install/**
 state/
+# NOTE: if a src/state/ module is ever added, negate it here (see activate/).
 .agent-harness/
 
 .tmp/
@@ -55,3 +58,7 @@ SYSTEM.md
 plans/
 .planning/
 agent-harness-qa/
+
+# PowerShell module-analysis cache materialized at the repo root by
+# import-analysis tooling (review 2026-08-09 hygiene item).
+Microsoft/Windows/PowerShell/ModuleAnalysisCache/

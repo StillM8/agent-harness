@@ -7,6 +7,7 @@ import {
 } from "./mirror/inspect.js";
 import { generateMirrorPlan } from "./mirror/plan.js";
 import {
+  handleUnknownCommand,
   hasHelpFlag,
   printSubcommandHelp,
   type SubcommandHelpEntry,
@@ -67,8 +68,7 @@ export async function runMirror(
       printMirrorHelp();
       return 0;
     default:
-      printMirrorHelp();
-      return 1;
+      return handleUnknownCommand(command, printMirrorHelp);
   }
 }
 

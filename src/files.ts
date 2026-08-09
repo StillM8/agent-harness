@@ -130,7 +130,10 @@ export async function readJsonFile<T>(
   filePath: string,
   validator?: JsonValidator<T>,
 ): Promise<T> {
-  const content = await readFile(filePath, "utf8");
+  const content = (await readFileWithTransientRetry(
+    filePath,
+    "utf8",
+  )) as string;
   let parsedContent: unknown;
 
   try {
@@ -175,7 +178,7 @@ export async function readTextFileOrNull(
   filePath: string,
 ): Promise<string | null> {
   try {
-    return await readFile(filePath, "utf8");
+    return (await readFileWithTransientRetry(filePath, "utf8")) as string;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
@@ -192,7 +195,7 @@ export async function readBinaryFileOrNull(
   filePath: string,
 ): Promise<Buffer | null> {
   try {
-    return await readFile(filePath);
+    return (await readFileWithTransientRetry(filePath)) as Buffer;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
@@ -202,16 +205,155 @@ export async function readBinaryFileOrNull(
   }
 }
 
+/** Test-only hook for simulating filesystem failures in the atomic JSON writer. */
+type RenameFile = (
+  sourcePath: string,
+  destinationPath: string,
+) => Promise<void>;
+let jsonWriteRenameOverride: RenameFile | undefined;
+
+/** Test-only hook for simulating destination-removal failures (rm EPERM races). */
+type RemoveFile = (path: string, options: { force?: boolean }) => Promise<void>;
+let jsonWriteRemoveOverride: RemoveFile | undefined;
+
+/**
+ * Test-only hook for simulating open failures in the atomic-reader path
+ * (#427/#428): readers retry the same Windows-transient window as the
+ * writer, so the churn contract (old | absent | complete-new, never a
+ * transient error) holds from both sides.
+ */
+type ReadFileOverride = (
+  filePath: string,
+  encoding?: BufferEncoding,
+) => Promise<string | Buffer>;
+let readFileOpenOverride: ReadFileOverride | undefined;
+
+const WINDOWS_REPLACE_RETRY_BACKOFF_MS = 25;
+const MAX_WINDOWS_REPLACE_RETRIES = 4;
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Reads a file with a bounded retry on Windows-transient open failures.
+ *
+ * The atomic writer (renameJsonWriteTemp) already retries EPERM/EACCES on
+ * the destination during its remove-and-rename window; a concurrent READER
+ * opening the same path can hit the same momentary lock (AV scan, open
+ * handle, a competing writer's rename). Readers retry the identical bounded
+ * window so the atomic-write contract is symmetric: a reader observes old |
+ * absent | complete-new content — never a transient open error. ENOENT is
+ * never retried: absent is part of the contract and the OrNull readers map
+ * it to null unchanged.
+ */
+async function readFileWithTransientRetry(
+  filePath: string,
+  encoding?: BufferEncoding,
+): Promise<string | Buffer> {
+  let lastOpenFailure: unknown;
+
+  for (let attempt = 0; attempt <= MAX_WINDOWS_REPLACE_RETRIES; attempt += 1) {
+    try {
+      if (readFileOpenOverride !== undefined) {
+        return await readFileOpenOverride(filePath, encoding);
+      }
+      return await readFile(filePath, encoding);
+    } catch (error) {
+      const failingCode = (error as NodeJS.ErrnoException).code;
+      if (failingCode !== "EPERM" && failingCode !== "EACCES") {
+        throw error;
+      }
+      lastOpenFailure = error;
+      if (attempt < MAX_WINDOWS_REPLACE_RETRIES) {
+        await delay(WINDOWS_REPLACE_RETRY_BACKOFF_MS * 2 ** (attempt + 1));
+      }
+    }
+  }
+
+  throw lastOpenFailure;
+}
+
+/**
+ * Renames a write-temp onto its final path.
+ *
+ * Windows replaces an existing destination with a single `rename` in the
+ * common case, but a momentarily locked destination (AV scan, open handle,
+ * or a concurrent writer's own rename — observed as EPERM/EACCES) needs a
+ * bounded retry with a remove-and-retry fallback. Readers never observe
+ * partial content: at every point the destination holds the old file, no
+ * file, or the complete new file.
+ */
+async function renameJsonWriteTemp(
+  tempPath: string,
+  filePath: string,
+): Promise<void> {
+  let lastReplaceFailure: unknown;
+
+  for (let attempt = 0; attempt <= MAX_WINDOWS_REPLACE_RETRIES; attempt += 1) {
+    try {
+      if (jsonWriteRenameOverride !== undefined) {
+        await jsonWriteRenameOverride(tempPath, filePath);
+      } else {
+        await rename(tempPath, filePath);
+      }
+      return;
+    } catch (error) {
+      const failingCode = (error as NodeJS.ErrnoException).code;
+      if (failingCode !== "EPERM" && failingCode !== "EACCES") {
+        throw error;
+      }
+      lastReplaceFailure = error;
+
+      if (attempt < MAX_WINDOWS_REPLACE_RETRIES) {
+        // Windows quirk: rename over an existing file can fail with
+        // EPERM/EACCES when the destination is momentarily locked (AV
+        // scan, open handle, concurrent writer). Remove the destination
+        // and retry after exponential backoff so the lock can clear;
+        // the full window (~775ms) comfortably outlasts a rename burst
+        // from concurrent writers on the same destination.
+        try {
+          const removeFile = jsonWriteRemoveOverride ?? rm;
+          await removeFile(filePath, { force: true });
+        } catch (rmError) {
+          // The destination can be locked by a competing writer's handle;
+          // the unlink itself then fails with EPERM/EACCES. That lock is
+          // best-effort clearing — skip the removal and let the backoff +
+          // rename retry below handle it.
+          const rmCode = (rmError as NodeJS.ErrnoException).code;
+          if (rmCode !== "EPERM" && rmCode !== "EACCES") {
+            throw rmError;
+          }
+        }
+        await delay(WINDOWS_REPLACE_RETRY_BACKOFF_MS * 2 ** (attempt + 1));
+      }
+    }
+  }
+
+  throw lastReplaceFailure;
+}
+
 /**
  * Writes json file to project state.
+ *
+ * Atomic by design (#427): content is written to a `.tmp` sibling and then
+ * renamed over the destination, so a crash or power loss mid-write can never
+ * leave a truncated/corrupt JSON state file. On failure the temp file is
+ * removed before the error propagates.
  */
 export async function writeJsonFile(
   filePath: string,
   value: unknown,
 ): Promise<void> {
   await ensureDirectory(dirname(filePath));
-  const json = `${JSON.stringify(value, null, 2)}\n`;
-  await writeFile(filePath, json, "utf8");
+  const tempPath = `${filePath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await renameJsonWriteTemp(tempPath, filePath);
+  } catch (error) {
+    await rm(tempPath, { force: true });
+    throw error;
+  }
 }
 
 /**
@@ -1107,4 +1249,17 @@ export const filesInternals = {
   toCollectedFileStat,
   isLowPriorityForScanBudget,
   BINARY_SCAN_DEPRIORITY_EXTENSIONS,
+  renameJsonWriteTemp,
+  /** Test-only: replaces the atomic-writer remove step (failure injection, #428). */
+  setJsonWriteRemoveOverride(override: RemoveFile | undefined): void {
+    jsonWriteRemoveOverride = override;
+  },
+  /** Test-only: replaces the atomic-writer rename step (failure injection, #427). */
+  setJsonWriteRenameOverride(override: RenameFile | undefined): void {
+    jsonWriteRenameOverride = override;
+  },
+  /** Test-only: replaces the atomic-reader open step (failure injection, #427/#428). */
+  setReadFileOpenOverride(override: ReadFileOverride | undefined): void {
+    readFileOpenOverride = override;
+  },
 };

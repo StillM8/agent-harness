@@ -5,15 +5,14 @@ import {
 } from "./lib/http.js";
 import { readFileSync } from "node:fs";
 
-const AGENT_HARNESS_VERSION: string = (() => {
-  try {
-    return (
-      JSON.parse(readFileSync("package.json", "utf8")) as { version: string }
-    ).version;
-  } catch {
-    return "2.0.0";
-  }
-})();
+// The shipped package always bundles package.json next to this module; a
+// corrupt install is a hard error and must fail loudly at load rather than
+// silently report a stale hardcoded version in User-Agent headers.
+const AGENT_HARNESS_VERSION: string = (
+  JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ) as { version: string }
+).version;
 
 const NPM_REGISTRY_ORIGINS = ["https://registry.npmjs.org"] as const;
 const PYPI_REGISTRY_ORIGINS = ["https://pypi.org"] as const;
@@ -714,6 +713,58 @@ export async function fetchRubyGemsSearch(
   options: Pick<FetchWithGuardsOptions, "resolveHostname"> = {},
 ): Promise<RegistrySearchResult[]> {
   return searchRegistry(query, limit, rubyGemsSearchAdapter, options);
+}
+
+const hexSearchAdapter: RegistrySearchAdapter = {
+  buildUrl(query: string, limit: number): URL {
+    const url = new URL("https://hex.pm/api/packages");
+    url.searchParams.set("search", query);
+    url.searchParams.set("sort", "downloads");
+    url.searchParams.set("page", "1");
+    url.searchParams.set("per_page", String(Math.min(limit, 100)));
+    return url;
+  },
+  extractResults(data: unknown): RegistrySearchResult[] {
+    if (!Array.isArray(data)) return [];
+    return (data as Record<string, unknown>[]).map((p) => {
+      const meta =
+        p["meta"] && typeof p["meta"] === "object"
+          ? (p["meta"] as Record<string, unknown>)
+          : undefined;
+      const downloads =
+        p["downloads"] && typeof p["downloads"] === "object"
+          ? (p["downloads"] as Record<string, unknown>)
+          : undefined;
+      return {
+        name: typeof p["name"] === "string" ? p["name"] : "",
+        description:
+          typeof meta?.["description"] === "string"
+            ? meta["description"]
+            : undefined,
+        downloads:
+          typeof downloads?.["all"] === "number" ? downloads["all"] : undefined,
+      };
+    });
+  },
+  allowedOrigins: ["https://hex.pm"],
+  getHeaders(): Record<string, string> {
+    return {
+      Accept: "application/json",
+      "User-Agent": `agent-harness/${AGENT_HARNESS_VERSION} (github.com/ar27111994/agent-harness)`,
+    };
+  },
+};
+
+/**
+ * Searches Hex.pm (Elixir/Erlang package registry) by keyword, sorted by
+ * download count. Hex API requires a contactable User-Agent header per TOS.
+ */
+export async function fetchHexSearch(
+  query: string,
+  limit = 25,
+  options: Pick<FetchWithGuardsOptions, "resolveHostname"> = {},
+): Promise<RegistrySearchResult[]> {
+  return searchRegistry(query, limit, hexSearchAdapter, options);
 }
 
 /**

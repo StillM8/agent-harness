@@ -1,4 +1,5 @@
 import type { SessionIntent } from "../types.js";
+import { replaceRunsWithDash, trimDashes } from "./safe-paths.js";
 
 /**
  * Enumerates the supported session intent values accepted by the CLI and reports.
@@ -256,7 +257,18 @@ function normalizeSessionIntentValue(value: string | undefined): string {
     return "general";
   }
 
-  return trimmedValue.replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "");
+  // Linear run-collapse + dash trim (a `+` over a negated class and the
+  // anchored dash trim are CodeQL polynomial-ReDoS risks on adversarial
+  // input; the one-pass scans are not).
+  return trimDashes(replaceRunsWithDash(trimmedValue, isIntentValueCharacter));
+}
+
+/**
+ * Returns whether the character is safe to keep verbatim in a normalized
+ * session intent value.
+ */
+function isIntentValueCharacter(character: string): boolean {
+  return /[a-z0-9]/u.test(character);
 }
 
 /**

@@ -465,3 +465,59 @@ function buildAdapter(
     wire: overrides.wire ?? (async () => {}),
   };
 }
+
+void test("buildWrapperRefusal fail-closes Windows shell wrappers with metacharacter args on every platform (#428)", () => {
+  const refusal = preflightInternals.buildWrapperRefusal(
+    "C:/Tools/fixture-tool.CMD",
+    ["--host", "a&b"],
+    "win32",
+  );
+  assert.ok(refusal !== null, "win32 wrapper + metachar args must be refused");
+  assert.equal(refusal?.exitCode, Number.MAX_SAFE_INTEGER);
+  assert.match(
+    refusal?.message ?? "",
+    /Refusing to run Windows shell wrapper/u,
+  );
+  assert.match(refusal?.message ?? "", /a&b/u);
+
+  // Static-literal arguments on a wrapper are safe (host CLI version probes).
+  assert.equal(
+    preflightInternals.buildWrapperRefusal(
+      "C:/Tools/fixture-tool.CMD",
+      ["--version"],
+      "win32",
+    ),
+    null,
+  );
+
+  // Non-wrapper executables with metacharacter args are NOT the wrapper class.
+  assert.equal(
+    preflightInternals.buildWrapperRefusal(
+      "/usr/bin/fixture-tool",
+      ["a&b"],
+      "linux",
+    ),
+    null,
+  );
+  // A wrapper path under a non-win32 platform is not the wrapper class.
+  assert.equal(
+    preflightInternals.buildWrapperRefusal("tool.cmd", ["a&b"], "darwin"),
+    null,
+  );
+});
+
+void test("runRuntimeCommand refuses a resolved Windows wrapper with metacharacter args on any platform (#428)", async () => {
+  // Resolution falls back to the bare executable name when nothing is found
+  // on PATH (\`found ?? executable\`), so a \`.CMD\`-suffixed name reaches the
+  // wrapper-refusal check deterministically on every OS — no fixture file,
+  // PATH mutation, or platform-specific join semantics needed.
+  const result = await preflightInternals.runRuntimeCommand(
+    "fixture-tool.CMD",
+    ["--host", "a&b"],
+    undefined,
+    "win32",
+  );
+  assert.equal(result.cancelled, false);
+  assert.equal(result.exitCode, Number.MAX_SAFE_INTEGER);
+  assert.match(result.message, /Refusing to run Windows shell wrapper/u);
+});

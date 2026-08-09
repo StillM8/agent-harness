@@ -155,11 +155,13 @@ export async function syncIndexedSources(
   // When sourceIds is explicitly provided (even as an empty Set), filter
   // enabledSources by membership. Only fall back to all enabledSources
   // when sourceIds is absent (undefined).
+  const sourceIdsFilter = options?.sourceIds;
   const effectiveSources =
-    options?.sourceIds !== undefined
-      ? enabledSources.filter((source) => options.sourceIds!.has(source.id))
+    sourceIdsFilter !== undefined
+      ? enabledSources.filter((source) => sourceIdsFilter.has(source.id))
       : enabledSources;
   const totalSources = effectiveSources.length;
+  const overallStartMs = Date.now();
   let sourceIndex = 0;
 
   for (const source of effectiveSources) {
@@ -223,7 +225,8 @@ export async function syncIndexedSources(
       }
       entriesDirty ||= context.entriesDirty;
 
-      // Per-source completion: report sync duration (#382).
+      // Per-source completion: report sync duration and cumulative ETA (#382,
+      // #439). ETA is a linear extrapolation of the average per-source time.
       const syncDuration = Date.now() - syncStart;
       if (totalSources > 1) {
         const statusMap: Record<string, string> = {
@@ -233,7 +236,9 @@ export async function syncIndexedSources(
         const statusLabel =
           statusMap[synchronizedState?.status ?? ""] ??
           (synchronizedState ? synchronizedState.status : "skipped");
-        process.stderr.write(`${statusLabel} (${syncDuration}ms)\n`);
+        process.stderr.write(
+          `${statusLabel} (${syncDuration}ms, ${formatSyncEtaMs(estimateRemainingSyncMs(overallStartMs, sourceIndex, totalSources))} remaining)\n`,
+        );
       }
     } catch (error) {
       // Stale-data fallback + persistence tracking.
@@ -253,11 +258,14 @@ export async function syncIndexedSources(
         hasPriorEntries &&
         previousFailures <= MAX_CONSECUTIVE_FAILURES_BEFORE_ERROR;
 
-      // Per-source completion on error: report failure/stale status (#382).
+      // Per-source completion on error: report failure/stale status (#382)
+      // with cumulative ETA (#439).
       const syncDuration = Date.now() - syncStart;
       if (totalSources > 1) {
         const statusLabel = shouldFallBackToStale ? "stale" : "failed";
-        process.stderr.write(`${statusLabel} (${syncDuration}ms)\n`);
+        process.stderr.write(
+          `${statusLabel} (${syncDuration}ms, ${formatSyncEtaMs(estimateRemainingSyncMs(overallStartMs, sourceIndex, totalSources))} remaining)\n`,
+        );
       }
 
       sourceStates.push({
@@ -466,4 +474,47 @@ async function synchronizeIndexedSource(
 /** Exposes source-sync internals for focused unit testing. */
 export const sourceSyncInternals = {
   synchronizeIndexedSource,
+  formatSyncEtaMs,
+  estimateRemainingSyncMs,
 };
+
+/**
+ * Formats a remaining-duration estimate for sync progress (#439).
+ * e.g. "~52s", "~2m 5s", "~3m".
+ */
+const MILLISECONDS_PER_SECOND = 1_000;
+const SECONDS_PER_MINUTE = 60;
+
+/**
+ * Returns a human-readable remaining-time estimate for the sync progress
+ * line, extrapolated from the average per-source duration observed so far.
+ */
+export function formatSyncEtaMs(remainingMs: number): string {
+  if (!Number.isFinite(remainingMs) || remainingMs < 0) {
+    return "~0s";
+  }
+  const totalSeconds = Math.round(remainingMs / MILLISECONDS_PER_SECOND);
+  if (totalSeconds < SECONDS_PER_MINUTE) {
+    return `~${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / SECONDS_PER_MINUTE);
+  const seconds = totalSeconds % SECONDS_PER_MINUTE;
+  return seconds > 0 ? `~${minutes}m ${seconds}s` : `~${minutes}m`;
+}
+
+/**
+ * Linear extrapolation of remaining sync time: assumes the average per-source
+ * duration observed so far continues for the remaining sources (#439).
+ */
+export function estimateRemainingSyncMs(
+  overallStartMs: number,
+  completedSourceCount: number,
+  totalSourceCount: number,
+): number {
+  if (completedSourceCount <= 0 || totalSourceCount <= completedSourceCount) {
+    return 0;
+  }
+  const elapsedMs = Date.now() - overallStartMs;
+  const averagePerSourceMs = elapsedMs / completedSourceCount;
+  return averagePerSourceMs * (totalSourceCount - completedSourceCount);
+}

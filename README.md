@@ -2,8 +2,8 @@
 
 <p>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
-  <a href="./package.json"><img alt="Node >=22" src="https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white" /></a>
-  <a href="./package.json"><img alt="TypeScript 5.9" src="https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white" /></a>
+  <a href="./package.json"><img alt="Node >=23" src="https://img.shields.io/badge/node-%3E%3D23-339933?logo=node.js&logoColor=white" /></a>
+  <a href="./package.json"><img alt="TypeScript 6.0.3" src="https://img.shields.io/badge/TypeScript-6.0.3-3178C6?logo=typescript&logoColor=white" /></a>
   <a href="https://github.com/ar27111994/agent-harness/actions/workflows/quality.yml"><img alt="Quality workflow" src="https://github.com/ar27111994/agent-harness/actions/workflows/quality.yml/badge.svg" /></a>
   <a href="https://github.com/ar27111994/agent-harness/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/ar27111994/agent-harness?display_name=tag" /></a>
   <a href="https://www.npmjs.com/package/@ar27111994/agent-harness"><img alt="npm version" src="https://img.shields.io/npm/v/%40ar27111994%2Fagent-harness?logo=npm&color=CB3837" /></a>
@@ -260,7 +260,7 @@ Run the command from the workspace you want to inspect. By default, the installe
 
 ### Requirements
 
-- Node.js `>=22`
+- Node.js `>=23` (the coverage gate runs the test runner with `--test-isolation=none`, which shipped with Node 23)
 - npm
 - Git
 - Optional GitHub token for higher GitHub API throughput:
@@ -791,13 +791,13 @@ The plan includes candidate breakdowns by host and asset kind, the effective mir
 agent-harness mirror locks
 ```
 
-**`mirror acquire`** acquires raw mirror artifacts, writes the mirror index, and resolves bundle locks by downloading or verifying each asset referenced in the lock files. High-risk community assets are routed into quarantine.
+**`mirror acquire`** acquires raw mirror artifacts, writes the mirror index file (`mirror/index.jsonl`), and resolves bundle locks by downloading or verifying each asset referenced in the lock files. High-risk community assets are routed into quarantine.
 
 ```bash
 agent-harness mirror acquire
 ```
 
-**`mirror diff`** compares the current mirror index against the previous index snapshot, printing added, removed, and changed assets.
+**`mirror diff`** compares the current mirror index file (`mirror/index.jsonl`) against the previous index snapshot, printing added, removed, and changed assets.
 
 ```bash
 agent-harness mirror diff
@@ -805,14 +805,14 @@ agent-harness mirror diff
 
 Previous index state is read from `mirror/index.jsonl.snapshot`; the current index is `mirror/index.jsonl`.
 
-**`mirror explain`** prints the full mirror index entry, raw content preview, and any available manifest for a specific mirrored artifact. Use `--asset` or `--mirror` to identify the target.
+**`mirror explain`** prints the full mirror index entry (`mirror/index.jsonl`), raw content preview, and any available manifest for a specific mirrored artifact. Use `--asset` or `--mirror` to identify the target.
 
 ```bash
 agent-harness mirror explain --asset my-asset-id
 agent-harness mirror explain --mirror mirror-abc123
 ```
 
-Output includes the mirror index entry, raw artifact root path, optional manifest, and a 4000-character content preview.
+Output includes the mirror index entry (from `mirror/index.jsonl`), raw artifact root path, optional manifest, and a 4000-character content preview.
 
 ### Bundle
 
@@ -835,7 +835,7 @@ Key flags:
 - **`--bundle <bundleId>`** (or pass the bundle ID as a positional argument) — Bundle lock to explain
 - **`--json`** — Output the full explanation as JSON
 
-The explanation draws on the catalog selection report, mirror index, and rejection log to explain each asset's presence in the bundle.
+The explanation draws on the catalog selection report, the mirror index file (`mirror/index.jsonl`), and the rejection log to explain each asset's presence in the bundle.
 
 ### Quarantine review
 
@@ -907,6 +907,14 @@ You can also activate one lifecycle host using another recommendation policy:
 ```bash
 agent-harness activate host --host copilot-vscode --recommendation-host cursor
 ```
+
+Activation selects from installed bundle contents: bundles are staged by
+`install bundle` (catalog-selection-driven), then ranked by recommendation
+order within the candidate set. Assets with **no recommendation** for the
+recommendation host remain eligible (staged-bundle breadth — see
+`docs/guides/V2-CONTRACT.md`), but an asset with a **negative recommendation
+score** is never activated — the engine's explicit don't-use signal is a hard
+boundary. `activate explain` always states the truthful per-asset reason.
 
 `--recommendation-host` is validated against the supported host set. `--intent` is also validated (`general | frontend | backend | mobile | devops | security | docs | testing | research | data | design | product | marketing`), accepts common aliases such as `documentation`, `ci-cd`, `branding`, and `ba`, and can be passed repeatedly. Activation uses the first provided intent as its primary activation context so downstream views stay deterministic even when recommendation/workspace flows were built from multiple intents.
 
@@ -1214,12 +1222,14 @@ The quality tooling includes:
 npm run quality:detection
 npm run quality:policy
 npm run benchmark:scan
+npm run benchmark:paths
 npm run validate:recommendations
 ```
 
 - `quality:detection` checks representative archetype fixtures and reports precision/recall-style metrics.
 - `quality:policy` verifies detector-emitted terms are represented in recommendation policy maps and writes draft suggestions for human review.
 - `benchmark:scan` enforces scan budget expectations.
+- `benchmark:paths` enforces 10-second wall-clock budgets on the recommend, activate-selection, and mirror-plan hot paths over a synthetic 1,000-entry catalog, so complexity regressions fail CI.
 - `validate:recommendations` evaluates golden recommendation fixtures and prints aggregate quality signals such as top-rank reason mix, top-rank confidence mix, broad-fallback frequency, and local-availability frequency.
 
 ## Environment variables
@@ -1233,6 +1243,8 @@ Optional GitHub tokens improve API throughput during discovery and GitHub-backed
 ```bash
 GITHUB_PERSONAL_ACCESS_TOKEN=
 # GITHUB_TOKEN=
+# Override the ARD publisher FQDN used for identity and attestation metadata.
+# AGENT_HARNESS_ARD_PUBLISHER_FQDN=
 ```
 
 PowerShell example:
@@ -1291,7 +1303,12 @@ AGENT_HARNESS_OFFICIAL_INDEX_PAGE_MAX_BYTES=1000000
 AGENT_HARNESS_OFFICIAL_INDEX_CONTENT_MAX_BYTES=1000000
 AGENT_HARNESS_NATIVE_COMMAND_TIMEOUT_MS=30000
 AGENT_HARNESS_NATIVE_COMMAND_MAX_BUFFER_BYTES=2000000
-AGENT_HARNESS_PREFLIGHT_COMMAND_TIMEOUT_MS=10000
+AGENT_HARNESS_PREFLIGHT_COMMAND_TIMEOUT_MS=15000
+# Cumulative wall-clock budget for `setup doctor` host preflight checks.
+# AGENT_HARNESS_SETUP_DOCTOR_TIMEOUT_MS=
+# Force CI-mode behavior (ephemeral state-root heuristics, enrichment CI
+# semantics) without a real CI runner.
+# AGENT_HARNESS_CI=true
 ```
 
 ### Discovery recall caps
@@ -1305,6 +1322,28 @@ AGENT_HARNESS_SOURCE_SYNC_MAX_PAGES_PER_RUN=10
 AGENT_HARNESS_NPM_SEARCH_RESULT_LIMIT=12
 AGENT_HARNESS_NPM_MCP_SEARCH_QUERY_LIMIT=8
 ```
+
+### Discovery demand and adjacent-tooling controls
+
+```bash
+AGENT_HARNESS_DISCOVERY_ADJACENT_TOOLING_ENABLED=true
+AGENT_HARNESS_DISCOVERY_REGISTRY_SEARCH_MAX_TERMS=10
+AGENT_HARNESS_DISCOVERY_REGISTRY_SEARCH_MAX_RESULTS_PER_TERM=50
+AGENT_HARNESS_DISCOVERY_SEMANTIC_SCORING=false
+AGENT_HARNESS_DISCOVERY_MIN_SIMILARITY=0.35
+AGENT_HARNESS_OFFICIAL_INDEX_MAX_ITEMS_PER_INDEX=0
+AGENT_HARNESS_VSCODE_MARKETPLACE_CATEGORY_SWEEP_ENABLED=true
+```
+
+These gate how much demand-driven package discovery fetches and how semantic relevance scoring behaves:
+
+- `AGENT_HARNESS_DISCOVERY_ADJACENT_TOOLING_ENABLED` — enables the static adjacent-tooling matrix (packages a workspace should probably be using but has not declared yet) plus live registry keyword search during package-registry harvesting. Set to `false` to restrict discovery to strictly declared dependencies.
+- `AGENT_HARNESS_DISCOVERY_REGISTRY_SEARCH_MAX_TERMS` — maximum demand signal terms dispatched per registry search sweep (default 10).
+- `AGENT_HARNESS_DISCOVERY_REGISTRY_SEARCH_MAX_RESULTS_PER_TERM` — maximum results kept per registry search term (default 50).
+- `AGENT_HARNESS_DISCOVERY_SEMANTIC_SCORING` — when `true` and the optional semantic-scoring package is installed, cosine similarity replaces the binary keyword demand-relevance gate. Default `false`.
+- `AGENT_HARNESS_DISCOVERY_MIN_SIMILARITY` — minimum cosine similarity (0–1) for an entry to pass the semantic demand-relevance gate. Default `0.35`. Ignored when semantic scoring is disabled.
+- `AGENT_HARNESS_OFFICIAL_INDEX_MAX_ITEMS_PER_INDEX` — maximum catalog entries produced per awesome-list index; `0` (default) means unlimited, leaving deduplication and selection as the real cap.
+- `AGENT_HARNESS_VSCODE_MARKETPLACE_CATEGORY_SWEEP_ENABLED` — whether the VS Code Marketplace category-taxonomy sweep runs during sync. Default `true`.
 
 ### Per-host recommendation limit overrides
 
@@ -1574,7 +1613,7 @@ npm run validate:coverage
 npm run test:self-hosting
 ```
 
-Coverage is enforced through `npm run test:coverage` using the checked-in `.c8rc.json` policy. `npm run validate:coverage` builds, runs the coverage gate, and refreshes `coverage/coverage-gaps.md` with uncovered lines/functions/branches from the latest `lcov.info`. The current gate targets the main shipped runtime surface while excluding generated types, test harness artifacts, and selected built command-entry outputs listed in `.c8rc.json`; it fails CI unless statements, branches, functions, and lines all remain at 100%. The maintained 100% coverage policy and gap-inventory workflow are documented in [`COVERAGE-100-ROADMAP.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/COVERAGE-100-ROADMAP.md).
+Coverage is enforced through `npm run test:coverage` using the checked-in `.c8rc.json` policy. `npm run validate:coverage` builds, runs the coverage gate, and refreshes `coverage/coverage-gaps.md` with uncovered lines/functions/branches from the latest `lcov.info`. The exclusion list covers only non-product artifacts (generated types, test harness bundles, script test files); a CI guard (`validate:coverage-exclusions`) fails if a product module is ever added back to it. The gate fails CI unless statements, branches, functions, and lines all remain at 100% across the whole product. The maintained 100% coverage policy and gap-inventory workflow are documented in [`COVERAGE-100-ROADMAP.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/COVERAGE-100-ROADMAP.md).
 
 For release or adapter changes, also run:
 
@@ -1594,7 +1633,7 @@ For release readiness, run:
 npm run validate:release
 ```
 
-The CI quality workflow runs on Ubuntu, macOS, and Windows. It validates linting, formatting, types, coverage-gated unit/integration tests, the dedicated self-hosting suite, scan budgets, detection quality, policy coverage, isolated CLI smoke checks, packed artifact smoke checks, and recommendation fixtures. It also publishes a coverage summary into the GitHub Actions step summary for each run. The release workflow additionally runs production dependency audit and npm publish dry-run checks before tagged publication.
+The CI quality workflow runs on Ubuntu, macOS, and Windows. It validates linting, formatting, types, coverage-gated unit/integration tests, the dedicated self-hosting suite, scan and lifecycle-path budgets, detection quality, policy coverage, isolated CLI smoke checks, packed artifact smoke checks, and recommendation fixtures. It also publishes a coverage summary into the GitHub Actions step summary for each run. The release workflow additionally runs production dependency audit and npm publish dry-run checks before tagged publication.
 
 For output/logging conventions and the current decision to prefer lightweight internal helpers over a full logging library, see [`LOGGING-STRATEGY.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/LOGGING-STRATEGY.md).
 
