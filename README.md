@@ -89,6 +89,7 @@ The core model is deliberately boring in the best way: one command surface, a ho
 
 ## Key Playbooks
 
+- [Documentation index](https://github.com/ar27111994/agent-harness/blob/main/docs/README.md) — hub for per-host references, playbooks, and guides
 - [Agent setup playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/AGENT-SETUP-PLAYBOOK.md)
 - [Discovery breadth playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DISCOVERY-BREADTH-PLAYBOOK.md)
 - [Demand detection playbook](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DEMAND-DETECTION-PLAYBOOK.md)
@@ -203,7 +204,7 @@ Every `discover select` or `discover full` run builds a selected asset catalog. 
 
 ```bash
 agent-harness discover ard-export
-# → .well-known/ai-catalog.json
+# → <state-root>/.well-known/ai-catalog.json
 ```
 
 ARD registries crawl `/.well-known/ai-catalog.json` at your domain to index agent-harness assets alongside assets from other publishers. The export maps every `AssetCatalogEntry` to an ARD entry with:
@@ -212,6 +213,8 @@ ARD registries crawl `/.well-known/ai-catalog.json` at your domain to index agen
 - **Media type** (`application/mcp-server+json`, `application/ai-skill`, etc.) from AssetKind
 - **Trust manifest** — OMS signatures, publisher verification, compliance attestations
 - **Representative queries** — synthetic natural-language queries for semantic discovery
+
+The export path is relative to the active state root (`--state-root <path>`); by default that is the repository root when running inside the repo (repository-local development), or `<workspace>/.agent-harness` for an installed CLI run from another workspace, so `discover ard-export` writes `<state-root>/.well-known/ai-catalog.json`. Entries whose update timestamp is unknown (harvester epoch sentinel) omit `updatedAt` rather than publishing `1970-01-01` (#449).
 
 ### Consumer — ARD registry adapter
 
@@ -363,7 +366,7 @@ A packaged CLI keeps checked-in discovery and mirror policy assets read-only and
 
 ### Building a comprehensive catalog
 
-The default `discover full` builds a demand-driven catalog — fast for per-workspace use but limited in breadth (~11,500 entries from 171 sources). To build a truly comprehensive catalog across millions of available assets, use the two-phase offline index workflow:
+The default `discover full` builds a demand-driven catalog — fast for per-workspace use but limited in breadth (~11,500+ entries from 50+ sources). To build a truly comprehensive catalog across millions of available assets, use the two-phase offline index workflow:
 
 **Phase 1 (offline, one-time or CI):** Build the full index across all sources.
 
@@ -595,7 +598,7 @@ agent-harness discover environment-index
 
 ### Reducing source health noise
 
-`discover full` produces source health warnings for every configured source. With 171+ sources, most warnings are expected — e.g. "entries produced but none survived selection" for registries irrelevant to your workspace. Three flags help manage output and performance:
+`discover full` produces source health warnings for every configured source. With 50+ sources, most warnings are expected — e.g. "entries produced but none survived selection" for registries irrelevant to your workspace. Three flags help manage output and performance:
 
 - **`--quiet`**: suppress expected warnings; only severe/error conditions are shown
 - **`--summary`**: print aggregate warning counts grouped by reason instead of per-source lines
@@ -604,12 +607,12 @@ agent-harness discover environment-index
 ```bash
 agent-harness discover full --quiet    # only errors, warnings suppressed
 agent-harness discover full --summary  # aggregate breakdown by reason
-agent-harness discover full --sync-all # full sync of all 170+ sources
+agent-harness discover full --sync-all # full sync of all 50+ sources
 ```
 
-Demand-based filtering (#419) automatically narrows source sync to only ecosystem-relevant sources. After demand detection, `discover full` prints a summary like "Detected TypeScript project. Syncing 12/47 demand-relevant sources (35 skipped)." This reduces first-run sync time from 5+ minutes to under 60 seconds for typical single-stack projects. Use `--sync-all` for the legacy full-sync behaviour, or `--no-sync` to skip sync entirely.
+Demand-based filtering (#419) automatically narrows source sync to only ecosystem-relevant sources. After demand detection, `discover full` prints a summary like `[discover full] Detected TypeScript project. Syncing 12/50 demand-relevant sources (38 skipped). Use --sync-all for full sync or --no-sync to skip entirely.` This reduces first-run sync time from 5+ minutes to under 60 seconds for typical single-stack projects. Use `--sync-all` for the legacy full-sync behaviour, or `--no-sync` to skip sync entirely.
 
-`discover sync` now provides persistent indexed harvesting for the built-in marketplace and registry sources that expose trustworthy official feeds, sitemaps, or paginated APIs. That includes the VS Code and Cursor marketplaces, Zed and Pi package galleries, skills.sh, ClawHub's server-rendered plugin catalog, the official MCP registry, and the supported package registries (npm change feed, PyPI, crates.io, Go index, Maven Central, NuGet, RubyGems, Packagist, Swift Package Index, Hex.pm, ConanCenter, and pub.dev).
+`discover sync` now provides persistent indexed harvesting for the built-in marketplace and registry sources that expose trustworthy official feeds, sitemaps, or paginated APIs. That includes the VS Code and Cursor marketplaces, Zed and Pi package galleries, skills.sh, ClawHub's server-rendered plugin catalog, the official MCP registry, and the supported package registries (npm change feed, PyPI, crates.io, Go index, Maven Central, NuGet, RubyGems, Packagist, Hex.pm, ConanCenter, and pub.dev).
 
 Coverage modes remain explicit instead of silently pretending everything is equivalent:
 
@@ -630,6 +633,8 @@ The discovery configuration is assembled from multiple checked-in inputs on purp
 
 If you want the widest practical candidate pool before judging recommendation quality, start with `agent-harness discover breadth`. That first-class command runs the full breadth-oriented discovery pass and prints whether the bottleneck currently looks like demand detection, source coverage, selection filtering, or ranking. For the step-by-step workflow and agent-operated version, use [`DISCOVERY-BREADTH-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/DISCOVERY-BREADTH-PLAYBOOK.md).
 
+`discover breadth` is a full discovery pass: it **replaces** the catalog and selection outputs in the state root. Recommendations, mirror bundle locks, install generations, and activation manifests built from the previous catalog are then stale — the command prints a warning naming the affected artifacts (with the previous catalog size vs the new one in its summary), and you must re-run `recommend report` and the affected mirror/install/activate commands afterwards.
+
 Every command group accepts `--help` or `-h` and exits before preparing lifecycle state. Examples:
 
 ```bash
@@ -647,7 +652,7 @@ Demand detection is deterministic by default. It does not require an external AI
 - vendor/platform signatures for common third-party stacks such as Node, React, Flutter/Dart, Swift, Objective-C, Kotlin, Java Android, C#/.NET MAUI/Xamarin, Java/.NET/Go/Rust/Ruby/PHP backends, Azure, AWS, GCP, Firebase, Supabase, Apify, MCP, AI/ML/DL/RL/MLOps/RAG/vector-search libraries, robotics/simulation, blockchain/security, DevOps/Kubernetes/Helm/Ansible/Pulumi, network automation, finance/trading, BI/reporting, CAD/embedded/3D printing, creative media, and marketing/SEO/content packages;
 - generic language, package-manager, infrastructure, and API markers.
 
-These signatures live under `src/domains/discovery/` alongside focused demand-profile, source-registry, source-index, source-utilization, catalog-selection, package/reference/local/GitHub/official-index harvester, and catalog utility modules. Support for additional domains or vendors can be added as data-driven detector entries or focused harvester modules instead of one-off project-specific logic. Optional AI-assisted enrichment is available through `discover enrich`, but v1.0.0 intentionally keeps normal discovery reproducible and offline-capable by default.
+These signatures live under `src/domains/discovery/` alongside focused demand-profile, source-registry, source-index, source-utilization, catalog-selection, package/reference/local/GitHub/official-index harvester, and catalog utility modules. Support for additional domains or vendors can be added as data-driven detector entries or focused harvester modules instead of one-off project-specific logic. Optional AI-assisted enrichment is available through `discover enrich`, but normal discovery intentionally stays reproducible and offline-capable by default.
 
 ### AI-assisted enrichment
 
@@ -879,6 +884,8 @@ npm run install:reset
 
 `install` is the canonical command name; `stage` remains a supported legacy alias. The harness stages a bounded mirrored bundle subset into its managed store, while `install native` remains the explicit host-facing install boundary. Mutating install/remove operations require `--apply`; verify is non-mutating. VS Code and Cursor extension assets are installed through adapter-owned VS Code-style extension providers and results are written to `state/install/native-extensions.json`.
 
+`install native --operation plan` lists every extension with an explicit status line: its recommendation basis (`fit:*` reasons when present, otherwise the workspace-fit/local basis from `state/recommendations.json`, or "no workspace recommendation — kept from activation manifest") and the fact that native installs go through the host CLI and are not mirrored. Extensions whose ONLY match is a single-token coincidence (a declared-dependency token like the workspace's `c8` that is absent from the extension's curated identity — `coincidentalMatchOnly` in the recommendation report; the report includes this property ONLY when it is true, so consumers must treat an absent `coincidentalMatchOnly` as `false`) are **excluded from the plan and from apply/remove execution**, with a note naming the coincidental signal. Re-run `recommend report` after discovery changes to refresh the coincidence flags.
+
 `install refresh` writes `state/install/refresh-report.json`, persists schedule/checkpoint metadata in `state/install/refresh-state.json`, compares the installed upstream fingerprint stamped into each install manifest against the latest bundle-lock mirror, and can apply safe staged refreshes when `AGENT_HARNESS_INSTALL_REFRESH_POLICY=apply-safe` and `--apply` are both used. `--due-only` makes the command suitable for cron/background checks by skipping runs until the configured refresh interval is due. Refresh reports include policy tiers for report-only, stage-only, low-risk apply, review-required, and quarantined decisions; executable/native assets can be staged, but host-native activation/install remains review-gated. `stage refresh` remains a supported legacy alias.
 
 For report-only vs due-only vs apply-safe update workflows, see [`ASSET-UPDATE-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/ASSET-UPDATE-PLAYBOOK.md).
@@ -889,7 +896,7 @@ For report-only vs due-only vs apply-safe update workflows, see [`ASSET-UPDATE-P
 npm run activate:host
 npm run activate:reset
 agent-harness activate rollback --host opencode --generation <generation-id>
-agent-harness activate diff --host <host> --baseline <state-root>
+agent-harness activate diff --host <host>
 agent-harness activate explain --host <host> --asset <asset-id>
 ```
 
@@ -1028,7 +1035,7 @@ This matrix is the public v2 adapter contract. It separates generic lifecycle su
 | `zed`            | `opencode` / `zed`                  | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `.rules`, `.zed/settings.json`, and `.zed/agent-harness` references                                                  | Extension installation remains manual through Zed unless future structured native support is added. Managed .zed/agent-harness assets are references, not a claim that every asset kind is a native Zed directory. Zed forwards MCP servers configured in .zed/settings.json to external ACP-based agents in the same session — MCP server recommendations for Zed workspaces are also relevant to ACP agent consumers. ACP-compatible agents (via JetBrains Agent Client Protocol) can be used in Zed when ACP forwarding is configured.      |
 | `claude-code`    | `opencode` / `claude-code`          | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `CLAUDE.md`, `.claude/*`, and structured native config when supplied                                                 | MCP, hook, and settings synthesis requires explicit structured Claude-native payloads. Global Claude Code profile/configuration is not modified.                                                                                                                                                                                                                                                                                                                                                                                               |
 | `pi`             | `opencode` / `pi`                   | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `AGENTS.md`, `SYSTEM.md`, `.pi/skills`, `.pi/prompts`, and structured native config when supplied                    | Pi does not include shared-mcp in its default bundles. MCP assets are staged as references because Pi has no built-in MCP support in the current adapter contract.                                                                                                                                                                                                                                                                                                                                                                             |
-| `codex`          | `opencode` / `codex`                | Yes                    | Stage only                                | Yes      | Yes / yes / yes              | none                             | Project-local `AGENTS.md`, `.agents/skills`, `.agents/plugins`, `.codex/agent-harness`, and structured native config when supplied | Global Codex config, plugin caches, automations, remote connections, and sandbox settings are not modified. Plugin, MCP, hook, and rules activation requires structured Codex-native config and trusted-project review.                                                                                                                                                                                                                                                                                                                        |
+| `codex`          | `opencode` / `codex`                | Yes                    | Stage + explicit extension native install | Yes      | Yes / yes / yes              | `extension` via Codex CLI        | Project-local `AGENTS.md`, `.agents/skills`, `.agents/plugins`, `.codex/agent-harness`, and structured native config when supplied | Global Codex config, plugin caches, automations, remote connections, and sandbox settings are not modified. Plugin, MCP, hook, and rules activation requires structured Codex-native config and trusted-project review.                                                                                                                                                                                                                                                                                                                        |
 
 Adapter compliance coverage lives in `src/tests/host-adapters.test.ts`, `src/tests/native-host-wire.test.ts`, and `src/tests/host-support-matrix.test.ts`. The tests assert the registered adapter metadata, preview/apply/reset behavior, native-install boundaries, reversible managed file handling, and the README matrix rows.
 
@@ -1243,6 +1250,8 @@ Optional GitHub tokens improve API throughput during discovery and GitHub-backed
 ```bash
 GITHUB_PERSONAL_ACCESS_TOKEN=
 # GITHUB_TOKEN=
+# OPENAI_API_KEY — recognized asset prerequisite: when present, OpenAI
+# provider assets that require it are marked installable.
 # Override the ARD publisher FQDN used for identity and attestation metadata.
 # AGENT_HARNESS_ARD_PUBLISHER_FQDN=
 ```
@@ -1307,7 +1316,8 @@ AGENT_HARNESS_PREFLIGHT_COMMAND_TIMEOUT_MS=15000
 # Cumulative wall-clock budget for `setup doctor` host preflight checks.
 # AGENT_HARNESS_SETUP_DOCTOR_TIMEOUT_MS=
 # Force CI-mode behavior (ephemeral state-root heuristics, enrichment CI
-# semantics) without a real CI runner.
+# semantics) without a real CI runner. A bare CI=true is also recognized as
+# CI mode for external CI runners.
 # AGENT_HARNESS_CI=true
 ```
 

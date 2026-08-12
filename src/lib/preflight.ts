@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
-import { delimiter, dirname, join, win32 } from "node:path";
+import { delimiter, dirname, extname, join, win32 } from "node:path";
 
 import { getRuntimeConfig } from "../config/runtime.js";
 import type { collectActivatedAssetPrerequisiteDiagnostics } from "./asset-prerequisites.js";
@@ -13,6 +13,12 @@ import {
   resolveDefaultOpenCodeConfigRoot,
   resolveVsCodeUserSettingsPath,
 } from "./paths.js";
+import {
+  buildWindowsPowerShellCommand,
+  containsShellMetaCharacters,
+  isWindowsShellWrapperPath,
+  quotePowerShellLiteral,
+} from "./windows-shell.js";
 
 /**
  * Defines the supported preflight severity values.
@@ -343,7 +349,16 @@ function getExecutableAccessMode(platform: NodeJS.Platform): number {
   return platform === "win32" ? constants.F_OK : constants.X_OK;
 }
 
-async function findExecutableOnPath(
+/**
+ * Searches PATH for an executable, honoring PATHEXT on Windows.
+ *
+ * Exported for shared use by host-command executors (extension installer)
+ * that must validate the RESOLVED executable — a bare wrapper name is
+ * only PATH-resolved at invocation time by cmd.exe, so path-level checks
+ * (e.g. cmd-expansion metacharacters in a PATH directory) must run
+ * against the resolved absolute location (review).
+ */
+export async function findExecutableOnPath(
   executableName: string,
   options: FindExecutableOptions = {},
 ): Promise<string | null> {
@@ -358,7 +373,28 @@ async function findExecutableOnPath(
   const extensions = getExecutableSearchExtensions(platform, env);
   const accessMode = getExecutableAccessMode(platform);
 
+  // On Windows a name that already carries an extension (e.g. `code.cmd`
+  // from an executable-candidate list) resolves AS-IS: only the exact
+  // filename is searched across PATH and the PATHEXT composition loop is
+  // skipped entirely — appending PATHEXT suffixes to it would search for
+  // `code.cmd.EXE` etc. and could select a file the caller did NOT name
+  // (review: absent code.cmd must never resolve to an existing
+  // code.cmd.EXE). Extensionless names keep the full PATHEXT probing.
+  const hasExplicitExtension =
+    platform === "win32" && extname(executableName).length > 0;
+
   for (const pathEntry of pathEntries) {
+    if (hasExplicitExtension) {
+      const exactCandidate = joinPath(pathEntry, executableName);
+      try {
+        await accessPath(exactCandidate, accessMode);
+        return exactCandidate;
+      } catch {
+        // Explicit-extension names are exact-only: no PATHEXT composition
+        // fallback (see above), continue with the next PATH entry.
+        continue;
+      }
+    }
     for (const extension of extensions) {
       const candidate = joinPath(pathEntry, `${executableName}${extension}`);
       try {
@@ -554,36 +590,6 @@ function resolveFoundExecutable(
 }
 
 /**
- * Defines characters that cmd.exe (the target of .cmd/.bat wrappers)
- * interprets even inside quoted arguments: operators, redirection, batch
- * variable expansion, delayed expansion, and quote characters. Arguments
- * containing any of these must never cross into a wrapper invocation —
- * Windows batch-file argument parsing cannot be made safe for them by
- * quoting alone (cmd.exe re-parses the raw command line). The NUL byte is
- * checked separately to keep control characters out of the regex literal.
- */
-const CMD_SHELL_META_PATTERN = /[&|<>^%!"\r\n]/u;
-
-/**
- * Returns true when a value contains characters that cmd.exe interprets in
- * wrapper command lines regardless of quoting.
- */
-export function containsShellMetaCharacters(value: string): boolean {
-  return value.includes("\u0000") || CMD_SHELL_META_PATTERN.test(value);
-}
-
-/**
- * Returns whether an executable path is a Windows shell wrapper (.cmd /
- * .bat) that must be invoked through a shell.
- */
-export function isWindowsShellWrapperPath(
-  executablePath: string,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  return platform === "win32" && /\.(?:cmd|bat)$/iu.test(executablePath);
-}
-
-/**
  * Returns the fail-closed refusal for a Windows shell wrapper invoked with
  * shell-metacharacter arguments, or null when the command is safe to run.
  *
@@ -599,12 +605,16 @@ export function buildWrapperRefusal(
 ): { cancelled: false; exitCode: number; message: string } | null {
   if (
     isWindowsShellWrapperPath(resolvedExecutable, platform) &&
-    args.some(containsShellMetaCharacters)
+    (args.some(containsShellMetaCharacters) ||
+      // The executable path itself can carry cmd-expansion characters
+      // (a PATH directory named e.g. "100% real") that cmd.exe would
+      // re-parse inside the wrapper invocation (S1 hardening).
+      containsShellMetaCharacters(resolvedExecutable))
   ) {
     return {
       cancelled: false,
       exitCode: Number.MAX_SAFE_INTEGER,
-      message: `Refusing to run Windows shell wrapper with shell-metacharacter arguments: '${args.join("' '")}'. Host CLI wrapper arguments must be static literals.`,
+      message: `Refusing to run Windows shell wrapper with shell-metacharacter arguments or executable path: '${args.join("' '")}'. Host CLI wrapper arguments must be static literals.`,
     };
   }
 
@@ -646,22 +656,13 @@ function buildRuntimeCommandSpawnSpec(
       "-ExecutionPolicy",
       "Bypass",
       "-Command",
-      buildWindowsPowerShellCommand(options.executable, options.args),
+      // Invoke the VALIDATED resolved path, never the bare configured
+      // command: PowerShell would resolve a bare name (e.g. `code`) through
+      // PATH again and could pick a different wrapper than the one
+      // buildWrapperRefusal / isWindowsShellWrapperPath validated (review).
+      buildWindowsPowerShellCommand(options.resolvedExecutable, options.args),
     ],
   };
-}
-
-function buildWindowsPowerShellCommand(
-  executable: string,
-  args: string[],
-): string {
-  const quotedExecutable = quotePowerShellLiteral(executable);
-  const quotedArgs = args.map((argument) => quotePowerShellLiteral(argument));
-  return [`& ${quotedExecutable}`, ...quotedArgs].join(" ");
-}
-
-function quotePowerShellLiteral(value: string): string {
-  return `'${value.replace(/'/gu, "''")}'`;
 }
 
 /**

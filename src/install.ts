@@ -10,9 +10,11 @@ import { reconcileInstallState, resetInstallState } from "./install/state.js";
 import {
   handleUnknownCommand,
   hasHelpFlag,
+  hasUnknownFlagsForSubcommands,
   printSubcommandHelp,
   type SubcommandHelpEntry,
 } from "./cli-help-format.js";
+import { INSTALL_SUBCOMMAND_FLAG_SPECS } from "./cli-flag-specs.js";
 import { printCommandHelp } from "./lib/cli-output.js";
 import { getOptionValue } from "./lib/cli-options.js";
 
@@ -30,6 +32,13 @@ export async function runInstall(
   if (hasHelpFlag(rest)) {
     printInstallSubcommandHelp(command);
     return 0;
+  }
+
+  // Strict flag validation before any install work (#445).
+  if (
+    hasUnknownFlagsForSubcommands(INSTALL_SUBCOMMAND_FLAG_SPECS, command, rest)
+  ) {
+    return 1;
   }
 
   switch (command) {

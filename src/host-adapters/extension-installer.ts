@@ -1,8 +1,19 @@
 import { execFile } from "node:child_process";
-import { extname } from "node:path";
+// TYPE-only import (consistent-type-imports): `access` is used ONLY in the
+// `typeof access` type query below (never as a runtime value here, unlike
+// src/lib/preflight.ts where it is also passed as a default probe).
+// `typeof` on a type-only import is valid TypeScript in a TYPE position —
+// verified against tsc --strict (review).
+import type { access } from "node:fs/promises";
+import { extname, win32 } from "node:path";
 import { promisify } from "node:util";
 
-import { containsShellMetaCharacters } from "../lib/preflight.js";
+import {
+  buildWindowsPowerShellCommand,
+  containsShellMetaCharacters,
+  isWindowsShellWrapperPath,
+} from "../lib/windows-shell.js";
+import { findExecutableOnPath } from "../lib/preflight.js";
 import { getRuntimeConfig } from "../config/runtime.js";
 import type { AssetCatalogEntry } from "../types.js";
 
@@ -243,23 +254,39 @@ async function executeNativeCommand(
     platform,
   )) {
     try {
+      // Resolve wrapper candidates to their absolute PATH location BEFORE
+      // the executable-path metacharacter refusal and the PowerShell
+      // command: a bare name like `code.cmd` is PATH-resolved by cmd.exe
+      // only at invocation time, so a wrapper living under a cmd-expansion
+      // directory (e.g. C:\Tools\100% real\code.cmd) would bypass a
+      // name-only check (review).
       const hostCommandConfig = getRuntimeConfig().hostCommands;
-      const refusal = buildShellWrapperRefusal(
+      const resolvedExecutable = await resolveWrapperExecutable(
         candidateExecutable,
+        platform,
+      );
+      const refusal = buildShellWrapperRefusal(
+        resolvedExecutable,
         args,
         platform,
       );
       if (refusal) {
         return refusal;
       }
-      const runsThroughShell =
-        shouldRunCandidateThroughShell(candidateExecutable);
-      const result = await execFileAsync(candidateExecutable, args, {
-        shell: runsThroughShell,
-        windowsHide: true,
-        timeout: hostCommandConfig.nativeTimeoutMs,
-        maxBuffer: hostCommandConfig.nativeMaxBufferBytes,
-      });
+      const commandSpec = buildNativeCommandSpec(
+        resolvedExecutable,
+        args,
+        platform,
+      );
+      const result = await execFileAsync(
+        commandSpec.executable,
+        commandSpec.args,
+        {
+          windowsHide: true,
+          timeout: hostCommandConfig.nativeTimeoutMs,
+          maxBuffer: hostCommandConfig.nativeMaxBufferBytes,
+        },
+      );
       return {
         exitCode: 0,
         stdout: result.stdout,
@@ -278,17 +305,79 @@ async function executeNativeCommand(
   return toNativeCommandResult(lastError);
 }
 
-function shouldRunCandidateThroughShell(
+/**
+ * Returns the spawn spec for a native host command (#448): direct execution
+ * for regular executables, or a PowerShell single-quoted invocation for
+ * Windows .cmd/.bat wrappers. Node's `shell: true` option concatenates
+ * arguments unescaped (DEP0190) and cmd.exe re-parses the raw command line;
+ * PowerShell keeps every token a single-quoted literal, so no shell
+ * interpretation occurs and no deprecation warning is emitted. Callers must
+ * still run the fail-closed metacharacter refusal before executing.
+ */
+export function buildNativeCommandSpec(
+  executable: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+): { executable: string; args: string[] } {
+  if (!isWindowsShellWrapperPath(executable, platform)) {
+    return { executable, args };
+  }
+
+  return {
+    executable: "powershell.exe",
+    args: [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      buildWindowsPowerShellCommand(executable, args),
+    ],
+  };
+}
+
+/**
+ * Resolves a Windows shell-wrapper candidate to its absolute PATH
+ * location, or returns the candidate unchanged when it is not a wrapper,
+ * is already absolute, or cannot be found (the invocation then fails with
+ * ENOENT exactly like today).
+ *
+ * Exposed through {@link extensionInstallerInternals} so tests can pin the
+ * resolution→refusal and resolution→PowerShell-command chains on any
+ * platform with an injected env and an injected access probe (the
+ * composed win32-style candidates only exist on a real Windows
+ * filesystem otherwise).
+ */
+export async function resolveWrapperExecutable(
   candidateExecutable: string,
   platform: NodeJS.Platform = process.platform,
-): boolean {
-  const extension = extname(candidateExecutable).toLowerCase();
-  return platform === "win32" && (extension === ".cmd" || extension === ".bat");
+  options: { env?: NodeJS.ProcessEnv; accessPath?: typeof access } = {},
+): Promise<string> {
+  if (!isWindowsShellWrapperPath(candidateExecutable, platform)) {
+    return candidateExecutable;
+  }
+  // The wrapper gate above already implies `platform === "win32"` (wrapper
+  // paths are a Windows concept), so the absolute check is strictly the
+  // win32 form — no platform ternary, no dead branch.
+  if (win32.isAbsolute(candidateExecutable)) {
+    return candidateExecutable;
+  }
+  const resolved = await findExecutableOnPath(candidateExecutable, {
+    platform,
+    env: options.env,
+    accessPath: options.accessPath,
+  });
+  return resolved ?? candidateExecutable;
 }
 
 /**
  * Returns the fail-closed refusal for a Windows shell wrapper invoked with
  * shell-metacharacter arguments, or null when the command is safe to run.
+ *
+ * The executable path checked here MUST be the RESOLVED absolute location
+ * (see {@link resolveWrapperExecutable}) — a bare name has no path
+ * metacharacters by definition, while cmd.exe sees the expanded path at
+ * invocation time.
  *
  * Extracted from {@link executeNativeCommand} so the refusal payload is
  * exercised on every platform: the guard is parameterized by platform,
@@ -298,19 +387,24 @@ function shouldRunCandidateThroughShell(
  * raw command line, so quoting cannot make it safe).
  */
 export function buildShellWrapperRefusal(
-  candidateExecutable: string,
+  executablePath: string,
   args: string[],
   platform: NodeJS.Platform = process.platform,
 ): { exitCode: number; stdout: string; stderr: string } | null {
   if (
-    shouldRunCandidateThroughShell(candidateExecutable, platform) &&
-    args.some(containsShellMetaCharacters)
+    isWindowsShellWrapperPath(executablePath, platform) &&
+    (args.some(containsShellMetaCharacters) ||
+      // The resolved executable path itself can carry cmd-expansion
+      // characters (a PATH directory named e.g. "100% real") that cmd.exe
+      // would re-parse inside the wrapper invocation (S1 hardening,
+      // review: checked against the RESOLVED path).
+      containsShellMetaCharacters(executablePath))
   ) {
     return {
       exitCode: Number.MAX_SAFE_INTEGER,
       stdout: "",
       stderr:
-        "Refusing to run Windows shell wrapper with shell-metacharacter arguments. Extension ids must match the strict VS Code pattern.",
+        "Refusing to run Windows shell wrapper with shell-metacharacter arguments or executable path. Extension ids must match the strict VS Code pattern.",
     };
   }
 
@@ -368,9 +462,10 @@ function quoteFormattedCommand(value: string): string {
  */
 export const extensionInstallerInternals = {
   buildExecutableCandidates,
+  buildNativeCommandSpec,
   buildShellWrapperRefusal,
   executeNativeCommand,
   formatCommand,
-  shouldRunCandidateThroughShell,
+  resolveWrapperExecutable,
   toNativeCommandResult,
 };

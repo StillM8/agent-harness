@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { preflightInternals } from "../lib/preflight.js";
+import { restoreEnvVar } from "./env-test-utils.js";
 import {
   buildExtensionInstallActions,
   buildVsCodeExtensionInstallActions,
@@ -192,6 +193,168 @@ void test("PowerShell wrapper command quotes hostile arguments as literals", () 
   assert.equal(roundTrip, "& 'fake.exe' 'a&b' 'x|y' 'a;b'");
 });
 
+void test("PowerShell wrapper specs invoke the VALIDATED resolved executable, not the bare command (review)", () => {
+  // A bare configured command (`code`) must never reach the PowerShell
+  // command string: PowerShell would re-resolve it through PATH and could
+  // pick a different wrapper than the one buildWrapperRefusal /
+  // isWindowsShellWrapperPath validated against.
+  const spec = preflightInternals.buildRuntimeCommandSpawnSpec({
+    executable: "code",
+    resolvedExecutable: "C:\\Users\\me\\AppData\\Local\\Programs\\code.cmd",
+    args: ["--version"],
+    platform: "win32",
+  });
+  assert.equal(spec.executable, "powershell.exe");
+  const command = spec.args[spec.args.length - 1] ?? "";
+  assert.ok(
+    command.includes(
+      "& 'C:\\Users\\me\\AppData\\Local\\Programs\\code.cmd' '--version'",
+    ),
+    `PowerShell must invoke the resolved wrapper path, got: ${command}`,
+  );
+  assert.equal(
+    command.includes("'code' '--version'"),
+    false,
+    "the bare configured name must never reach the PowerShell command",
+  );
+});
+
+void test(
+  "wrapper candidates resolve to absolute PATH locations BEFORE the executable-path metachar refusal (review)",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const tempRoot = await mkdtemp(
+      join(tmpdir(), "agent-harness-ext-resolve-meta-"),
+    );
+    try {
+      // A wrapper living under a cmd-expansion directory: the bare name
+      // `code.cmd` has no metacharacters, but cmd.exe sees the expanded
+      // path at invocation time — the refusal must run against the
+      // RESOLVED location (review). Real-PATH integration: the
+      // win32-style composed candidates only exist on a Windows
+      // filesystem, so this end-to-end probe is win32-gated like its
+      // sibling; the resolution→refusal chain is unit-pinned on every
+      // platform in the cross-platform test below.
+      const hostileDir = join(tempRoot, "100% real");
+      await mkdir(hostileDir, { recursive: true });
+      await writeFile(join(hostileDir, "code.cmd"), "@echo off\r\n", "utf8");
+
+      const previousPath = process.env.PATH;
+      process.env.PATH = hostileDir;
+      try {
+        const result = await extensionInstallerInternals.executeNativeCommand(
+          "code.cmd",
+          ["--version"],
+          "win32",
+        );
+        assert.equal(
+          result.exitCode,
+          Number.MAX_SAFE_INTEGER,
+          "a wrapper resolved under a cmd-expansion directory must be refused",
+        );
+        assert.match(result.stderr, /Refusing/u);
+      } finally {
+        restoreEnvVar("PATH", previousPath);
+      }
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+void test("wrapper resolution feeds the refusal and the PowerShell command with the RESOLVED absolute path (review)", async () => {
+  // Deterministic on every platform: the env supplies WIN32-STYLE PATH
+  // entries and the access probe pretends the composed candidate exists
+  // (a real Windows filesystem is not required).
+  const internal = extensionInstallerInternals;
+  const accessOk = async () => {};
+
+  const resolvedClean = await internal.resolveWrapperExecutable(
+    "code.cmd",
+    "win32",
+    {
+      env: { PATH: "C:\\Tools\\clean-tools" },
+      accessPath: accessOk,
+    },
+  );
+  assert.equal(
+    resolvedClean,
+    "C:\\Tools\\clean-tools\\code.cmd",
+    "the bare wrapper name must resolve to its absolute PATH location",
+  );
+
+  const spec = internal.buildNativeCommandSpec(
+    resolvedClean,
+    ["--version"],
+    "win32",
+  );
+  assert.equal(spec.executable, "powershell.exe");
+  const command = spec.args[spec.args.length - 1] ?? "";
+  assert.ok(
+    command.includes("& 'C:\\Tools\\clean-tools\\code.cmd' '--version'"),
+    `the PowerShell command must invoke the resolved absolute path, got: ${command}`,
+  );
+  assert.equal(
+    command.includes("'code.cmd' '--version'"),
+    false,
+    "the bare candidate name must never reach the PowerShell command",
+  );
+
+  // A wrapper resolving under a cmd-expansion directory must hit the
+  // executable-path metacharacter refusal — unit-composed on any OS.
+  const resolvedHostile = await internal.resolveWrapperExecutable(
+    "code.cmd",
+    "win32",
+    {
+      env: { PATH: "C:\\Tools\\100% real" },
+      accessPath: accessOk,
+    },
+  );
+  assert.equal(
+    resolvedHostile,
+    "C:\\Tools\\100% real\\code.cmd",
+    "resolution must surface the cmd-expansion directory",
+  );
+  const refusal = internal.buildShellWrapperRefusal(
+    resolvedHostile,
+    ["--version"],
+    "win32",
+  );
+  assert.notEqual(refusal, null);
+  assert.equal(
+    refusal?.exitCode,
+    Number.MAX_SAFE_INTEGER,
+    "a wrapper resolved under a cmd-expansion directory must be refused",
+  );
+  assert.match(refusal?.stderr ?? "", /Refusing/u);
+
+  assert.equal(
+    await internal.resolveWrapperExecutable("code.cmd", "win32", {
+      env: { PATH: "C:\\Tools\\missing" },
+      accessPath: async () => {
+        throw new Error("ENOENT");
+      },
+    }),
+    "code.cmd",
+    "an unresolvable wrapper name falls back to the raw candidate (ENOENT at execution, like today)",
+  );
+  assert.equal(
+    await internal.resolveWrapperExecutable("C:\\Tools\\cli.cmd", "win32"),
+    "C:\\Tools\\cli.cmd",
+    "an already-absolute wrapper path is returned unchanged",
+  );
+  assert.equal(
+    await internal.resolveWrapperExecutable("/opt/tools/cli.cmd", "linux"),
+    "/opt/tools/cli.cmd",
+    "wrapper paths are a Windows concept: non-win32 platforms return the candidate unchanged via the wrapper gate",
+  );
+  assert.equal(
+    await internal.resolveWrapperExecutable("node", "linux"),
+    "node",
+    "non-wrapper candidates are never resolved",
+  );
+});
+
 // ---------------------------------------------------------------------------
 // End-to-end: spawned runtime commands preserve hostile argv verbatim
 // ---------------------------------------------------------------------------
@@ -335,22 +498,22 @@ void test("shell-metacharacter detection covers every cmd.exe interpretation", (
     "--flag=value",
     "a;b",
     "",
-  ].filter((value) => !preflightInternals.containsShellMetaCharacters(value));
-  assert.deepEqual(
-    safeArguments,
-    [
-      "--version",
-      "plain",
-      "has spaces",
-      "single'quote",
-      "dot.star_plus-dash",
-      "a/b",
-      "--flag=value",
-      "a;b",
-      "",
-    ],
-    "safe arguments (including semicolons) must pass the metacharacter guard",
-  );
+  ];
+  // Independent oracle (G3): validate each safe value against a separate
+  // hostile-character pattern, not against the function under test, so a
+  // regression in the detection itself cannot pass by construction.
+  for (const value of safeArguments) {
+    assert.equal(
+      containsEveryMetaCharacter(value),
+      false,
+      `oracle: ${JSON.stringify(value)} must be metachar-free`,
+    );
+    assert.equal(
+      preflightInternals.containsShellMetaCharacters(value),
+      false,
+      `guard: ${JSON.stringify(value)} must pass the metacharacter guard`,
+    );
+  }
 
   assert.equal(
     preflightInternals.isWindowsShellWrapperPath(
@@ -459,6 +622,99 @@ void test(
         "a shell wrapper must never be invoked with metacharacter arguments",
       );
     } finally {
+      await rm(tempRoot, { force: true, recursive: true });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Extension installer: shell-free PowerShell wrapper execution (#448)
+// ---------------------------------------------------------------------------
+
+void test("extension installer builds shell-free PowerShell specs for .cmd wrappers on every platform (#448)", () => {
+  const spec = extensionInstallerInternals.buildNativeCommandSpec(
+    "C:\\Tools\\cli.cmd",
+    ["--flag=has space", "a'b", "a&b"],
+    "win32",
+  );
+
+  assert.deepEqual(
+    spec,
+    {
+      executable: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "& 'C:\\Tools\\cli.cmd' '--flag=has space' 'a''b' 'a&b'",
+      ],
+    },
+    "wrapper execution must be a single-quoted PowerShell literal command — no shell:true concatenation (DEP0190)",
+  );
+  // The spawn spec carries no `shell` option; execFile defaults to
+  // shell:false, so Node never emits DEP0190 for wrapper invocations.
+  assert.equal(Object.hasOwn(spec, "shell"), false);
+  assert.deepEqual(
+    extensionInstallerInternals.buildNativeCommandSpec(
+      "C:\\Tools\\cli.exe",
+      ["--version"],
+      "win32",
+    ),
+    { executable: "C:\\Tools\\cli.exe", args: ["--version"] },
+    "non-wrapper executables keep direct execution",
+  );
+});
+
+void test(
+  "extension installer .cmd wrapper round-trips safe arguments verbatim without DEP0190 (#448)",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const tempRoot = await mkdtemp(
+      join(tmpdir(), "agent-harness-ext-installer-cmd-"),
+    );
+    const envKey = "AGENT_HARNESS_ARGV_ECHO_STATE";
+    const originalEnvValue = process.env[envKey];
+    try {
+      const scriptPath = await createArgvEchoFixture(tempRoot);
+      const statePath = join(tempRoot, "argv-state.json");
+      const binDir = join(tempRoot, "bin");
+      await mkdir(binDir, { recursive: true });
+      const wrapperPath = join(binDir, "fake-ext.cmd");
+      await writeFile(
+        wrapperPath,
+        `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`,
+        "utf8",
+      );
+      process.env[envKey] = statePath;
+
+      const safeArgs = ["--install-extension", "github.copilot", "--force"];
+      const result = await extensionInstallerInternals.executeNativeCommand(
+        wrapperPath,
+        safeArgs,
+      );
+
+      assert.equal(
+        result.exitCode,
+        0,
+        `wrapper invocation must succeed, got: ${result.stderr}`,
+      );
+      assert.equal(
+        result.stderr.includes("DEP0190"),
+        false,
+        "no shell:true deprecation warning may reach stderr",
+      );
+      const received = JSON.parse(
+        await readFile(statePath, "utf8"),
+      ) as string[];
+      assert.deepEqual(
+        received,
+        safeArgs,
+        "safe wrapper arguments must survive the PowerShell literal round-trip verbatim",
+      );
+    } finally {
+      restoreEnvVar(envKey, originalEnvValue);
       await rm(tempRoot, { force: true, recursive: true });
     }
   },

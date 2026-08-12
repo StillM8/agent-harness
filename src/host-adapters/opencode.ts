@@ -18,6 +18,7 @@ import {
 import { assertWirePlanManifest } from "../manifest-validation.js";
 import { sanitizeAssetId } from "../lib/safe-paths.js";
 import { readSharedMcpAssetIds } from "../lib/shared-mcp.js";
+import { captureManagedTextFileSnapshots } from "./native-utils.js";
 import {
   applyHostNativeFilePayloads,
   collectHostNativeFilePayloads,
@@ -181,6 +182,26 @@ export async function wireOpenCode(options: {
   );
 
   const createdLinkPaths: string[] = [];
+  // On re-apply the managed content written by the previous apply is still
+  // present. Two constraints: (a) the fresh snapshot must record the TRUE
+  // pre-apply state (so reset removes/restores adapter-owned content, not
+  // itself — #447), and (b) user edits made BETWEEN applies must survive
+  // (restoring the previous plan's snapshot over the current files would
+  // silently delete them — review). So strip ONLY adapter-owned content
+  // from the current files (the marked AGENTS.md section; the gitignore
+  // entries THIS plan added — never a user's pre-existing required entry)
+  // before capturing.
+  if (previousWirePlan !== null && previousWirePlan !== undefined) {
+    await removeManagedAgentsSection(localAgentsPath);
+    await stripOpenCodeOverlayGitignoreEntries(
+      gitignorePath,
+      inferOpenCodeGitignoreOwnedEntries(
+        previousWirePlan,
+        gitignorePath,
+        OPENCODE_OVERLAY_GITIGNORE_REQUIRED_ENTRIES,
+      ),
+    );
+  }
   // Snapshot both AGENTS.md and .opencode/.gitignore before mutating them so
   // that wire --reset can restore either file to its pre-apply state.
   // gitignorePath is already declared above (used for allowedTextFilePaths).
@@ -212,7 +233,8 @@ export async function wireOpenCode(options: {
     // Ensure .opencode/.gitignore lists node_modules (and other npm artefacts)
     // so that OpenCode's overlay scanner skips them and does not emit OVERLAY:
     // lines for the ~800 files that npm install writes into .opencode/.
-    await ensureOpenCodeOverlayGitignore(workspaceRoot);
+    const ownedGitignoreEntries =
+      await ensureOpenCodeOverlayGitignore(workspaceRoot);
 
     const npmInstallSummary =
       await readOpenCodeNpmInstallSummary(workspaceRoot);
@@ -227,6 +249,7 @@ export async function wireOpenCode(options: {
       mcpServers: sharedMcpAssetIds,
       nativeConfigOperations,
       textFileSnapshots,
+      gitignoreOwnedEntries: [...ownedGitignoreEntries],
       ...(npmInstallSummary !== null ? { npmInstallSummary } : {}),
       notes: [
         "Project-local OpenCode overlay written under .opencode/context/project-intelligence/agent-harness.",
@@ -254,27 +277,37 @@ export async function wireOpenCode(options: {
 }
 
 /**
+ * Entries the harness owns in `.opencode/.gitignore` (npm install artefacts
+ * that must be excluded from OpenCode overlay scanning). Shared by the
+ * ensure (upsert) and strip (re-apply/ownership) paths so the two always
+ * agree on what counts as adapter-owned.
+ */
+const OPENCODE_OVERLAY_GITIGNORE_REQUIRED_ENTRIES = [
+  "node_modules",
+  "package-lock.json",
+  "bun.lockb",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+] as const;
+
+/**
  * Idempotently writes `.opencode/.gitignore` so OpenCode's overlay scanner
  * skips npm-install artefacts (node_modules, package-lock.json, etc.).
  * If the file already exists and already contains all required entries,
  * it is left untouched.  Otherwise it is created / updated in place.
+ *
+ * Returns the entries THIS call added (empty when nothing was missing) so
+ * the wire plan can record exact harness ownership for later strips.
  *
  * This must be called during `wire --apply` so the gitignore is present
  * before OpenCode starts and begins enumerating its overlay directory.
  */
 async function ensureOpenCodeOverlayGitignore(
   workspaceRoot: string,
-): Promise<void> {
+): Promise<readonly string[]> {
   // Entries to exclude from OpenCode overlay scanning (npm install artefacts).
   // The .gitignore itself is excluded by the overlay scanner by default — entries
   // here target package-manager lockfiles and the node_modules directory.
-  const REQUIRED_ENTRIES = [
-    "node_modules",
-    "package-lock.json",
-    "bun.lockb",
-    "yarn.lock",
-    "pnpm-lock.yaml",
-  ] as const;
 
   const gitignorePath = join(workspaceRoot, ".opencode", ".gitignore");
   const existing = (await readTextFileOrNull(gitignorePath)) ?? "";
@@ -285,11 +318,11 @@ async function ensureOpenCodeOverlayGitignore(
       .filter((line) => line.length > 0 && !line.startsWith("#")),
   );
 
-  const missing = REQUIRED_ENTRIES.filter(
+  const missing = OPENCODE_OVERLAY_GITIGNORE_REQUIRED_ENTRIES.filter(
     (entry) => !existingEntries.has(entry),
   );
   if (missing.length === 0) {
-    return;
+    return [];
   }
 
   await ensureDirectory(join(workspaceRoot, ".opencode"));
@@ -302,6 +335,86 @@ async function ensureOpenCodeOverlayGitignore(
       : preamble + "\n" + additions + "\n";
 
   await writeTextFile(gitignorePath, next);
+  return missing;
+}
+
+/**
+ * Resolves the gitignore entries a previous apply OWNS for strip purposes.
+ *
+ * Preference order:
+ * 1. `gitignoreOwnedEntries` recorded by current plans — exact ownership.
+ * 2. Plans from before that field existed: infer from the previous plan's
+ *    .opencode/.gitignore text snapshot. A NULL baseline means the file
+ *    did not exist before the previous apply, so every required entry now
+ *    present was harness-added. A NON-NULL baseline means only the
+ *    required entries missing from the baseline were added — a user's
+ *    pre-existing `node_modules` (or any other required line) is theirs.
+ * 3. No snapshot entry at all: ownership cannot be inferred. Skip
+ *    stripping (empty set) — over-preservation never deletes user lines,
+ *    and the next apply records exact ownership going forward (review).
+ */
+function inferOpenCodeGitignoreOwnedEntries(
+  previousWirePlan: WirePlanManifest,
+  gitignorePath: string,
+  requiredEntries: readonly string[],
+): ReadonlySet<string> {
+  if (previousWirePlan.gitignoreOwnedEntries !== undefined) {
+    return new Set(previousWirePlan.gitignoreOwnedEntries);
+  }
+
+  const baseline = previousWirePlan.textFileSnapshots?.find(
+    (entry) => entry.path === toPosixPath(gitignorePath),
+  );
+  if (baseline === undefined) {
+    return new Set<string>();
+  }
+  if (baseline.content === null) {
+    return new Set(requiredEntries);
+  }
+
+  const baselineEntries = new Set(
+    baseline.content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith("#")),
+  );
+  return new Set(
+    requiredEntries.filter((entry) => !baselineEntries.has(entry)),
+  );
+}
+
+/**
+ * Removes ONLY the harness-owned entries recorded in the previous wire
+ * plan from `.opencode/.gitignore`, preserving every user line — including
+ * a user's own pre-existing `node_modules` (or any other required entry)
+ * — and the file itself when anything user-authored remains (review).
+ *
+ * Re-apply calls this BEFORE capturing the reset snapshot: the previous
+ * apply's entries are still present and must not be recorded as
+ * pre-apply state (#447), while user edits made between applies must
+ * survive the re-apply.
+ */
+async function stripOpenCodeOverlayGitignoreEntries(
+  gitignorePath: string,
+  ownedEntries: ReadonlySet<string>,
+): Promise<void> {
+  const existing = await readTextFileOrNull(gitignorePath);
+  if (existing === null) {
+    return;
+  }
+  const kept = existing
+    .split(/\r?\n/)
+    .filter((line) => !ownedEntries.has(line.trim()));
+  const next = kept.join("\n");
+  if (next.trim().length === 0) {
+    // The file was adapter-created (only owned entries); reset semantics
+    // then record it as ABSENT so wire --reset removes it.
+    await removePath(gitignorePath);
+    return;
+  }
+  if (next !== existing) {
+    await writeTextFile(gitignorePath, next);
+  }
 }
 
 /**
@@ -918,21 +1031,6 @@ function isPathWithinRoot(pathValue: string, rootPath: string): boolean {
     relativePath === "" ||
     (!relativePath.startsWith("..") && !isAbsolute(relativePath))
   );
-}
-
-async function captureManagedTextFileSnapshots(
-  paths: string[],
-): Promise<ManagedTextFileSnapshot[]> {
-  const snapshots: ManagedTextFileSnapshot[] = [];
-
-  for (const filePath of paths) {
-    snapshots.push({
-      path: toPosixPath(filePath),
-      content: await readTextFileOrNull(filePath),
-    });
-  }
-
-  return snapshots;
 }
 
 async function restoreManagedTextFileSnapshot(

@@ -18,12 +18,90 @@ import type {
 import type { DemandContext, DemandTermContext } from "./model.js";
 
 /**
+ * Tokens that carry no package identity: they appear in package names of
+ * every ecosystem (node-api, @scope/js, -cli, -core, …) and therefore cannot
+ * distinguish a declared dependency from a coincidental token in an
+ * unrelated asset (#444). Kept deliberately small and ecosystem-neutral.
+ */
+const PACKAGE_IDENTITY_STOPWORD_TOKENS = new Set([
+  "api",
+  "cli",
+  "core",
+  "extension",
+  "extensions",
+  "js",
+  "kit",
+  "lib",
+  "libs",
+  "node",
+  "plugin",
+  "plugins",
+  "sdk",
+  "tool",
+  "tools",
+  "ts",
+  "ui",
+  "util",
+  "utils",
+]);
+
+/**
+ * Computes the distinctive identity tokens of a package-manifest entry
+ * (`npm:@scope/name`, `pypi:pkg`, …): the scope name plus the bare package
+ * name's tokens, minus generic package-noise tokens. Returns undefined for
+ * values that are not package entries. `@duckdb/node-api` → {duckdb},
+ * `npm:c8` → {c8}, `pypi:duckdb` → {duckdb}.
+ */
+function buildPackageIdentityTokens(
+  value: string,
+): ReadonlySet<string> | undefined {
+  const manifestEntry = extractPackageManifestEntry(value);
+  if (manifestEntry === null) {
+    return undefined;
+  }
+  const identityTokens = new Set<string>();
+  for (const token of manifestEntry
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .filter((part) => part.length > 1)) {
+    if (!PACKAGE_IDENTITY_STOPWORD_TOKENS.has(token)) {
+      identityTokens.add(token);
+    }
+  }
+  return identityTokens.size === 0 ? undefined : identityTokens;
+}
+
+/**
+ * Default multiplier applied to a matched signal's weight when the asset's
+ * CURATED IDENTITY contains a declared dependency's package-identity token
+ * (review, #443/#444): the strongest possible demand match — the workspace
+ * declares `@duckdb/node-api` and the asset IS the official duckdb skill —
+ * must outrank merely-exact-stack tiles. Configurable per-workspace through
+ * `policy.scoring.identityMatchMultiplier`.
+ */
+export const DEFAULT_IDENTITY_MATCH_MULTIPLIER = 4;
+
+/**
  * Collects matched signals from the provided inputs.
+ *
+ * @param assetTermStrength - Optional per-asset provenance map (term →
+ *   strength class of the asset content that produced it). When provided,
+ *   the reported evidence fields describe evidence ABOUT THE ASSET (how many
+ *   of the asset's own terms hit the demand term, and their provenance
+ *   strength) instead of the workspace's demand-side evidence (#444). The
+ *   match weight still reflects demand intensity.
+ * @param assetIdentityTerms - Optional curated-identity term set
+ *   (id/displayName/manifest entry only). When provided, a demand term whose
+ *   declared-package identity tokens appear in the asset's curated identity
+ *   receives the identity-match multiplier — declared-dependency identity is
+ *   the strongest match class (review).
  */
 export function collectMatchedSignals(
   searchTerms: Set<string>,
   demandContext: DemandContext,
   policy: RecommendationPolicy,
+  assetTermStrength?: ReadonlyMap<string, DemandEvidenceStrength>,
+  assetIdentityTerms?: ReadonlySet<string>,
 ): RecommendationSignalMatch[] {
   return demandContext.terms
     .filter((term) => intersects(searchTerms, term.matchTerms))
@@ -36,20 +114,86 @@ export function collectMatchedSignals(
         weightedEvidenceCount;
       const termMultiplier =
         policy.scoring.demandTermMultipliers[term.canonicalTerm] ?? 1;
+      const identityMatch =
+        assetIdentityTerms !== undefined &&
+        term.packageIdentityTokens !== undefined &&
+        intersects(assetIdentityTerms, term.packageIdentityTokens);
+      const identityMultiplier = identityMatch
+        ? (policy.scoring.identityMatchMultiplier ??
+          DEFAULT_IDENTITY_MATCH_MULTIPLIER)
+        : 1;
+      const assetEvidence = computeAssetSideEvidence(
+        searchTerms,
+        term.matchTerms,
+        assetTermStrength,
+      );
 
       return {
         term: term.canonicalTerm,
         signalType: term.signalType,
-        weight: Math.max(1, Math.round(baseWeight * termMultiplier)),
-        evidenceCount: term.evidenceCount,
-        weightedEvidenceCount,
-        evidenceStrengthCounts: { ...term.evidenceStrengthCounts },
+        weight: Math.max(
+          1,
+          Math.round(baseWeight * termMultiplier * identityMultiplier),
+        ),
+        evidenceCount: assetEvidence.evidenceCount,
+        weightedEvidenceCount: assetEvidence.weightedEvidenceCount,
+        evidenceStrengthCounts: assetEvidence.evidenceStrengthCounts,
       };
     })
     .sort(
       (left, right) =>
         right.weight - left.weight || left.term.localeCompare(right.term),
     );
+}
+
+/**
+ * Computes the asset-side evidence record for one demand-term match:
+ * how many of the asset's own search terms hit the demand term, and the
+ * provenance-strength histogram of those hits (#444). Without a provenance
+ * map the histogram is left undefined and evidenceCount is the raw hit
+ * count — both are asset-side facts, never workspace evidence.
+ */
+function computeAssetSideEvidence(
+  searchTerms: Set<string>,
+  matchTerms: ReadonlySet<string>,
+  assetTermStrength: ReadonlyMap<string, DemandEvidenceStrength> | undefined,
+): {
+  evidenceCount: number;
+  weightedEvidenceCount?: number;
+  evidenceStrengthCounts?: Record<DemandEvidenceStrength, number>;
+} {
+  const hitTerms: string[] = [];
+  for (const term of searchTerms) {
+    if (matchTerms.has(term)) {
+      hitTerms.push(term);
+    }
+  }
+  if (assetTermStrength === undefined || hitTerms.length === 0) {
+    return {
+      evidenceCount: hitTerms.length,
+      weightedEvidenceCount: undefined,
+      evidenceStrengthCounts: undefined,
+    };
+  }
+
+  const counts: Record<DemandEvidenceStrength, number> = {
+    strong: 0,
+    medium: 0,
+    weak: 0,
+  };
+  for (const term of hitTerms) {
+    const strength = assetTermStrength.get(term);
+    if (strength === undefined) {
+      counts.weak += 1;
+    } else {
+      counts[strength] += 1;
+    }
+  }
+  return {
+    evidenceCount: hitTerms.length,
+    weightedEvidenceCount: computeWeightedEvidenceCount(counts),
+    evidenceStrengthCounts: counts,
+  };
 }
 
 /**
@@ -67,6 +211,7 @@ export function buildDemandContext(
     ? (sessionIntents as readonly SessionIntent[])
     : [sessionIntents as SessionIntent];
   const demandTermMap = new Map<string, DemandTermContext>();
+  const packageIdentityByTerm = new Map<string, ReadonlySet<string>>();
   const synonymLookup = buildSynonymLookup(policy);
 
   const registerTerm = (
@@ -77,6 +222,17 @@ export function buildDemandContext(
     const canonicalTerm = canonicalizePhrase(rawTerm, policy, synonymLookup);
     const key = `${signalType}:${canonicalTerm}`;
     const matchTerms = buildSearchTerms([rawTerm], policy, synonymLookup);
+    const packageIdentityTokens = buildPackageIdentityTokens(rawTerm);
+    // First-wins per canonical term, mirroring the term-record guard below:
+    // every consumer of `packageIdentityByTerm` must see the SAME initial
+    // package identity a canonical term was registered with, regardless of
+    // later evidence order or signal-type keys (review).
+    if (
+      packageIdentityTokens !== undefined &&
+      !packageIdentityByTerm.has(canonicalTerm)
+    ) {
+      packageIdentityByTerm.set(canonicalTerm, packageIdentityTokens);
+    }
     const existing = demandTermMap.get(key);
 
     if (existing) {
@@ -84,6 +240,12 @@ export function buildDemandContext(
       existing.evidenceStrengthCounts[evidenceStrength] += 1;
       for (const matchTerm of matchTerms) {
         existing.matchTerms.add(matchTerm);
+      }
+      if (
+        packageIdentityTokens !== undefined &&
+        existing.packageIdentityTokens === undefined
+      ) {
+        existing.packageIdentityTokens = packageIdentityTokens;
       }
       return;
     }
@@ -96,6 +258,7 @@ export function buildDemandContext(
       evidenceStrengthCounts:
         createEmptyEvidenceStrengthCounts(evidenceStrength),
       matchTerms,
+      packageIdentityTokens,
     });
   };
 
@@ -129,6 +292,7 @@ export function buildDemandContext(
     packageManifestEntries: demandProfile
       ? buildPackageManifestEntrySet(demandProfile)
       : new Set<string>(),
+    packageIdentityByTerm,
     demandKeywords: buildDemandKeywordSet(
       demandProfile,
       policy,
@@ -275,6 +439,15 @@ function computeWeightedEvidenceCount(
 
   return 0;
 }
+
+/**
+ * Exposes narrow recommend-signals internals for focused tests — the
+ * weighted-evidence computation is the single source of truth for expected
+ * match weights, so tests must never hardcode the bucket value (review).
+ */
+export const recommendSignalsInternals = {
+  computeWeightedEvidenceCount,
+};
 
 function buildActiveDomainGroups(
   terms: DemandTermContext[],
@@ -549,7 +722,10 @@ export function normalizePhrase(value: string): string {
   return normalized;
 }
 
-function intersects(left: Set<string>, right: Set<string>): boolean {
+function intersects(
+  left: ReadonlySet<string>,
+  right: ReadonlySet<string>,
+): boolean {
   for (const value of left) {
     if (right.has(value)) {
       return true;

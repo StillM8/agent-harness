@@ -191,6 +191,19 @@ export async function fetchRequiredText(
 }
 
 /**
+ * Describes an HTTP request override for JSON fetches: the method, a
+ * serialized body, and headers merged over the standard source-sync headers.
+ */
+export interface SourceSyncJsonRequest {
+  /** HTTP method; left undefined when no body is present, defaults to POST when a body is provided. */
+  method?: "GET" | "POST";
+  /** Serialized request body (e.g. a JSON search payload). */
+  body?: string;
+  /** Extra headers merged over the standard source-sync headers (any HeadersInit form). */
+  headers?: HeadersInit;
+}
+
+/**
  * Fetches the URL as parsed JSON with retry-on-transient-failure.
  * Throws when all retry attempts are exhausted or the request hits a
  * non-transient failure.
@@ -199,16 +212,30 @@ export async function fetchRequiredJson(
   url: string,
   allowedOrigins: readonly string[],
   options: SourceSyncFetchOptions = {},
+  request: SourceSyncJsonRequest = {},
 ): Promise<unknown> {
+  // Normalize custom headers through the Headers API so Headers objects,
+  // pair arrays, and records merge uniformly over the base set (review).
+  const headers = new Headers(SOURCE_SYNC_HEADERS);
+  for (const [name, value] of new Headers(request.headers ?? {})) {
+    headers.set(name, value);
+  }
   return fetchWithRetry(
     url,
     async () =>
       requireNonNull(
         await fetchJsonWithGuards(url, {
           allowedOrigins,
-          headers: SOURCE_SYNC_HEADERS,
+          headers,
           maxBytes: options.maxBytes ?? SOURCE_SYNC_FETCH_MAX_BYTES,
           timeoutMs: options.timeoutMs ?? SOURCE_SYNC_TIMEOUT_MS,
+          // A body without an explicit method must default to POST (the
+          // Fetch spec forbids GET/HEAD with a body — including an empty
+          // string body); without a body the method stays undefined so
+          // fetch applies its natural GET default (review).
+          method:
+            request.method ?? (request.body !== undefined ? "POST" : undefined),
+          body: request.body,
         }),
         url,
       ),

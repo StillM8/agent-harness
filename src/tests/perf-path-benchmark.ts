@@ -31,6 +31,11 @@ import type {
 
 const BENCHMARK_CATALOG_SIZE = 1_000;
 const PATH_BUDGET_MS = 10_000;
+// Review: 10x catalog with a 60s budget — proves no quadratic blowup on the
+// selection/ranking hot path; linearity factor absorbs first-run caches.
+const SCALE_CATALOG_SIZE = 10_000;
+const SCALE_BUDGET_MS = 60_000;
+const SCALE_LINEARITY_FACTOR = 15;
 
 /** Builds a catalog entry that passes assertAssetCatalogEntry. */
 function buildCatalogEntry(index: number): AssetCatalogEntry {
@@ -207,6 +212,48 @@ async function main(): Promise<void> {
     );
     report.recommendations = recommendationReport.recommendations.length;
     report.recommendElapsedMs = Math.round(recommendElapsedMs);
+
+    // ------------------------------------------------------------------
+    // 10,000-entry scale case (review): selection/ranking is the O(n·m)-ish
+    // hot path; the 1,000-entry budget above proves the rate, this bounded
+    // run proves the full pipeline survives an order-of-magnitude larger
+    // pool without quadratic blowup (generous budget, hard non-empty guard).
+    // ------------------------------------------------------------------
+    const scaleEntries = Array.from(
+      { length: SCALE_CATALOG_SIZE },
+      (_, index) => buildCatalogEntry(index),
+    );
+    const scaleStartedAt = performance.now();
+    const scaleReport: RecommendationReport = buildRecommendationReport(
+      scaleEntries,
+      demandProfile,
+      policy,
+      "general",
+    );
+    const scaleElapsedMs = performance.now() - scaleStartedAt;
+    assert.ok(
+      scaleReport.recommendations.length > 0,
+      "scale recommend must rank at least one entry",
+    );
+    assert.ok(
+      scaleElapsedMs < SCALE_BUDGET_MS,
+      `scale recommend exceeded budget (${scaleElapsedMs}ms for ${SCALE_CATALOG_SIZE} entries)`,
+    );
+    // The 1K baseline is a rate gate, not a linearity denominator: when the
+    // baseline is tiny (fast machine, warm caches), the ratio `10K / 1K`
+    // is dominated by fixed overhead and would flag healthy runs as
+    // super-linear. The denominator is floored at a minimum baseline
+    // duration; the absolute 60s scale budget above remains the hard bound
+    // (review).
+    const MIN_LINEARITY_BASELINE_MS = 250;
+    assert.ok(
+      scaleElapsedMs <
+        Math.max(recommendElapsedMs, MIN_LINEARITY_BASELINE_MS) *
+          SCALE_LINEARITY_FACTOR,
+      `scale recommend looks super-linear: 1K=${Math.round(recommendElapsedMs)}ms, 10K=${Math.round(scaleElapsedMs)}ms (allow ${SCALE_LINEARITY_FACTOR}× for cache/GC noise)`,
+    );
+    report.scaleCatalogSize = SCALE_CATALOG_SIZE;
+    report.scaleRecommendElapsedMs = Math.round(scaleElapsedMs);
 
     // ------------------------------------------------------------------
     // activate: candidate selection under budget over 1,000 manifests

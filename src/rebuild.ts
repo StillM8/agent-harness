@@ -3,9 +3,11 @@ import { join } from "node:path";
 import {
   handleUnknownCommand,
   hasHelpFlag,
+  hasUnknownFlagsForSubcommands,
   printSubcommandHelp,
   type SubcommandHelpEntry,
 } from "./cli-help-format.js";
+import { REBUILD_SUBCOMMAND_FLAG_SPECS } from "./cli-flag-specs.js";
 import { getRuntimeConfig } from "./config/runtime.js";
 import { readJsonFileOrNull, removePath, toPosixPath } from "./files.js";
 import { runDiscover } from "./discover.js";
@@ -40,6 +42,13 @@ export async function runRebuild(
   if (hasHelpFlag(rest)) {
     printRebuildSubcommandHelp(command);
     return 0;
+  }
+
+  // Strict flag validation before any state removal (#445).
+  if (
+    hasUnknownFlagsForSubcommands(REBUILD_SUBCOMMAND_FLAG_SPECS, command, rest)
+  ) {
+    return 1;
   }
 
   switch (command) {

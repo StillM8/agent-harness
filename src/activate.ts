@@ -12,7 +12,13 @@ import {
   toPosixPath,
   writeJsonFile,
 } from "./files.js";
-import { handleUnknownCommand, hasHelpFlag } from "./cli-help-format.js";
+import {
+  handleUnknownCommand,
+  hasHelpFlag,
+  hasUnknownFlagsForSubcommands,
+  CliUsageError,
+} from "./cli-help-format.js";
+import { ACTIVATE_SUBCOMMAND_FLAG_SPECS } from "./cli-flag-specs.js";
 import { getOptionValue, getOptionValues } from "./lib/cli-options.js";
 import { parseSessionIntent } from "./lib/session-intent.js";
 import { isPathWithinRoot, sanitizeAssetId } from "./lib/safe-paths.js";
@@ -85,6 +91,13 @@ export async function runActivate(
   if (hasHelpFlag(rest)) {
     printActivateSubcommandHelp(command);
     return 0;
+  }
+
+  // Strict flag validation before any activation work (#445).
+  if (
+    hasUnknownFlagsForSubcommands(ACTIVATE_SUBCOMMAND_FLAG_SPECS, command, rest)
+  ) {
+    return 1;
   }
 
   switch (command) {
@@ -469,7 +482,10 @@ async function rollbackActivation(
   const generationId = getOptionValue(args, "--generation");
 
   if (!host || !generationId) {
-    throw new Error("rollback requires --host and --generation");
+    throw new CliUsageError(
+      "rollback requires --host and --generation",
+      "agent-harness activate rollback --help",
+    );
   }
 
   const generationPath = join(
@@ -480,7 +496,10 @@ async function rollbackActivation(
     `${generationId}.json`,
   );
   if (!(await pathExists(generationPath))) {
-    throw new Error(`generation not found: ${toPosixPath(generationPath)}`);
+    throw new CliUsageError(
+      `generation not found: ${toPosixPath(generationPath)}`,
+      "agent-harness activate rollback --help",
+    );
   }
 
   const generation = await readJsonFile<InstallGenerationManifest>(

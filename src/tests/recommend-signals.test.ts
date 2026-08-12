@@ -4,8 +4,17 @@ import test from "node:test";
 import {
   buildDemandContext,
   collectMatchedSignals,
+  DEFAULT_IDENTITY_MATCH_MULTIPLIER,
+  recommendSignalsInternals,
 } from "../recommend/signals.js";
+import {
+  buildCandidateRecommendation,
+  buildCandidateRecommendationBase,
+} from "../recommend/candidates.js";
+import type { DemandEvidenceStrength } from "../types/discovery.js";
+import type { DemandContext } from "../recommend/model.js";
 import type {
+  AssetCatalogEntry,
   DemandProfile,
   RecommendationHostPolicy,
   RecommendationPolicy,
@@ -69,10 +78,19 @@ void test("recommend signal weighting prefers strong evidence over repeated weak
 
   const policy = buildPolicy();
   const demandContext = buildDemandContext(profile, policy);
+  // Asset-side provenance (#444): the reported evidence fields describe the
+  // ASSET's own content that hit each demand term — never the workspace's
+  // demand-side evidence counts.
+  const assetTermStrength: ReadonlyMap<string, DemandEvidenceStrength> =
+    new Map([
+      ["apify", "strong"],
+      ["integration", "weak"],
+    ]);
   const matches = collectMatchedSignals(
     new Set(["apify", "integration"]),
     demandContext,
     policy,
+    assetTermStrength,
   );
 
   const apifyMatch = matches.find((match) => match.term === "apify");
@@ -82,20 +100,34 @@ void test("recommend signal weighting prefers strong evidence over repeated weak
 
   assert.ok(apifyMatch);
   assert.ok(integrationMatch);
+  // One asset-side term hit per demand term, weighted by the asset's own
+  // provenance strength.
+  assert.equal(apifyMatch.evidenceCount, 1);
   assert.equal(apifyMatch.weightedEvidenceCount, 3);
   assert.deepEqual(apifyMatch.evidenceStrengthCounts, {
     strong: 1,
     medium: 0,
     weak: 0,
   });
-  assert.equal(integrationMatch.evidenceCount, 2);
+  assert.equal(integrationMatch.evidenceCount, 1);
   assert.equal(integrationMatch.weightedEvidenceCount, 1);
   assert.deepEqual(integrationMatch.evidenceStrengthCounts, {
     strong: 0,
     medium: 0,
-    weak: 2,
+    weak: 1,
   });
   assert.ok(apifyMatch.weight > integrationMatch.weight);
+
+  // Without a provenance map the histogram is deliberately absent — no
+  // demand-side evidence may leak into an asset's match record (#444).
+  const unprovenanced = collectMatchedSignals(
+    new Set(["apify"]),
+    demandContext,
+    policy,
+  );
+  assert.equal(unprovenanced[0]?.evidenceCount, 1);
+  assert.equal(unprovenanced[0]?.weightedEvidenceCount, undefined);
+  assert.equal(unprovenanced[0]?.evidenceStrengthCounts, undefined);
 });
 
 void test("recommend demand context normalizes broader manifest prefixes", () => {
@@ -121,6 +153,121 @@ void test("recommend demand context normalizes broader manifest prefixes", () =>
 
   assert.ok(demandContext.packageManifestEntries.has("com-example-android"));
   assert.ok(demandContext.packageManifestEntries.has("afnetworking"));
+});
+
+void test("recommend demand context upgrades a bare-name term with package identity when the manifest form arrives (#444)", () => {
+  const profile: DemandProfile = {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    scanRoot: "C:/fixture",
+    summary: {
+      scannedFiles: 2,
+      matchedFiles: 2,
+    },
+    signals: {
+      languages: [],
+      packageManagers: ["npm"],
+      frameworks: [],
+      concerns: [],
+      tooling: [],
+    },
+    evidence: [
+      {
+        path: "docs/duckdb.md",
+        fileName: "duckdb.md",
+        evidenceStrength: "weak",
+        matchedSignals: {
+          languages: [],
+          packageManagers: [],
+          frameworks: [],
+          concerns: [],
+          // A bare name token with the SAME canonical phrase arrives before
+          // the manifest declaration (evidence ordering is not guaranteed);
+          // the term must adopt the package identity from the package form.
+          tooling: ["npm-duckdb-node-api"],
+        },
+      },
+      {
+        path: "files/package.json",
+        fileName: "package.json",
+        evidenceStrength: "strong",
+        matchedSignals: {
+          languages: [],
+          packageManagers: [],
+          frameworks: [],
+          concerns: [],
+          tooling: ["npm:@duckdb/node-api"],
+        },
+      },
+    ],
+  };
+
+  const demandContext = buildDemandContext(profile, buildPolicy());
+
+  const term = demandContext.terms.find(
+    (entry) => entry.canonicalTerm === "npm-duckdb-node-api",
+  );
+  assert.ok(term, "the shared canonical term must exist");
+  assert.ok(
+    term?.packageIdentityTokens?.has("duckdb"),
+    "bare-name term must be upgraded with the declared package identity",
+  );
+  assert.deepEqual(
+    [...(demandContext.packageIdentityByTerm.get("npm-duckdb-node-api") ?? [])],
+    ["duckdb"],
+  );
+  assert.equal(term?.evidenceStrengthCounts.strong, 1);
+  assert.equal(term?.evidenceStrengthCounts.weak, 1);
+});
+
+void test("recommend demand context treats all-generic package identities as no identity (#444)", () => {
+  const profile: DemandProfile = {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    scanRoot: "C:/fixture",
+    summary: {
+      scannedFiles: 1,
+      matchedFiles: 1,
+    },
+    signals: {
+      languages: [],
+      packageManagers: [],
+      frameworks: [],
+      concerns: [],
+      tooling: [],
+    },
+    evidence: [
+      {
+        path: "package.json",
+        fileName: "package.json",
+        evidenceStrength: "strong",
+        matchedSignals: {
+          languages: [],
+          packageManagers: [],
+          frameworks: [],
+          concerns: [],
+          tooling: ["npm:node-api"],
+        },
+      },
+    ],
+  };
+
+  const demandContext = buildDemandContext(profile, buildPolicy());
+
+  const term = demandContext.terms.find(
+    (entry) => entry.canonicalTerm === "npm-node-api",
+  );
+  assert.ok(term, "the declared package term must exist");
+  assert.equal(
+    term?.packageIdentityTokens,
+    undefined,
+    "an identity made only of generic tokens (node, api) must not be attributed",
+  );
+  assert.equal(
+    demandContext.packageIdentityByTerm.has("npm-node-api"),
+    false,
+    "no identity entry may exist for an all-generic package",
+  );
 });
 
 void test("recommend demand context keeps session intent signals without a demand profile", () => {
@@ -267,7 +414,7 @@ void test("recommend signal helpers canonicalize search terms and add inferred t
   );
 });
 
-void test("recommend signal weighting preserves zero-weight evidence buckets", () => {
+void test("recommend signal weighting floors zero-evidence terms with asset-side weak provenance", () => {
   const matches = collectMatchedSignals(
     new Set(["placeholder"]),
     {
@@ -288,15 +435,412 @@ void test("recommend signal weighting preserves zero-weight evidence buckets", (
       hasSignals: true,
       activeDomainGroups: new Set<string>(),
       packageManifestEntries: new Set<string>(),
+      packageIdentityByTerm: new Map<string, ReadonlySet<string>>(),
       demandKeywords: new Set(["placeholder"]),
       packageManagers: new Set<string>(),
     },
     buildPolicy(),
+    new Map<string, DemandEvidenceStrength>(),
   );
 
-  assert.equal(matches[0]?.weightedEvidenceCount, 0);
+  // The demand term carries zero workspace evidence: weight floors at the
+  // minimum, and the buckets describe the ASSET side only (one hit with
+  // unknown provenance counts as weak) — never a workspace claim (#444).
+  assert.equal(matches[0]?.evidenceCount, 1);
+  assert.equal(matches[0]?.weightedEvidenceCount, 1);
+  assert.deepEqual(matches[0]?.evidenceStrengthCounts, {
+    strong: 0,
+    medium: 0,
+    weak: 1,
+  });
   assert.equal(matches[0]?.weight, 1);
 });
+
+// ─── review: declared-dependency identity multiplier (#443/#444) ────────────
+
+function buildIdentityTestDemandContext(
+  packageIdentityTokens: ReadonlySet<string> | undefined,
+): DemandContext {
+  return {
+    terms: [
+      {
+        key: "tooling:npm:@duckdb/node-api",
+        canonicalTerm: "npm:@duckdb/node-api",
+        signalType: "tooling",
+        evidenceCount: 1,
+        evidenceStrengthCounts: { strong: 1, medium: 0, weak: 0 },
+        matchTerms: new Set(["npm:@duckdb/node-api", "duckdb"]),
+        packageIdentityTokens,
+      },
+    ],
+    hasSignals: true,
+    activeDomainGroups: new Set<string>(),
+    packageManifestEntries: new Set<string>(["@duckdb/node-api"]),
+    packageIdentityByTerm: new Map<string, ReadonlySet<string>>(
+      packageIdentityTokens === undefined
+        ? []
+        : [["npm:@duckdb/node-api", packageIdentityTokens]],
+    ),
+    demandKeywords: new Set<string>(),
+    packageManagers: new Set<string>(["npm"]),
+  };
+}
+
+void test("identity multiplier: declared-dependency identity match boosts the signal weight", () => {
+  const policy = buildPolicy();
+  const baseToolingWeight =
+    policy.scoring.demandSignalWeights.tooling *
+    ONE_STRONG_EVIDENCE_WEIGHTED_COUNT;
+  // The asset's curated identity contains the dependency's bare package name.
+  const matches = collectMatchedSignals(
+    new Set(["duckdb"]),
+    buildIdentityTestDemandContext(new Set(["duckdb"])),
+    policy,
+    new Map<string, DemandEvidenceStrength>([["duckdb", "strong"]]),
+    new Set(["official-index", "duckdb", "install", "duckdb"]),
+  );
+  assert.equal(matches.length, 1);
+  assert.equal(
+    matches[0]?.weight,
+    Math.max(
+      1,
+      Math.round(baseToolingWeight * DEFAULT_IDENTITY_MATCH_MULTIPLIER),
+    ),
+    "identity-confirmed declared-dependency match must be multiplied",
+  );
+});
+
+void test("identity multiplier: token outside the curated identity gets no boost", () => {
+  const policy = buildPolicy();
+  const matches = collectMatchedSignals(
+    new Set(["duckdb"]),
+    buildIdentityTestDemandContext(new Set(["duckdb"])),
+    policy,
+    new Map<string, DemandEvidenceStrength>([["duckdb", "strong"]]),
+    // Curated identity does NOT contain the bare dependency name — a
+    // lookalike extension whose description merely mentions duckdb.
+    new Set(["c8e4", "raw", "theme"]),
+  );
+  assert.equal(matches.length, 1);
+  assert.equal(
+    matches[0]?.weight,
+    Math.max(
+      1,
+      Math.round(
+        policy.scoring.demandSignalWeights.tooling *
+          ONE_STRONG_EVIDENCE_WEIGHTED_COUNT,
+      ),
+    ),
+    "a coincidental token outside the identity must not receive the multiplier",
+  );
+});
+
+void test("identity multiplier: terms without package identity get no boost", () => {
+  const policy = buildPolicy();
+  const matches = collectMatchedSignals(
+    new Set(["duckdb"]),
+    buildIdentityTestDemandContext(undefined),
+    policy,
+    new Map<string, DemandEvidenceStrength>([["duckdb", "strong"]]),
+    new Set(["duckdb"]),
+  );
+  assert.equal(matches.length, 1);
+  assert.equal(
+    matches[0]?.weight,
+    Math.max(
+      1,
+      Math.round(
+        policy.scoring.demandSignalWeights.tooling *
+          ONE_STRONG_EVIDENCE_WEIGHTED_COUNT,
+      ),
+    ),
+    "a non-package identity term must keep the base weight",
+  );
+});
+
+void test("identity multiplier: two unrelated assets with identical demand overlap carry different matched signals (#444 AC4, review)", () => {
+  const policy = buildPolicy();
+  const demandContext = buildIdentityTestDemandContext(new Set(["duckdb"]));
+  const assetSideEvidence = new Map<string, DemandEvidenceStrength>([
+    ["duckdb", "strong"],
+  ]);
+  // Both assets intersect the SAME demand term on the same token. The first
+  // is the official duckdb skill (its curated identity contains the bare
+  // package name); the second is a lookalike whose identity has nothing to do
+  // with duckdb (only its description/capabilities mention it).
+  const officialDuckdbSignals = collectMatchedSignals(
+    new Set(["duckdb"]),
+    demandContext,
+    policy,
+    assetSideEvidence,
+    new Set(["official-index", "duckdb", "install-duckdb"]),
+  );
+  const lookalikeSignals = collectMatchedSignals(
+    new Set(["duckdb"]),
+    demandContext,
+    policy,
+    assetSideEvidence,
+    new Set(["c8e4", "raw", "theme"]),
+  );
+  assert.equal(officialDuckdbSignals.length, 1);
+  assert.equal(lookalikeSignals.length, 1);
+  assert.notEqual(
+    officialDuckdbSignals[0]?.weight,
+    lookalikeSignals[0]?.weight,
+    "identical demand overlap must NOT produce identical matched signals when the asset identity differs",
+  );
+  assert.equal(
+    officialDuckdbSignals[0]?.weight,
+    lookalikeSignals[0]!.weight! * DEFAULT_IDENTITY_MATCH_MULTIPLIER,
+    "the identity-confirmed match must carry the multiplier the coincidence does not",
+  );
+});
+
+void test("package identity map is first-wins per canonical term (review)", () => {
+  const policy = buildPolicy();
+  // Two DIFFERENT package declarations collapse to the same canonical term
+  // through the synonym table while their identity token sets differ. The
+  // FIRST registration's tokens must win for BOTH consumers — the term
+  // record and the packageIdentityByTerm map — never overwritten by later
+  // evidence (review: map must mirror the record's first-wins guard).
+  policy.synonyms = {
+    "shared-alias": ["npm-foo-bar", "pip-bar-baz"],
+  };
+  const profile: DemandProfile = {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    scanRoot: "C:/fixture",
+    summary: {
+      scannedFiles: 2,
+      matchedFiles: 2,
+    },
+    signals: {
+      languages: [],
+      packageManagers: [],
+      frameworks: [],
+      concerns: [],
+      tooling: [],
+    },
+    evidence: [
+      {
+        path: "files/package.json",
+        fileName: "package.json",
+        evidenceStrength: "strong",
+        matchedSignals: {
+          languages: [],
+          packageManagers: [],
+          frameworks: [],
+          concerns: [],
+          tooling: ["npm:@foo/bar"],
+        },
+      },
+      {
+        path: "files/pyproject.toml",
+        fileName: "pyproject.toml",
+        evidenceStrength: "strong",
+        matchedSignals: {
+          languages: [],
+          packageManagers: [],
+          frameworks: [],
+          concerns: [],
+          tooling: ["pip:bar-baz"],
+        },
+      },
+    ],
+  };
+
+  const demandContext = buildDemandContext(profile, policy);
+
+  const term = demandContext.terms.find(
+    (entry) => entry.canonicalTerm === "shared-alias",
+  );
+  assert.ok(term, "the shared canonical term must exist");
+  assert.deepEqual(
+    [...(term?.packageIdentityTokens ?? [])].sort(),
+    ["bar", "foo"],
+    "the term record keeps the FIRST registration's identity tokens",
+  );
+  assert.deepEqual(
+    [...(demandContext.packageIdentityByTerm.get("shared-alias") ?? [])].sort(),
+    ["bar", "foo"],
+    "packageIdentityByTerm keeps the FIRST registration's tokens (first-wins, matching the term record)",
+  );
+  assert.equal(
+    term?.evidenceCount,
+    2,
+    "both registrations must still merge into one term record",
+  );
+});
+
+void test("identity multiplier survives at candidate level: identity-matched asset outranks the coincidental lookalike up to the demand cap (review)", () => {
+  const policy = buildPolicy();
+  const demandProfile: DemandProfile = {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    scanRoot: "C:/fixture",
+    summary: {
+      scannedFiles: 1,
+      matchedFiles: 1,
+    },
+    signals: {
+      languages: ["typescript"],
+      packageManagers: [],
+      frameworks: [],
+      concerns: [],
+      tooling: ["npm:@duckdb/node-api"],
+    },
+    evidence: [
+      {
+        path: "package.json",
+        fileName: "package.json",
+        evidenceStrength: "strong",
+        matchedSignals: {
+          languages: ["typescript"],
+          packageManagers: [],
+          frameworks: [],
+          concerns: [],
+          tooling: ["npm:@duckdb/node-api"],
+        },
+      },
+    ],
+  };
+  const demandContext = buildDemandContext(demandProfile, policy);
+
+  // Otherwise-identical assets: the identity-matched one carries the
+  // declared dependency in its curated identity (manifest entry); the
+  // coincidental one only mentions duckdb in capabilities. Demands are
+  // tooling + one language only, so NO pm/framework exact-stack bonus can
+  // push the coincidental candidate toward the cap.
+  const identityEntry = buildCandidateTestEntry(
+    "duckdb-official",
+    ["duckdb", "typescript"],
+    "@duckdb/node-api",
+  );
+  const coincidentalEntry = buildCandidateTestEntry(
+    "c8e4-raw-theme",
+    ["duckdb", "typescript"],
+    undefined,
+  );
+
+  const identityBase = buildCandidateRecommendationBase(
+    identityEntry,
+    demandContext,
+    policy,
+  );
+  const coincidentalBase = buildCandidateRecommendationBase(
+    coincidentalEntry,
+    demandContext,
+    policy,
+  );
+  assert.ok(identityBase, "identity asset base must build");
+  assert.ok(coincidentalBase, "coincidental asset base must build");
+
+  const identityCandidate = buildCandidateRecommendation(
+    identityBase,
+    "copilot-vscode",
+    demandContext,
+    policy,
+  );
+  const coincidentalCandidate = buildCandidateRecommendation(
+    coincidentalBase,
+    "copilot-vscode",
+    demandContext,
+    policy,
+  );
+  assert.ok(identityCandidate, "identity candidate must rank");
+  assert.ok(coincidentalCandidate, "coincidental candidate must rank");
+
+  assert.equal(
+    identityCandidate?.breakdown.demand,
+    policy.scoring.demandMatchCap,
+    "matched identity signals plus the exactness bonus must reach the demand cap",
+  );
+  assert.ok(
+    (coincidentalCandidate?.breakdown.demand ?? 0) <
+      (identityCandidate?.breakdown.demand ?? 0),
+    "the coincidental lookalike must score strictly below the identity-matched asset",
+  );
+  assert.ok(
+    (identityCandidate?.breakdown.demand ?? 0) <= policy.scoring.demandMatchCap,
+    "the identity-matched candidate must never exceed the demand cap",
+  );
+  assert.ok(
+    (identityCandidate?.breakdown.total ?? 0) >
+      (coincidentalCandidate?.breakdown.total ?? 0),
+    "the identity-match advantage must survive into the final candidate total",
+  );
+});
+
+// The production weighted-evidence bucket for ONE strong evidence record —
+// derived from the shared helper so expected weights can never drift from
+// the implementation (review: was a hardcoded 3).
+const ONE_STRONG_EVIDENCE_WEIGHTED_COUNT =
+  recommendSignalsInternals.computeWeightedEvidenceCount({
+    strong: 1,
+    medium: 0,
+    weak: 0,
+  });
+
+function buildCandidateTestEntry(
+  id: string,
+  capabilities: string[],
+  manifestEntry: string | undefined,
+): AssetCatalogEntry {
+  return {
+    id,
+    displayName: id,
+    assetKind: "skill",
+    hosts: ["copilot-vscode"],
+    compatibilityMode: "native",
+    source: {
+      sourceId: `repo-${id}`,
+      authorityTier: "trusted-community",
+      sourceKind: "repo",
+      sourcePriority: 60,
+      originUrl: `https://example.com/${id}`,
+      publisher: `repo-${id}`,
+      publisherVerified: false,
+    },
+    trust: { score: 60, signals: ["fixture"] },
+    capabilities,
+    install: {
+      method: "local-file",
+      relativePath: undefined,
+      manifestEntry,
+    },
+    evidence: {
+      manifestFound: true,
+      readmeFound: true,
+      examplesFound: false,
+      docsLinked: true,
+      filePath: `hacks/${id}/README.md`,
+      classification: undefined,
+    },
+    maintenance: {
+      lastUpdated: new Date().toISOString(),
+      stars: 0,
+      releaseCadence: "test",
+    },
+    risk: {
+      level: "low",
+      hasHooks: false,
+      hasExecScripts: false,
+      requiresNetwork: false,
+    },
+    contextCost: { sizeClass: "tiny", estimatedPromptWeight: 1 },
+    fit: { portfolioFit: 0.9, hostFit: 0.9 },
+    dedupe: {
+      duplicateGroup: `group-${id}`,
+      candidateRankHint: "test",
+    },
+    status: {
+      cataloged: true,
+      mirrorEligible: true,
+      installEligible: true,
+      activationEligible: true,
+    },
+  };
+}
 
 function buildPolicy(): RecommendationPolicy {
   const hostPolicy: RecommendationHostPolicy = {

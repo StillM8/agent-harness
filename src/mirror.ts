@@ -9,9 +9,11 @@ import { generateMirrorPlan } from "./mirror/plan.js";
 import {
   handleUnknownCommand,
   hasHelpFlag,
+  hasUnknownFlagsForSubcommands,
   printSubcommandHelp,
   type SubcommandHelpEntry,
 } from "./cli-help-format.js";
+import { MIRROR_SUBCOMMAND_FLAG_SPECS } from "./cli-flag-specs.js";
 import { printCommandHelp } from "./lib/cli-output.js";
 
 /**
@@ -40,6 +42,13 @@ export async function runMirror(
   if (hasHelpFlag(rest)) {
     printMirrorSubcommandHelp(command);
     return 0;
+  }
+
+  // Strict flag validation before any mirror work (#445).
+  if (
+    hasUnknownFlagsForSubcommands(MIRROR_SUBCOMMAND_FLAG_SPECS, command, rest)
+  ) {
+    return 1;
   }
 
   switch (command) {
@@ -176,13 +185,17 @@ function printMirrorSubcommandHelp(subcommand: string): void {
       heading:
         "bundle explain — Explain why assets are present in a bundle lock",
       lines: [
-        "Usage: agent-harness bundle explain --bundle <bundleId>",
-        "       agent-harness bundle explain <bundleId>",
-        "       agent-harness mirror bundle-explain --bundle <bundleId>",
-        "       agent-harness mirror bundle-explain <bundleId>",
+        "Usage: agent-harness bundle explain --bundle <bundleId> [--json]",
+        "       agent-harness bundle explain <bundleId> [--json]",
+        "       agent-harness mirror bundle-explain --bundle <bundleId> [--json]",
+        "       agent-harness mirror bundle-explain <bundleId> [--json]",
         "",
         "Prints detailed bundle membership and provenance for a mirrored",
         "artifact, including which bundles reference it and its acquisition status.",
+        "",
+        "Options:",
+        "  --bundle <bundleId>  Bundle lock to explain (or pass as positional)",
+        "  --json               Output machine-readable JSON",
         "",
         "Alias: mirror bundle-explain",
       ],

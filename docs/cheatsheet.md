@@ -13,8 +13,8 @@ agent-harness workspace opencode --intent general
 # Step-by-step (recommended for first use)
 agent-harness discover full                    # Scan workspace, sync sources, select catalog
 agent-harness recommend report --host opencode # Score and rank recommendations
-agent-harness mirror plan --host opencode      # Plan mirror acquisition
-agent-harness mirror acquire --host opencode   # Download and pin assets
+agent-harness mirror plan                      # Plan mirror acquisition
+agent-harness mirror acquire                   # Download and pin assets
 agent-harness install bundle --host opencode   # Stage into lifecycle stores
 agent-harness install refresh                  # Sync staged assets with mirrors
 agent-harness activate host --host opencode    # Build host runtime views
@@ -34,10 +34,10 @@ agent-harness discover full --sync-all          # Sync all sources (skip demand 
 agent-harness discover catalog                 # Build full asset catalog
 agent-harness discover select                  # Filter catalog by demand + policy
 agent-harness discover full                    # Run full pipeline (demand → select)
-agent-harness discover breadth                 # Breadth pass: demand → catalog → bottleneck assessment
+agent-harness discover breadth                 # Breadth pass: demand → catalog → bottleneck assessment (REPLACES discovery outputs; warns when lifecycle state goes stale)
 agent-harness discover index                   # Build full paginated catalog index (500 pages/source default)
-agent-harness discover recall                  # Recall-focused candidate review pass
-agent-harness discover candidate-pool          # Inspect the candidate queue
+agent-harness discover recall                  # Alias of discover breadth (REPLACES discovery outputs)
+agent-harness discover candidate-pool          # Alias of discover breadth (REPLACES discovery outputs)
 agent-harness discover stats                   # Catalog statistics summary
 agent-harness discover diff                    # Diff discovery outputs across runs
 agent-harness discover inspect                 # Inspect catalog entries and provenance
@@ -57,8 +57,8 @@ agent-harness recommend explain --asset <id>   # Why an asset was selected/rejec
 ## Mirror
 
 ```bash
-agent-harness mirror plan --host <host>        # Preview mirror plan
-agent-harness mirror acquire --host <host>     # Download selected assets
+agent-harness mirror plan                      # Preview mirror plan
+agent-harness mirror acquire                   # Download selected assets
 agent-harness mirror diff                      # Compare local vs remote mirrors
 agent-harness mirror locks                     # Generate bundle lock files
 agent-harness mirror explain --asset <id>      # Mirror provenance for an asset
@@ -150,7 +150,7 @@ AGENT_HARNESS_SCAN_MAX_DEPTH=14                # Max directory depth
 AGENT_HARNESS_SOURCE_SYNC_MAX_PAGES_FOR_INDEX_BUILD=500  # Pages per source in index build
 AGENT_HARNESS_MAX_ENTRIES_PER_SOURCE=200       # Max catalog entries per source
 AGENT_HARNESS_DISCOVERY_INDEX_MAX_AGE_DAYS=7   # Index freshness threshold
-AGENT_HARNESS_TIMEOUT_SECONDS=120              # Deadline for long operations (10–3600)
+AGENT_HARNESS_TIMEOUT_SECONDS=120              # Example value — deadline for long operations (default: no deadline)
 ```
 
 ## Quick Troubleshooting

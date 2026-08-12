@@ -1213,6 +1213,91 @@ void test("source sync helper exports cover sitemap, fetch, NuGet, and MCP branc
   }
 });
 
+void test("fetchRequiredJson defaults the HTTP method per the documented contract (review)", async () => {
+  const originalFetch = globalThis.fetch;
+  const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  const seen: Array<{
+    url: string;
+    method?: string;
+    headers?: Record<string, string>;
+  }> = [];
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+    seen.push({
+      url: String(input),
+      method: init?.method,
+      headers: init?.headers as Record<string, string> | undefined,
+    });
+    return jsonResponse({ ok: true });
+  }) as typeof fetch;
+  try {
+    await sourceSyncInternals.fetchRequiredJson(
+      "https://example.com/json-method",
+      ["https://example.com"],
+      {},
+      { body: "{}" },
+    );
+    await sourceSyncInternals.fetchRequiredJson(
+      "https://example.com/json-get",
+      ["https://example.com"],
+    );
+    await sourceSyncInternals.fetchRequiredJson(
+      "https://example.com/json-post",
+      ["https://example.com"],
+      {},
+      { method: "POST", body: "{}" },
+    );
+    // Custom headers may arrive in ANY HeadersInit form; a Headers
+    // instance must merge over the base set (review).
+    await sourceSyncInternals.fetchRequiredJson(
+      "https://example.com/json-headers",
+      ["https://example.com"],
+      {},
+      {
+        headers: new Headers({ "x-custom": "v1", Accept: "application/json" }),
+      },
+    );
+
+    assert.equal(
+      seen[0]?.method,
+      "POST",
+      "a body without an explicit method must default to POST (Fetch forbids GET with a body)",
+    );
+    assert.equal(
+      seen[1]?.method,
+      "GET",
+      "no body and no method flows as an undefined method that the transport resolves to GET",
+    );
+    assert.equal(
+      seen[2]?.method,
+      "POST",
+      "an explicit method must be preserved",
+    );
+    assert.equal(
+      seen[3]?.headers?.["x-custom"],
+      "v1",
+      "a Headers-instance custom header must be forwarded",
+    );
+    assert.equal(
+      seen[3]?.headers?.["user-agent"],
+      "agent-harness",
+      "the base source-sync headers must survive the merge (lowercased by Headers normalization)",
+    );
+    assert.equal(
+      seen[3]?.headers?.["accept"],
+      "application/json",
+      "a custom header must override the base set value",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousFetchMockFlag === undefined) {
+      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+    } else {
+      restoreEnvVar("AGENT_HARNESS_TEST_FETCH_MOCKS", previousFetchMockFlag);
+    }
+  }
+});
+
 function buildIndexedEntry(
   id: string,
   capabilities: string[],
@@ -1491,7 +1576,7 @@ void test("synchronizeIndexedSource dispatches ard-registry kind-guard", async (
     name: "Test ARD Registry",
     kind: "ard-registry" as const,
     enabled: true,
-    endpoints: { searchUrl: "https://ard.example.com/search" },
+    endpoints: { searchUrl: "https://agenticresourcediscovery.org/search" },
     hosts: [] as string[],
     assetKinds: ["skill" as const],
     discoveryMode: "catalog" as const,
@@ -1522,10 +1607,12 @@ void test("synchronizeIndexedSource dispatches ard-registry kind-guard", async (
   };
 
   const originalFetch = globalThis.fetch;
+  const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
   try {
     globalThis.fetch = (async () =>
       new Response(
-        JSON.stringify({ entries: [], nextCursor: null, totalCount: 0 }),
+        JSON.stringify({ version: "2026-08", results: [], pageToken: null }),
         { status: 200, headers: { "content-type": "application/json" } },
       )) as typeof globalThis.fetch;
 
@@ -1537,8 +1624,103 @@ void test("synchronizeIndexedSource dispatches ard-registry kind-guard", async (
     assert.ok(result !== null, "ard-registry dispatch must return a state");
     assert.equal(result!.sourceId, "test-ard-registry");
     assert.equal(result!.coverageMode, "indexed");
+    assert.equal(result!.status, "complete");
   } finally {
     globalThis.fetch = originalFetch;
+    if (previousFetchMockFlag === undefined) {
+      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+    } else {
+      restoreEnvVar("AGENT_HARNESS_TEST_FETCH_MOCKS", previousFetchMockFlag);
+    }
+  }
+});
+
+void test("synchronizeIndexedSource category sweep tolerates a null demand profile (#451)", async () => {
+  const vscodeSource = {
+    id: "vscode-marketplace",
+    name: "vscode-marketplace",
+    kind: "marketplace" as const,
+    enabled: true,
+    endpoints: {
+      baseUrl: "https://marketplace.visualstudio.com",
+      marketplaceApi:
+        "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery",
+    },
+    hosts: ["copilot-vscode"] as string[],
+    assetKinds: ["extension" as const],
+    discoveryMode: "catalog" as const,
+    priority: 80,
+    authorityTier: "official-marketplace" as const,
+    rules: { officialPreferred: true, allowMirror: true, allowInstall: true },
+  };
+
+  const context = {
+    demandProfile: null,
+    selectionRegistry: {
+      schemaVersion: 1,
+      selectionPolicies: {
+        officialBeatsPopularity: true,
+        starsAreTieBreakerOnly: true,
+        preferNativeOverAdaptable: true,
+        preferLowerRiskWhenEquivalent: true,
+        preferLowerContextCostWhenEquivalent: true,
+        communityDefaultPolicy: "catalog-only-unless-promoted" as const,
+      },
+      rankingOrder: [],
+      duplicateGroups: [],
+    },
+    entriesById: new Map(),
+    entriesDirty: false,
+    previousState: undefined,
+    observedEntryIds: new Set<string>(),
+  };
+
+  const originalFetch = globalThis.fetch;
+  const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  let fetchCalls = 0;
+  globalThis.fetch = (async () => {
+    fetchCalls++;
+    return textResponse("{}");
+  }) as typeof globalThis.fetch;
+
+  try {
+    await withEnv(
+      {
+        AGENT_HARNESS_VSCODE_MARKETPLACE_MAX_QUERIES: "1",
+        AGENT_HARNESS_VSCODE_MARKETPLACE_POPULARITY_SWEEP_PAGES: "0",
+        AGENT_HARNESS_VSCODE_MARKETPLACE_CATEGORY_SWEEP_ENABLED: "true",
+      },
+      async () => {
+        const result = await sourceSyncInternals.synchronizeIndexedSource(
+          vscodeSource,
+          context,
+        );
+
+        assert.ok(
+          result !== null,
+          "vscode-marketplace dispatch must return a state",
+        );
+        assert.equal(result!.sourceId, "vscode-marketplace");
+        assert.equal(
+          result!.status,
+          "complete",
+          "no demand profile means no categories, no queries, and nothing partial",
+        );
+      },
+    );
+    assert.equal(
+      fetchCalls,
+      1,
+      "a null demand profile still runs the single default demand query, but no category sweeps",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousFetchMockFlag === undefined) {
+      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+    } else {
+      restoreEnvVar("AGENT_HARNESS_TEST_FETCH_MOCKS", previousFetchMockFlag);
+    }
   }
 });
 

@@ -168,6 +168,13 @@ export async function fetchBytesWithGuards(
 
 /**
  * Fetches JSON with the same URL and response-size guards as text fetches.
+ *
+ * The fetch layer decodes response bytes with the WHATWG TextDecoder, which
+ * STRIPS a leading UTF-8 BOM before any text reaches this function — so a
+ * BOM never lands in `text` here (a BOM'd feed used to fail JSON.parse and
+ * silently sync nothing only while the decoder kept it; the decoder does
+ * not). Duplicate keys keep JSON.parse's standard last-wins semantics —
+ * pinned by tests so the behavior stays deliberate.
  */
 export async function fetchJsonWithGuards(
   url: string,

@@ -299,7 +299,7 @@ Status labels:
 
 ## 12. Test suite and validation harness
 
-**Status:** Partial _(v2.0.0: 100% statement/branch/function/line gate now enforced in CI and verified locally at 776 passing tests; branch-residual suites added for all major domains)_
+**Status:** Partial _(v2.0.0: 100% statement/branch/function/line gate now enforced in CI and verified locally; branch-residual suites added for all major domains; v2.1.0 extended the gate to the live-fetch sync/harvest paths with mocked-HTTP contract tests)_
 
 ### Test harness current state
 
@@ -605,9 +605,9 @@ These commands should be additive and should not replace the current discover, m
 
 #### Activate
 
-- `agent-harness activate host --host opencode --runtime-mode overlay`
-- `agent-harness activate host --host opencode --runtime-mode hybrid`
-- `agent-harness activate host --host copilot-vscode --runtime-mode overlay`
+- `agent-harness activate host --host opencode --runtime-mode overlay` _(proposed)_
+- `agent-harness activate host --host opencode --runtime-mode hybrid` _(proposed)_
+- `agent-harness activate host --host copilot-vscode --runtime-mode overlay` _(proposed)_
 - `agent-harness activate explain --host <host>`
   - explains what is always-loaded versus queryable on demand
 

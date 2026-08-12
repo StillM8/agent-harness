@@ -163,6 +163,528 @@ void test("OpenCode wire apply/reset creates managed links, merges native config
   }
 });
 
+void test("OpenCode re-apply then reset removes the adapter-created overlay gitignore (#447)", async () => {
+  const fixture = await createOpenCodeFixture();
+
+  try {
+    await writeOpenCodeActivationFixture(
+      fixture.projectRoot,
+      fixture.workspaceRoot,
+      fixture.assets,
+    );
+
+    // Fresh workspace: no AGENTS.md and no .opencode/.gitignore.
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "apply",
+    });
+    assert.equal(
+      await readTextFileOrNull(
+        join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      ),
+      "node_modules\npackage-lock.json\nbun.lockb\nyarn.lock\npnpm-lock.yaml\n",
+      "apply creates the overlay gitignore",
+    );
+
+    // Re-apply: the gitignore from the first apply must not poison the
+    // fresh snapshot; a later reset removes the adapter-created file.
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "apply",
+    });
+    assert.equal(
+      await readTextFileOrNull(
+        join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      ),
+      "node_modules\npackage-lock.json\nbun.lockb\nyarn.lock\npnpm-lock.yaml\n",
+      "re-apply keeps the overlay gitignore in place",
+    );
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "reset",
+    });
+    assert.equal(
+      await readTextFileOrNull(
+        join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      ),
+      null,
+      "reset must remove the adapter-created gitignore after a re-apply",
+    );
+    assert.equal(
+      await readTextFileOrNull(join(fixture.workspaceRoot, "AGENTS.md")),
+      null,
+      "reset must remove the adapter-created AGENTS.md",
+    );
+    assert.equal(
+      await pathExists(
+        join(
+          fixture.workspaceRoot,
+          ".opencode",
+          "context",
+          "project-intelligence",
+          "agent-harness",
+        ),
+      ),
+      false,
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+void test("OpenCode re-apply preserves a pre-existing user gitignore and reset restores it (#447)", async () => {
+  const fixture = await createOpenCodeFixture();
+
+  try {
+    await writeOpenCodeActivationFixture(
+      fixture.projectRoot,
+      fixture.workspaceRoot,
+      fixture.assets,
+    );
+    await writeTextFile(
+      join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      "dist\n.env\n",
+    );
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "apply",
+    });
+    const applied =
+      (await readTextFileOrNull(
+        join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      )) ?? "";
+    assert.match(applied, /^dist\n\.env\n/u);
+    assert.match(applied, /node_modules/u);
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "apply",
+    });
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "reset",
+    });
+    assert.equal(
+      await readTextFileOrNull(
+        join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      ),
+      "dist\n.env\n",
+      "reset restores the user's original gitignore byte-for-byte",
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+void test("OpenCode re-apply preserves user edits made between applies (review)", async () => {
+  const fixture = await createOpenCodeFixture();
+
+  try {
+    await writeOpenCodeActivationFixture(
+      fixture.projectRoot,
+      fixture.workspaceRoot,
+      fixture.assets,
+    );
+    await writeTextFile(
+      join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      "dist\n.env\n",
+    );
+    await writeTextFile(
+      join(fixture.workspaceRoot, "AGENTS.md"),
+      "# My agents file\n\nuser authored\n",
+    );
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "apply",
+    });
+
+    // The user edits both files BETWEEN applies: a custom gitignore line
+    // and an AGENTS.md note outside the managed section.
+    const applied = await readTextFileOrNull(
+      join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+    );
+    assert.ok(applied !== null && applied.includes("pnpm-lock.yaml"));
+    await writeFile(
+      join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      `${applied ?? ""}user-custom-ignore\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(fixture.workspaceRoot, "AGENTS.md"),
+      "# My agents file\n\nuser authored\n\nuser note between applies\n",
+      "utf8",
+    );
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "apply",
+    });
+
+    const reapplied =
+      (await readTextFileOrNull(
+        join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      )) ?? "";
+    assert.ok(
+      reapplied.includes("user-custom-ignore"),
+      "re-apply must keep user gitignore lines added between applies",
+    );
+    assert.ok(
+      reapplied.startsWith("dist\n.env\n"),
+      "re-apply must keep the original user baseline",
+    );
+    assert.ok(
+      reapplied.includes("node_modules"),
+      "re-apply must keep the harness-owned entries present",
+    );
+    const reappliedAgents =
+      (await readTextFileOrNull(join(fixture.workspaceRoot, "AGENTS.md"))) ??
+      "";
+    assert.ok(
+      reappliedAgents.includes("user note between applies"),
+      "re-apply must keep user AGENTS.md edits outside the managed section",
+    );
+
+    // Reset restores the true pre-apply state: baseline + user edits only.
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "reset",
+    });
+    assert.equal(
+      await readTextFileOrNull(
+        join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      ),
+      "dist\n.env\nuser-custom-ignore\n",
+      "reset restores the user baseline plus the between-apply edit, without harness entries",
+    );
+    const resetAgents =
+      (await readTextFileOrNull(join(fixture.workspaceRoot, "AGENTS.md"))) ??
+      "";
+    assert.ok(
+      resetAgents.includes("user note between applies"),
+      "reset must not wipe user edits made between applies",
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+void test("OpenCode re-apply keeps a user's pre-existing required gitignore entry (review)", async () => {
+  const fixture = await createOpenCodeFixture();
+
+  try {
+    await writeOpenCodeActivationFixture(
+      fixture.projectRoot,
+      fixture.workspaceRoot,
+      fixture.assets,
+    );
+    // The user's OWN gitignore already contains node_modules (one of the
+    // harness's required overlay entries) before the first apply. The
+    // wire plan must record only the entries the harness ADDS, so re-apply
+    // strips exactly those and reset restores the user's line.
+    await writeTextFile(
+      join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      "dist\nnode_modules\n",
+    );
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "apply",
+    });
+    const applied =
+      (await readTextFileOrNull(
+        join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      )) ?? "";
+    assert.ok(
+      applied.includes("package-lock.json"),
+      "apply adds the missing required entries",
+    );
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "apply",
+    });
+    const reapplied =
+      (await readTextFileOrNull(
+        join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      )) ?? "";
+    assert.ok(
+      reapplied.includes("node_modules"),
+      "re-apply must keep the user's pre-existing node_modules line",
+    );
+    assert.ok(
+      reapplied.startsWith("dist\n"),
+      "re-apply keeps the user baseline intact",
+    );
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "reset",
+    });
+    assert.equal(
+      await readTextFileOrNull(
+        join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      ),
+      "dist\nnode_modules\n",
+      "reset restores the user's file including their own node_modules line",
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+void test("OpenCode re-apply with a LEGACY plan (unrecorded ownership, null baseline) still removes the adapter-created gitignore on reset (review)", async () => {
+  const fixture = await createOpenCodeFixture();
+
+  try {
+    await writeOpenCodeActivationFixture(
+      fixture.projectRoot,
+      fixture.workspaceRoot,
+      fixture.assets,
+    );
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "apply",
+    });
+
+    // Simulate a plan written before gitignoreOwnedEntries existed. The
+    // stored snapshot baseline is NULL (the gitignore did not exist before
+    // the first apply), so ownership inference must conclude the harness
+    // owns every required entry — same behavior as a fresh apply.
+    const localContextRoot = join(
+      fixture.workspaceRoot,
+      ".opencode",
+      "context",
+      "project-intelligence",
+      "agent-harness",
+    );
+    const planPath = join(localContextRoot, "wire-plan.json");
+    const legacyPlan = (await readJsonFile<WirePlanManifest>(planPath)) as {
+      gitignoreOwnedEntries?: string[];
+    } & WirePlanManifest;
+    delete legacyPlan.gitignoreOwnedEntries;
+    await writeJsonFile(planPath, legacyPlan);
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "apply",
+    });
+    assert.notEqual(
+      await readTextFileOrNull(
+        join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      ),
+      null,
+      "re-apply keeps the overlay gitignore in place",
+    );
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "reset",
+    });
+    assert.equal(
+      await readTextFileOrNull(
+        join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      ),
+      null,
+      "reset after a legacy-plan re-apply must remove the adapter-created gitignore",
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+void test("OpenCode re-apply with a LEGACY plan and a user baseline preserves user-owned required entries (review)", async () => {
+  const fixture = await createOpenCodeFixture();
+
+  try {
+    await writeOpenCodeActivationFixture(
+      fixture.projectRoot,
+      fixture.workspaceRoot,
+      fixture.assets,
+    );
+    await writeTextFile(
+      join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      "dist\nnode_modules\n",
+    );
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "apply",
+    });
+
+    // Legacy plan: drop the recorded ownership. The baseline snapshot is
+    // NON-NULL ("dist\nnode_modules\n"), so inference must conclude the
+    // harness owns ONLY the entries missing from the baseline — never the
+    // user's own node_modules.
+    const localContextRoot = join(
+      fixture.workspaceRoot,
+      ".opencode",
+      "context",
+      "project-intelligence",
+      "agent-harness",
+    );
+    const planPath = join(localContextRoot, "wire-plan.json");
+    const legacyPlan = (await readJsonFile<WirePlanManifest>(planPath)) as {
+      gitignoreOwnedEntries?: string[];
+    } & WirePlanManifest;
+    delete legacyPlan.gitignoreOwnedEntries;
+    await writeJsonFile(planPath, legacyPlan);
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "apply",
+    });
+    const reapplied =
+      (await readTextFileOrNull(
+        join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      )) ?? "";
+    assert.ok(
+      reapplied.includes("node_modules"),
+      "legacy re-apply must keep the user's pre-existing node_modules line",
+    );
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "reset",
+    });
+    assert.equal(
+      await readTextFileOrNull(
+        join(fixture.workspaceRoot, ".opencode", ".gitignore"),
+      ),
+      "dist\nnode_modules\n",
+      "legacy re-apply + reset restores the user's file with their own node_modules",
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+void test("OpenCode re-apply with a LEGACY plan and NO baseline skips stripping and never deletes user lines (review)", async () => {
+  const fixture = await createOpenCodeFixture();
+
+  try {
+    await writeOpenCodeActivationFixture(
+      fixture.projectRoot,
+      fixture.workspaceRoot,
+      fixture.assets,
+    );
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "apply",
+    });
+
+    // Legacy plan with neither ownership nor any text snapshot: the worst
+    // case for inference. Strip must be skipped entirely (over-preserve);
+    // user additions between applies still survive.
+    const localContextRoot = join(
+      fixture.workspaceRoot,
+      ".opencode",
+      "context",
+      "project-intelligence",
+      "agent-harness",
+    );
+    const planPath = join(localContextRoot, "wire-plan.json");
+    const legacyPlan = (await readJsonFile<WirePlanManifest>(planPath)) as {
+      gitignoreOwnedEntries?: string[];
+      textFileSnapshots?: WirePlanManifest["textFileSnapshots"];
+    } & WirePlanManifest;
+    delete legacyPlan.gitignoreOwnedEntries;
+    legacyPlan.textFileSnapshots = legacyPlan.textFileSnapshots?.filter(
+      (entry) => !entry.path.endsWith(".opencode/.gitignore"),
+    );
+    await writeJsonFile(planPath, legacyPlan);
+
+    const gitignorePath = join(
+      fixture.workspaceRoot,
+      ".opencode",
+      ".gitignore",
+    );
+    const before = (await readTextFileOrNull(gitignorePath)) ?? "";
+    await writeFile(gitignorePath, `${before}user-legacy-line\n`, "utf8");
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "apply",
+    });
+    const reapplied = (await readTextFileOrNull(gitignorePath)) ?? "";
+    assert.ok(
+      reapplied.includes("user-legacy-line"),
+      "legacy no-baseline re-apply must never delete user lines",
+    );
+
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "reset",
+    });
+    const afterReset = (await readTextFileOrNull(gitignorePath)) ?? "";
+    assert.ok(
+      afterReset.includes("user-legacy-line"),
+      "reset after a legacy no-baseline re-apply must keep user lines (over-preservation is safe)",
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+void test("OpenCode wire reset on a workspace that was never applied is a clean no-op (G4)", async () => {
+  const fixture = await createOpenCodeFixture();
+
+  try {
+    await writeOpenCodeActivationFixture(
+      fixture.projectRoot,
+      fixture.workspaceRoot,
+      fixture.assets,
+    );
+    await writeTextFile(
+      join(fixture.workspaceRoot, "AGENTS.md"),
+      "User authored AGENTS\n",
+    );
+
+    // Never applied: no wire plan, no overlay, no snapshots.
+    await wireOpenCode({
+      projectRoot: fixture.projectRoot,
+      workspaceRoot: fixture.workspaceRoot,
+      mode: "reset",
+    });
+
+    assert.equal(
+      await readTextFileOrNull(join(fixture.workspaceRoot, "AGENTS.md")),
+      "User authored AGENTS\n",
+      "user AGENTS.md must remain byte-identical when nothing was applied",
+    );
+    assert.equal(
+      await pathExists(join(fixture.workspaceRoot, ".opencode")),
+      false,
+      "no overlay directory may be created by reset",
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 void test("OpenCode wire apply writes a fallback activation manifest when activation state is missing", async () => {
   const fixture = await createOpenCodeFixture();
 

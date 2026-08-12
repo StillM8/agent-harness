@@ -1,6 +1,8 @@
 import { join } from "node:path";
 
+import { CliUsageError } from "../cli-help-format.js";
 import {
+  pathExists,
   readJsonFile,
   readJsonFileOrNull,
   readJsonLinesFile,
@@ -82,7 +84,10 @@ export async function explainMirrorArtifact(
   const requestedAssetId = getOptionValue(args, "--asset") ?? args[0];
   const requestedMirrorId = getOptionValue(args, "--mirror");
   if (!requestedAssetId && !requestedMirrorId) {
-    throw new Error("mirror explain requires --asset or --mirror");
+    throw new CliUsageError(
+      "mirror explain requires --asset or --mirror",
+      "agent-harness mirror explain --help",
+    );
   }
 
   const entries = await readJsonLinesFile<MirrorIndexEntry>(
@@ -95,7 +100,10 @@ export async function explainMirrorArtifact(
       candidate.mirrorId === requestedMirrorId,
   );
   if (!entry) {
-    throw new Error("No matching mirror artifact found.");
+    throw new CliUsageError(
+      "No matching mirror artifact found.",
+      "agent-harness mirror explain --help",
+    );
   }
 
   const rawRoot = join(
@@ -135,12 +143,25 @@ export async function explainBundleLock(
   const bundleId = getOptionValue(args, "--bundle") ?? args[0];
   const json = args.includes("--json");
   if (!bundleId) {
-    throw new Error("bundle explain requires --bundle <bundleId> or a positional bundle ID");
+    throw new CliUsageError(
+      "bundle explain requires --bundle <bundleId> or a positional bundle ID",
+      "agent-harness bundle explain --help",
+    );
   }
 
-  const bundleLock = await readJsonFile<BundleLock>(
-    join(projectRoot, "mirror", "bundles", `${bundleId}.lock.json`),
-  );
+  const lockPath = join(projectRoot, "mirror", "bundles", `${bundleId}.lock.json`);
+  // #446 contract (review): a not-found bundle lock is a user-input lookup
+  // miss, not an internal failure — one-line error, no stack. Checking
+  // presence BEFORE reading (instead of catching ENOENT) keeps the branch
+  // instrumentation unambiguous and the corrupt-file case a natural
+  // internal error.
+  if (!(await pathExists(lockPath))) {
+    throw new CliUsageError(
+      `Bundle lock not found: '${bundleId}'. Run 'agent-harness mirror plan' or 'mirror acquire' to generate bundle locks.`,
+      "agent-harness bundle explain --help",
+    );
+  }
+  const bundleLock = await readJsonFile<BundleLock>(lockPath);
   const selectedEntries = await readJsonLinesFile<AssetCatalogEntry>(
     join(projectRoot, "discover", "output", "catalog.selected.jsonl"),
     assertAssetCatalogEntry,

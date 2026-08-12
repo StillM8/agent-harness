@@ -11,7 +11,12 @@
 
 import { join } from "node:path";
 
-import { handleUnknownCommand, hasHelpFlag } from "./cli-help-format.js";
+import {
+  handleUnknownCommand,
+  hasHelpFlag,
+  hasUnknownFlagsForSubcommands,
+} from "./cli-help-format.js";
+import { QUARANTINE_SUBCOMMAND_FLAG_SPECS } from "./cli-flag-specs.js";
 import {
   readJsonFileOrNull,
   readTextFileOrNull,
@@ -57,6 +62,17 @@ export async function runQuarantine(
   if (hasHelpFlag(rest)) {
     printQuarantineSubcommandHelp(command);
     return 0;
+  }
+
+  // Strict flag validation before any quarantine work (#445).
+  if (
+    hasUnknownFlagsForSubcommands(
+      QUARANTINE_SUBCOMMAND_FLAG_SPECS,
+      command,
+      rest,
+    )
+  ) {
+    return 1;
   }
 
   switch (command) {

@@ -13,6 +13,7 @@ import {
 } from "./signals.js";
 import type {
   AssetCatalogEntry,
+  DemandEvidenceStrength,
   RecommendationBasis,
   RecommendationPolicy,
   RecommendationScoreBreakdown,
@@ -151,6 +152,41 @@ export function buildCandidateRecommendationBase(
     policy,
     resolvedSynonymLookup,
   );
+  // Asset-side evidence provenance (#444): every search term is tagged with
+  // the strength class of the asset content that produced it — curated
+  // identity/metadata first, file locations next, registry provenance last
+  // (first-wins so stronger sources dominate).
+  const assetTermStrength = buildAssetTermStrength(
+    entry,
+    policy,
+    resolvedSynonymLookup,
+  );
+  // Asset IDENTITY terms: curated identity only (id/displayName/manifest
+  // entry), no capabilities, paths, or registry provenance. Used to
+  // distinguish a declared-dependency identity match from a coincidental
+  // token in unrelated content (#444). TWO representations serve different
+  // gates (review):
+  // - canonicalized terms (resolvedSynonymLookup) feed the language-
+  //   contradiction gate: the workspace's demand languages are canonicalized
+  //   too, so both sides must be compared in the same synonym-collapsed
+  //   space (e.g. `java` collapses to `backend` on both sides).
+  // - RAW terms (no synonym lookup) feed the declared-dependency identity
+  //   gate and the identity multiplier: package-identity tokens are raw
+  //   manifest tokens (`@duckdb/node-api` → `duckdb`), and the policy
+  //   synonym table maps `duckdb -> data` (an alias of the "data" concern) —
+  //   a canonicalized identity would silently lose the very token the
+  //   declared-dependency gates compare against, making the official duckdb
+  //   skill fail its own identity match.
+  const assetIdentityTerms = buildSearchTerms(
+    [entry.id, entry.displayName, entry.install.manifestEntry ?? ""],
+    policy,
+    resolvedSynonymLookup,
+  );
+  const assetRawIdentityTerms = buildSearchTerms(
+    [entry.id, entry.displayName, entry.install.manifestEntry ?? ""],
+    policy,
+    new Map<string, string>(),
+  );
 
   if (
     isSuppressedBySpecializedDemandGate(entry, rawKeywordTerms, demandContext)
@@ -164,16 +200,51 @@ export function buildCandidateRecommendationBase(
     return null;
   }
 
+  const demandLanguageTerms = new Set(
+    demandContext.terms
+      .filter((term) => term.signalType === "languages")
+      .map((term) => term.canonicalTerm),
+  );
+  // Ecosystem gates only count PROGRAMMING languages as ecosystem evidence
+  // (review): document languages like markdown/json/text say nothing about
+  // the workspace's stack, so they must neither deny exact-stack nor trigger
+  // the mismatch penalty. KNOWN_ECOSYSTEM_LANGUAGE_TOKENS is the same set the
+  // identity-contradiction gate uses.
+  const programmingDemandLanguages = new Set(
+    [...demandLanguageTerms].filter((term) =>
+      KNOWN_ECOSYSTEM_LANGUAGE_TOKENS.has(term),
+    ),
+  );
   const matchedSignals = collectMatchedSignals(
     searchTerms,
     demandContext,
     policy,
+    assetTermStrength,
+    assetRawIdentityTerms,
+  );
+  const assetEcosystemCompat = computeAssetEcosystemCompat(
+    entry,
+    demandContext,
+    programmingDemandLanguages,
   );
   const matchQuality = analyzeMatchQuality(
     matchedSignals,
     capabilitySearchTerms,
     resolvedPolicyContext.wrapperLikeTerms,
     resolvedPolicyContext.genericToolingTerms,
+    {
+      assetEcosystemCompat,
+      assetIdentityTerms: assetRawIdentityTerms,
+      // Contradiction only counts PROGRAMMING languages (review): document
+      // languages like markdown/json/text say nothing about the workspace's
+      // stack, so a docs-only workspace has an UNKNOWN programming-language
+      // set and must never be contradicted by a php-tagged asset identity.
+      assetContradictsDemandLanguage: computeAssetLanguageContradiction(
+        assetIdentityTerms,
+        programmingDemandLanguages,
+      ),
+      packageIdentityByTerm: demandContext.packageIdentityByTerm,
+    },
   );
   const availableLocally = isLocallyAvailable(entry);
   const recommendationBasis = determineRecommendationBasis(
@@ -245,6 +316,7 @@ export function buildCandidateRecommendationBase(
     ecosystemMismatchPenalty: computeEcosystemMismatchPenalty(
       entry,
       demandContext,
+      programmingDemandLanguages,
       policy.scoring.ecosystemMismatchPenalty,
     ),
     redundancyPenalty: 0,
@@ -252,6 +324,27 @@ export function buildCandidateRecommendationBase(
     total: 0,
   };
   breakdown.total = calculateBreakdownTotal(breakdown);
+
+  // #444 AC3 (review): a recommendation whose ONLY declared-package matches
+  // are tokens outside the asset's curated identity is a single-token
+  // coincidence (e.g. a marketplace theme whose description contains the
+  // workspace's `c8` dependency). Such assets earn no exact-stack/ecosystem
+  // credit and native install plans exclude them by default.
+  const coincidentalMatchOnly =
+    matchQuality.exactStackWeight === 0 &&
+    matchQuality.ecosystemWeight === 0 &&
+    matchedSignals.some((match) => {
+      const tokens = demandContext.packageIdentityByTerm.get(match.term);
+      return (
+        tokens !== undefined && !setsIntersect(assetRawIdentityTerms, tokens)
+      );
+    }) &&
+    !matchedSignals.some((match) => {
+      const tokens = demandContext.packageIdentityByTerm.get(match.term);
+      return (
+        tokens !== undefined && setsIntersect(assetRawIdentityTerms, tokens)
+      );
+    });
 
   return {
     entry,
@@ -273,6 +366,7 @@ export function buildCandidateRecommendationBase(
     ),
     searchTerms,
     breakdown,
+    coincidentalMatchOnly,
   };
 }
 
@@ -331,7 +425,85 @@ export function buildCandidateRecommendation(
     duplicateGroup: base.duplicateGroup,
     reasons: [...base.reasons],
     breakdown,
+    coincidentalMatchOnly: base.coincidentalMatchOnly,
   };
+}
+
+/**
+ * Context for exact-stack eligibility analysis (#444): whether the asset's
+ * registry ecosystem matches the workspace's package managers, the asset's
+ * curated identity terms, and the per-term declared-package identity tokens
+ * from the demand side.
+ */
+interface ExactStackEligibilityContext {
+  assetEcosystemCompat: boolean;
+  assetIdentityTerms: ReadonlySet<string>;
+  assetContradictsDemandLanguage: boolean;
+  packageIdentityByTerm: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
+/**
+ * Language tokens distinctive enough to detect an ecosystem contradiction in
+ * an asset's curated identity (#444). Collision-prone tokens (go, c, r,
+ * sql, bash, html, css) are deliberately excluded so display names like
+ * "go-to-market" or "c-sharpening" cannot false-positive.
+ */
+const KNOWN_ECOSYSTEM_LANGUAGE_TOKENS = new Set([
+  "javascript",
+  "typescript",
+  "python",
+  "java",
+  "rust",
+  "ruby",
+  "php",
+  "csharp",
+  "cpp",
+  "kotlin",
+  "swift",
+  "dart",
+  "scala",
+  "perl",
+  "lua",
+  "elixir",
+  "erlang",
+  "julia",
+  "haskell",
+  "clojure",
+  "ocaml",
+  "matlab",
+  "objective-c",
+  "visual-basic",
+  "vba",
+]);
+
+/**
+ * Returns whether the asset's curated identity claims a programming
+ * language the workspace does NOT use (#444): e.g. a WordPress skill whose
+ * identity contains `php` must not receive fit:exact-stack in a
+ * TypeScript/JavaScript workspace, no matter which token coincidentally
+ * matched a workspace demand term. Assets whose identity names no
+ * distinctive language pass.
+ */
+function computeAssetLanguageContradiction(
+  assetIdentityTerms: ReadonlySet<string>,
+  demandLanguageTerms: ReadonlySet<string>,
+): boolean {
+  // An EMPTY demand language set means the workspace's language usage is
+  // UNKNOWN, not "uses none of these". Treating unknown as a contradiction
+  // would block fit:exact-stack for otherwise compatible package/tooling
+  // matches; only an explicit, non-empty language difference contradicts.
+  if (demandLanguageTerms.size === 0) {
+    return false;
+  }
+  for (const term of assetIdentityTerms) {
+    if (
+      KNOWN_ECOSYSTEM_LANGUAGE_TOKENS.has(term) &&
+      !demandLanguageTerms.has(term)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function analyzeMatchQuality(
@@ -339,6 +511,7 @@ function analyzeMatchQuality(
   capabilitySearchTerms: Set<string>,
   wrapperLikeTerms: Set<string>,
   genericToolingTerms: Set<string>,
+  eligibility: ExactStackEligibilityContext,
 ): MatchQuality {
   const exactnessEligible = !isWrapperLikeAsset(
     capabilitySearchTerms,
@@ -350,20 +523,44 @@ function analyzeMatchQuality(
 
   for (const match of matchedSignals) {
     if (exactnessEligible) {
-      if (
-        match.signalType === "frameworks" ||
-        match.signalType === "packageManagers"
-      ) {
-        exactStackWeight += match.weight;
-        continue;
-      }
+      // fit:exact-stack requires plausible ecosystem affinity and — for
+      // declared-dependency terms — the dependency's identity in the
+      // asset's own curated identity (not a coincidental token in
+      // capabilities/descriptions/paths) (#444).
+      const packageIdentityTokens = eligibility.packageIdentityByTerm.get(
+        match.term,
+      );
+      const passesEcosystemGate =
+        match.signalType !== "frameworks" &&
+        match.signalType !== "packageManagers" &&
+        match.signalType !== "tooling"
+          ? true
+          : eligibility.assetEcosystemCompat;
+      const passesIdentityGate =
+        packageIdentityTokens === undefined
+          ? true
+          : setsIntersect(
+              eligibility.assetIdentityTerms,
+              packageIdentityTokens,
+            );
+      const passesLanguageGate = !eligibility.assetContradictsDemandLanguage;
 
-      if (
-        match.signalType === "tooling" &&
-        isSpecificToolingSignal(match.term, genericToolingTerms)
-      ) {
-        exactStackWeight += match.weight;
-        continue;
+      if (passesEcosystemGate && passesIdentityGate && passesLanguageGate) {
+        if (
+          match.signalType === "frameworks" ||
+          match.signalType === "packageManagers"
+        ) {
+          exactStackWeight += match.weight;
+          continue;
+        }
+
+        if (
+          match.signalType === "tooling" &&
+          isSpecificToolingSignal(match.term, genericToolingTerms)
+        ) {
+          exactStackWeight += match.weight;
+          continue;
+        }
       }
     }
 
@@ -386,6 +583,197 @@ function analyzeMatchQuality(
       exactStackWeight === 0 &&
       ecosystemWeight === 0,
   };
+}
+
+/**
+ * Source families that are unambiguously tied to one programming language,
+ * for NON-package-registry assets (review, #443/#444): an `official-index`
+ * or marketplace asset published under one of these families declares the
+ * family language, so a workspace whose detected languages exclude it cannot
+ * plausibly share the asset's stack. The map is deliberately small — only
+ * families where the language identity is unambiguous — and extensible.
+ */
+const KNOWN_SOURCE_FAMILY_LANGUAGES = new Map<string, string>([
+  ["wordpress", "php"],
+  ["drupal", "php"],
+  ["joomla", "php"],
+]);
+
+/**
+ * Package-manager family → canonical ecosystem programming language
+ * (review): a workspace that declares a package manager is using that
+ * ecosystem's language even when no separate language signal was detected
+ * (composer ⇒ php, cargo ⇒ rust, pip ⇒ python, …). This makes
+ * `computeAssetEcosystemCompat` and `computeEcosystemMismatchPenalty`
+ * treat package-manager families as equivalent to their ecosystem
+ * languages, so a composer-only workspace matches assets resolving to
+ * `php` (packagist entries and WordPress-family skills alike) without an
+ * explicit php language signal — and a language-only workspace matches
+ * the registry of its language's ecosystem.
+ */
+const PACKAGE_MANAGER_ECOSYSTEM_LANGUAGES = new Map<string, string>([
+  ["pnpm", "javascript"],
+  ["npm", "javascript"],
+  ["yarn", "javascript"],
+  ["bun", "javascript"],
+  ["composer", "php"],
+  ["pip", "python"],
+  ["bundler", "ruby"],
+  ["nuget", "csharp"],
+  ["cargo", "rust"],
+  ["pub", "dart"],
+  ["hex", "elixir"],
+  ["cabal", "haskell"],
+  ["maven-gradle", "java"],
+  ["cocoapods", "objective-c"],
+  ["swiftpm", "swift"],
+  ["conan", "cpp"],
+  ["vcpkg", "cpp"],
+]);
+
+/**
+ * Returns whether an asset's resolved ecosystem family is compatible with
+ * the workspace's package-manager AND programming-language evidence.
+ * Direct hits win first; then the family's ecosystem language is matched
+ * against the demand language set (a packagist `composer` family matches a
+ * php-language workspace); finally each declared package manager's
+ * ecosystem language is matched against the family (a composer-only
+ * workspace matches a `php` family from wordpress/drupal/joomla sources).
+ * Single source of truth for exact-stack eligibility (#444) and the
+ * ecosystem-mismatch penalty — the two must never disagree (review).
+ */
+function ecosystemFamilyMatchesDemand(
+  family: string,
+  packageManagers: ReadonlySet<string>,
+  demandLanguageTerms: ReadonlySet<string>,
+): boolean {
+  if (packageManagers.has(family) || demandLanguageTerms.has(family)) {
+    return true;
+  }
+  const familyLanguage = PACKAGE_MANAGER_ECOSYSTEM_LANGUAGES.get(family);
+  if (familyLanguage !== undefined && demandLanguageTerms.has(familyLanguage)) {
+    return true;
+  }
+  for (const packageManager of packageManagers) {
+    if (PACKAGE_MANAGER_ECOSYSTEM_LANGUAGES.get(packageManager) === family) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Resolves the ecosystem family an asset belongs to. For package-registry
+ * assets this is the registry's package-manager family; for non-package
+ * assets with an unambiguous source-family language (e.g. an
+ * `official-index:WordPress` skill), it is that language. Returns undefined
+ * for unknown or ecosystem-agnostic sources. Single source of truth for both
+ * exact-stack eligibility (#444) and ecosystem-mismatch penalisation (F3
+ * extraction, review extension).
+ */
+function resolveRegistryEcosystemFamily(
+  entry: AssetCatalogEntry,
+): string | undefined {
+  if (entry.source.sourceKind !== "package-registry") {
+    const familyLanguage = KNOWN_SOURCE_FAMILY_LANGUAGES.get(
+      deriveSourceFamily(entry).toLowerCase(),
+    );
+    return familyLanguage;
+  }
+  const sourceIdLower = entry.source.sourceId.toLowerCase();
+  return REGISTRY_ECOSYSTEM_ENTRIES.find(([substring]) =>
+    sourceIdLower.includes(substring),
+  )?.[1];
+}
+
+/**
+ * Returns whether the asset's ecosystem is plausibly compatible with the
+ * workspace's detected package managers AND languages (#444, review): a
+ * package-registry asset whose registry maps to a package-manager family the
+ * workspace does NOT use cannot receive exact-stack credit (e.g. a Rust crate
+ * from cargo-registry in an npm workspace), and a non-package-registry asset
+ * published under an unambiguous source-family language the workspace does
+ * NOT use is equally incompatible (e.g. an `official-index:WordPress` skill
+ * in a TypeScript workspace). Ecosystem-agnostic sources pass.
+ */
+function computeAssetEcosystemCompat(
+  entry: AssetCatalogEntry,
+  demandContext: DemandContext,
+  demandLanguageTerms: ReadonlySet<string>,
+): boolean {
+  if (
+    demandContext.packageManagers.size === 0 &&
+    demandLanguageTerms.size === 0
+  ) {
+    return true;
+  }
+  const family = resolveRegistryEcosystemFamily(entry);
+  if (family === undefined) {
+    return true;
+  }
+  // Package-manager families are equivalent to their ecosystem languages
+  // (review): composer ↔ php, cargo ↔ rust, … — a workspace that declares
+  // the manager uses the language even without a separate language signal.
+  return ecosystemFamilyMatchesDemand(
+    family,
+    demandContext.packageManagers,
+    demandLanguageTerms,
+  );
+}
+
+/**
+ * Builds the asset-side term-provenance map (#444): each search term is
+ * tagged with the strength class of the asset content that produced it.
+ * Curated identity/metadata (id, displayName, capabilities) counts as
+ * strong, file locations (paths, manifest entry) as medium, registry
+ * provenance (sourceId, publisher) as weak. First occurrence wins so
+ * stronger sources dominate shared terms.
+ */
+function buildAssetTermStrength(
+  entry: AssetCatalogEntry,
+  policy: RecommendationPolicy,
+  synonymLookup: Map<string, string>,
+): Map<string, DemandEvidenceStrength> {
+  const provenance = new Map<string, DemandEvidenceStrength>();
+  const record = (values: string[], strength: DemandEvidenceStrength): void => {
+    for (const value of values) {
+      if (!value) {
+        continue;
+      }
+      for (const term of buildSearchTerms([value], policy, synonymLookup)) {
+        if (!provenance.has(term)) {
+          provenance.set(term, strength);
+        }
+      }
+    }
+  };
+
+  record([entry.id, entry.displayName, ...entry.capabilities], "strong");
+  record(
+    [
+      entry.install.relativePath ?? "",
+      entry.install.manifestEntry ?? "",
+      entry.evidence.filePath ?? "",
+    ],
+    "medium",
+  );
+  record([entry.source.sourceId, entry.source.publisher], "weak");
+  return provenance;
+}
+
+/**
+ * Returns whether two term sets share at least one value.
+ */
+function setsIntersect(
+  left: ReadonlySet<string>,
+  right: ReadonlySet<string>,
+): boolean {
+  for (const value of right) {
+    if (left.has(value)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isWrapperLikeAsset(
@@ -707,23 +1095,29 @@ const REGISTRY_ECOSYSTEM_ENTRIES: ReadonlyArray<readonly [string, string]> = [
 function computeEcosystemMismatchPenalty(
   entry: AssetCatalogEntry,
   demandContext: DemandContext,
+  demandLanguageTerms: ReadonlySet<string>,
   penalty: number,
 ): number {
-  if (entry.source.sourceKind !== "package-registry") {
+  if (
+    demandContext.packageManagers.size === 0 &&
+    demandLanguageTerms.size === 0
+  ) {
     return 0;
   }
-  if (demandContext.packageManagers.size === 0) {
+  const family = resolveRegistryEcosystemFamily(entry);
+  if (family === undefined) {
     return 0;
   }
-  const sourceIdLower = entry.source.sourceId.toLowerCase();
-  const sourceIdMatch = REGISTRY_ECOSYSTEM_ENTRIES.find(([substring]) =>
-    sourceIdLower.includes(substring),
-  );
-  if (!sourceIdMatch) {
-    return 0;
-  }
-  const [, family] = sourceIdMatch;
-  if (demandContext.packageManagers.has(family)) {
+  // Same equivalence as the compat gate (review): composer ↔ php etc., so a
+  // composer-only workspace is NOT penalized for php-family assets and a
+  // php-language workspace is NOT penalized for packagist entries.
+  if (
+    ecosystemFamilyMatchesDemand(
+      family,
+      demandContext.packageManagers,
+      demandLanguageTerms,
+    )
+  ) {
     return 0;
   }
   // Total ecosystem mismatch: the workspace has package-manager signals but
@@ -908,4 +1302,6 @@ function isSuppressedForHost(
  */
 export const candidatesInternals = {
   computeEcosystemMismatchPenalty,
+  computeAssetEcosystemCompat,
+  KNOWN_SOURCE_FAMILY_LANGUAGES,
 };

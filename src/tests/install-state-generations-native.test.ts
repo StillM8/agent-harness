@@ -13,6 +13,7 @@ import {
   writeJsonLinesFile,
   writeTextFile,
 } from "../files.js";
+import { CliUsageError } from "../cli-help-format.js";
 import {
   diffInstallState,
   explainInstalledAsset,
@@ -35,6 +36,7 @@ import {
 } from "../install/state.js";
 import { sanitizeAssetId, sanitizeMirrorId } from "../lib/safe-paths.js";
 import { clearRuntimeConfigForTests } from "../config/runtime.js";
+import { REPORT_FILE_PATH } from "../recommend/constants.js";
 import { getInstallableAssets } from "../install/utils.js";
 import type {
   ActivationManifest,
@@ -46,7 +48,10 @@ import type {
   InstalledBundleManifest,
   InstalledPackageManifest,
   MirrorIndexEntry,
+  RecommendationEntry,
+  RecommendationReport,
 } from "../types.js";
+import { HOST_TARGETS } from "../manifest-validation/primitives.js";
 
 function buildAsset(
   id: string,
@@ -549,11 +554,21 @@ void test("reconcileInstallState rejects unknown --host values", async () => {
   try {
     await assert.rejects(
       () => reconcileInstallState(projectRoot, "nonexistent"),
-      /Unknown --host/u,
+      (error: unknown) =>
+        error instanceof CliUsageError &&
+        /Unknown --host 'nonexistent'/u.test(error.message),
     );
     await assert.rejects(
       () => reconcileInstallState(projectRoot, ""),
-      /Invalid --host/u,
+      (error: unknown) =>
+        error instanceof CliUsageError &&
+        /Invalid --host value/u.test(error.message),
+    );
+    await assert.rejects(
+      () => reconcileInstallState(projectRoot, "  "),
+      (error: unknown) =>
+        error instanceof CliUsageError &&
+        /Invalid --host value/u.test(error.message),
     );
   } finally {
     await rm(projectRoot, { force: true, recursive: true });
@@ -568,7 +583,9 @@ void test("resetInstallState rejects unknown --host values", async () => {
   try {
     await assert.rejects(
       () => resetInstallState(projectRoot, "nonexistent"),
-      /Unknown --host/u,
+      (error: unknown) =>
+        error instanceof CliUsageError &&
+        /Unknown --host 'nonexistent'/u.test(error.message),
     );
   } finally {
     await rm(projectRoot, { force: true, recursive: true });
@@ -1095,14 +1112,483 @@ void test("manageNativeInstall builds a native install plan from selected activa
   }
 });
 
+function buildRecommendationEntry(
+  assetId: string,
+  overrides: Partial<RecommendationEntry> = {},
+): RecommendationEntry {
+  return {
+    assetId,
+    host: "copilot-vscode",
+    rank: 1,
+    score: 10,
+    reasons: [],
+    assetKind: "extension",
+    sourceId: "fixture-source",
+    sourceFamily: "fixture-source",
+    availableLocally: false,
+    recommendationBasis: "workspace-fit",
+    contextSizeClass: "small",
+    estimatedPromptWeight: 1,
+    selectionStage: "top-by-host",
+    coverageTags: [],
+    taskModes: [],
+    matchedSignals: [],
+    scoreBreakdown: {
+      authority: 1,
+      compatibility: 1,
+      portfolioFit: 1,
+      trust: 1,
+      sourcePriority: 1,
+      demand: 1,
+      hostPreference: 1,
+      coverage: 1,
+      diversity: 1,
+      assetKindDiversityPenalty: 0,
+      freshness: 1,
+      costPenalty: 0,
+      riskPenalty: 0,
+      negativePenalty: 0,
+      ecosystemMismatchPenalty: 0,
+      redundancyPenalty: 0,
+      budgetPenalty: 0,
+      total: 10,
+    },
+    ...overrides,
+  };
+}
+
+function buildNativePlanRecommendationReport(
+  copilotVscodeEntries: RecommendationEntry[],
+): RecommendationReport {
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    policyVersion: 1,
+    sessionIntent: "general",
+    recommendations: copilotVscodeEntries,
+    topByHost: Object.fromEntries(
+      HOST_TARGETS.map((host) => [
+        host,
+        host === "copilot-vscode" ? copilotVscodeEntries : [],
+      ]),
+    ) as RecommendationReport["topByHost"],
+    hostSummaries: Object.fromEntries(
+      HOST_TARGETS.map((host) => [
+        host,
+        {
+          host,
+          recommendationLimit: 20,
+          recommendationLimitSource: "policy",
+          recommendationLimitOverrideMode: "preserve",
+          recommendationLimitOverrideModeSource: "policy",
+          activationBudget: 20,
+          selectedCount: 0,
+          totalEstimatedPromptWeight: 0,
+          selectedAssetIds: [],
+          byAssetKind: {},
+          bySourceFamily: {},
+          byConcern: {},
+          concernBuckets: {},
+          taskModeBuckets: {},
+        },
+      ]),
+    ) as RecommendationReport["hostSummaries"],
+    suggestedBundles: [],
+  };
+}
+
+void test("manageNativeInstall excludes single-token coincidence extensions from the plan with an explicit note (review, #444 AC3)", async (t) => {
+  const projectRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-native-coincidence-"),
+  );
+  const output: string[] = [];
+
+  try {
+    await writeJsonFile(
+      join(
+        projectRoot,
+        "activate",
+        "copilot-vscode",
+        "workspace-profile-manifest.json",
+      ),
+      {
+        schemaVersion: 1,
+        generatedAt: new Date().toISOString(),
+        profileId: "fixture",
+        workspaceRoot: projectRoot,
+        bundleIds: ["copilot-core"],
+        selectedAssetIds: [],
+        selectedInstructionIds: [],
+        selectedAgentIds: [],
+        selectedWorkflowIds: [],
+        selectedExtensionIds: [
+          "real-ext",
+          "kept-ext",
+          "kept2-ext",
+          "coin-ext",
+          "coin-ext2",
+          "skip-ext",
+          "missing-asset",
+          "skill-ext",
+        ],
+        activationBudget: 10,
+      } satisfies CopilotWorkspaceProfileManifest,
+    );
+    await writeJsonFile(
+      join(
+        projectRoot,
+        "activate",
+        "copilot-vscode",
+        "activation-manifest.json",
+      ),
+      {
+        schemaVersion: 1,
+        host: "copilot-vscode",
+        generatedAt: new Date().toISOString(),
+        activeBundles: ["copilot-core"],
+        activeAssets: [
+          "real-ext",
+          "kept-ext",
+          "kept2-ext",
+          "coin-ext",
+          "coin-ext2",
+          "skip-ext",
+          "missing-asset",
+          "skill-ext",
+        ],
+        runtimeRoot: join(projectRoot, "activate", "copilot-vscode"),
+        notes: [],
+      } satisfies ActivationManifest,
+    );
+    // A genuine TypeScript tooling extension, an activation-manifest keep
+    // without a recommendation, two lookalikes whose ONLY match is the
+    // workspace's `c8` dependency token (absent from their identities), and
+    // an asset with no resolvable extension id (skipped entirely).
+    await writeJsonFile(
+      join(
+        projectRoot,
+        "activate",
+        "copilot-vscode",
+        sanitizeAssetId("real-ext"),
+        "asset.json",
+      ),
+      buildAsset("real-ext", { capabilities: ["typescript", "testing"] }),
+    );
+    await writeJsonFile(
+      join(
+        projectRoot,
+        "activate",
+        "copilot-vscode",
+        sanitizeAssetId("kept-ext"),
+        "asset.json",
+      ),
+      buildAsset("kept-ext", { capabilities: ["node", "api"] }),
+    );
+    await writeJsonFile(
+      join(
+        projectRoot,
+        "activate",
+        "copilot-vscode",
+        sanitizeAssetId("kept2-ext"),
+        "asset.json",
+      ),
+      buildAsset("kept2-ext", { capabilities: ["testing", "tooling"] }),
+    );
+    await writeJsonFile(
+      join(
+        projectRoot,
+        "activate",
+        "copilot-vscode",
+        sanitizeAssetId("coin-ext"),
+        "asset.json",
+      ),
+      buildAsset("coin-ext", { capabilities: ["c8", "theme", "color"] }),
+    );
+    await writeJsonFile(
+      join(
+        projectRoot,
+        "activate",
+        "copilot-vscode",
+        sanitizeAssetId("coin-ext2"),
+        "asset.json",
+      ),
+      buildAsset("coin-ext2", { capabilities: ["c8", "icons"] }),
+    );
+    await writeJsonFile(
+      join(
+        projectRoot,
+        "activate",
+        "copilot-vscode",
+        sanitizeAssetId("skip-ext"),
+        "asset.json",
+      ),
+      // No manifest entry and an id that is not a valid extension id
+      // (no publisher.separator): resolveVsCodeExtensionId returns
+      // undefined and the asset is skipped without an action.
+      buildAsset("skip-ext", {
+        install: {
+          method: "vscode-extension",
+          nativeHosts: ["copilot-vscode"],
+        },
+      }),
+    );
+    await writeJsonFile(
+      join(
+        projectRoot,
+        "activate",
+        "copilot-vscode",
+        sanitizeAssetId("skill-ext"),
+        "asset.json",
+      ),
+      buildAsset("skill-ext", { assetKind: "skill" }),
+    );
+    // "missing-asset" has NO asset.json on purpose: the collection loop must
+    // skip it (readJsonFileOrNull → null) like the wrong-kind asset above.
+    // The persisted recommendation report flags the lookalikes as
+    // coincidence-only; real-ext carries a real exact-stack reason and
+    // kept-ext has NO entry (kept from the activation manifest).
+    await writeJsonFile(
+      join(projectRoot, ...REPORT_FILE_PATH),
+      buildNativePlanRecommendationReport([
+        buildRecommendationEntry("real-ext", {
+          reasons: ["fit:exact-stack"],
+        }),
+        // A recommendation WITHOUT fit reasons exercises the
+        // recommendation-present/no-fit status arm; kept2-ext has NO entry
+        // and covers the manifest-keep arm.
+        buildRecommendationEntry("kept-ext", {
+          reasons: [],
+        }),
+        buildRecommendationEntry("coin-ext", {
+          reasons: [],
+          coincidentalMatchOnly: true,
+          matchedSignals: [
+            {
+              term: "npm-c8",
+              signalType: "tooling",
+              weight: 9,
+              evidenceCount: 1,
+              weightedEvidenceCount: 3,
+              evidenceStrengthCounts: { strong: 1, medium: 0, weak: 0 },
+            },
+          ],
+        }),
+        buildRecommendationEntry("coin-ext2", {
+          reasons: [],
+          coincidentalMatchOnly: true,
+          matchedSignals: [],
+        }),
+      ]),
+    );
+
+    t.mock.method(globalThis.console, "log", (...args: unknown[]) => {
+      output.push(args.map((value) => String(value)).join(" "));
+    });
+
+    await manageNativeInstall(projectRoot, [
+      "--host",
+      "vscode",
+      "--operation",
+      "plan",
+    ]);
+
+    const planText = output.join("\n");
+    // The real extension stays in the plan with the fit reason on its status
+    // line; the manifest-keep extension has no recommendation; the lookalikes
+    // are excluded (one with and one without named signals); the unresolvable
+    // asset produces no action at all.
+    assert.match(
+      planText,
+      /fixture\.real-ext install=/u,
+      "real extension kept",
+    );
+    assert.match(
+      planText,
+      /fixture\.real-ext: basis: workspace-fit \(fit:exact-stack\) — native install via host CLI \(not mirrored\)/u,
+      "explicit status line with fit reason",
+    );
+    assert.match(
+      planText,
+      /fixture\.kept-ext install=/u,
+      "manifest-keep extension kept",
+    );
+    assert.match(
+      planText,
+      /fixture\.kept-ext: basis: workspace-fit — native install via host CLI \(not mirrored\)/u,
+      "recommendation-without-fit status line",
+    );
+    assert.match(
+      planText,
+      /fixture\.kept2-ext install=/u,
+      "second manifest-keep extension kept",
+    );
+    assert.match(
+      planText,
+      /fixture\.kept2-ext: basis: no workspace recommendation \(kept from activation manifest\) — native install via host CLI \(not mirrored\)/u,
+      "no-recommendation status line",
+    );
+    assert.doesNotMatch(
+      planText,
+      /fixture\.coin-ext install=/u,
+      "coincidence extension must NOT produce an install action",
+    );
+    assert.doesNotMatch(
+      planText,
+      /fixture\.coin-ext2 install=/u,
+      "second coincidence extension must NOT produce an install action",
+    );
+    assert.doesNotMatch(
+      planText,
+      /fixture\.skip-ext/u,
+      "asset without a resolvable extension id is skipped entirely",
+    );
+    assert.doesNotMatch(
+      planText,
+      /missing-asset|skill-ext|fixture\.skill-ext/u,
+      "missing and wrong-kind assets are skipped without actions",
+    );
+    assert.match(
+      planText,
+      /Excluded from plan \(single-token coincidence/u,
+      "exclusion note present",
+    );
+    assert.match(
+      planText,
+      /copilot-vscode:fixture\.coin-ext \(matched only: tooling:npm-c8\)/u,
+      "exclusion note names the coincidental term",
+    );
+    assert.match(
+      planText,
+      /^ {2}copilot-vscode:fixture\.coin-ext2$/mu,
+      "exclusion note without signals prints the bare line",
+    );
+    assert.doesNotMatch(
+      planText,
+      /\(no extensions remain after excluding single-token coincidences\)/u,
+      "included actions still exist",
+    );
+  } finally {
+    await rm(projectRoot, { force: true, recursive: true });
+  }
+});
+
+void test("manageNativeInstall prints the empty-plan notice when every extension is a coincidence (review)", async (t) => {
+  const projectRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-native-all-coincidence-"),
+  );
+  const output: string[] = [];
+
+  try {
+    await writeJsonFile(
+      join(
+        projectRoot,
+        "activate",
+        "copilot-vscode",
+        "workspace-profile-manifest.json",
+      ),
+      {
+        schemaVersion: 1,
+        generatedAt: new Date().toISOString(),
+        profileId: "fixture",
+        workspaceRoot: projectRoot,
+        bundleIds: ["copilot-core"],
+        selectedAssetIds: [],
+        selectedInstructionIds: [],
+        selectedAgentIds: [],
+        selectedWorkflowIds: [],
+        selectedExtensionIds: ["only-coin"],
+        activationBudget: 10,
+      } satisfies CopilotWorkspaceProfileManifest,
+    );
+    await writeJsonFile(
+      join(
+        projectRoot,
+        "activate",
+        "copilot-vscode",
+        "activation-manifest.json",
+      ),
+      {
+        schemaVersion: 1,
+        host: "copilot-vscode",
+        generatedAt: new Date().toISOString(),
+        activeBundles: ["copilot-core"],
+        activeAssets: ["only-coin"],
+        runtimeRoot: join(projectRoot, "activate", "copilot-vscode"),
+        notes: [],
+      } satisfies ActivationManifest,
+    );
+    await writeJsonFile(
+      join(
+        projectRoot,
+        "activate",
+        "copilot-vscode",
+        sanitizeAssetId("only-coin"),
+        "asset.json",
+      ),
+      buildAsset("only-coin", { capabilities: ["c8", "theme"] }),
+    );
+    await writeJsonFile(
+      join(projectRoot, ...REPORT_FILE_PATH),
+      buildNativePlanRecommendationReport([
+        buildRecommendationEntry("only-coin", {
+          reasons: [],
+          coincidentalMatchOnly: true,
+          matchedSignals: [
+            {
+              term: "npm-c8",
+              signalType: "tooling",
+              weight: 9,
+              evidenceCount: 1,
+            },
+          ],
+        }),
+      ]),
+    );
+
+    t.mock.method(globalThis.console, "log", (...args: unknown[]) => {
+      output.push(args.map((value) => String(value)).join(" "));
+    });
+
+    await manageNativeInstall(projectRoot, [
+      "--host",
+      "vscode",
+      "--operation",
+      "plan",
+    ]);
+
+    const planText = output.join("\n");
+    assert.match(
+      planText,
+      /\(no extensions remain after excluding single-token coincidences\)/u,
+      "empty-plan notice",
+    );
+    assert.doesNotMatch(planText, /fixture\.only-coin install=/u);
+  } finally {
+    await rm(projectRoot, { force: true, recursive: true });
+  }
+});
+
 void test("manageNativeInstall rejects unsupported and invalid operations", async () => {
+  // #446 contract: CliUsageError messages are ONE LINE; the full actionable
+  // diagnostic is routed through the separate diagnostic output path.
   await assert.rejects(
     manageNativeInstall(process.cwd(), ["--host", "not-a-host"]),
-    /Unsupported host adapter/u,
+    (error: unknown) =>
+      error instanceof CliUsageError &&
+      error.message ===
+        "'not-a-host' is not a registered host target or alias." &&
+      !error.message.includes("\n"),
+    "unknown host must surface a single-line summary",
   );
   await assert.rejects(
     manageNativeInstall(process.cwd(), ["--host", "zed"]),
-    /Unsupported native install capability/u,
+    (error: unknown) =>
+      error instanceof CliUsageError &&
+      /does not expose a native install\/verify\/remove provider/u.test(
+        error.message,
+      ) &&
+      !error.message.includes("\n"),
+    "unsupported native install must surface a single-line summary",
   );
   await assert.rejects(
     manageNativeInstall(process.cwd(), [
