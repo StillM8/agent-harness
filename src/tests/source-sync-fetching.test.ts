@@ -11,11 +11,13 @@ import {
   getAllowedOrigins,
   getAllowedOrigin,
   fetchWithRetry,
+  fetchRequiredText,
   hasHttpStatus,
   isNonTransientError,
   SOURCE_SYNC_MAX_RETRIES,
   SOURCE_SYNC_RETRY_BASE_DELAY_MS,
   SOURCE_SYNC_FETCH_MAX_BYTES,
+  SOURCE_SYNC_LARGE_RESPONSE_MAX_BYTES,
   SOURCE_SYNC_TIMEOUT_MS,
   SOURCE_SYNC_HEADERS,
 } from "../domains/discovery/source-sync/fetching.js";
@@ -85,6 +87,146 @@ void test("fetchRequiredText retry constants can be overridden via options", asy
   assert.equal(options.retryBaseDelayMs, 500);
   assert.equal(options.maxBytes, 1_000_000);
   assert.equal(options.timeoutMs, 15_000);
+});
+
+// ── Response byte-cap wiring (review T2) ────────────────────────────────
+
+const CAP_PROBE_URL = "https://agenticresourcediscovery.org/fixtures/cap.json";
+const CAP_PROBE_ORIGINS = ["https://agenticresourcediscovery.org"];
+
+void test("fetchRequiredText aborts over-cap responses through the guarded fetch layer (review T2)", async () => {
+  const originalFetch = globalThis.fetch;
+  const previousFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  try {
+    // Control: a small body under the 5MB default cap returns normally.
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    await assert.doesNotReject(
+      fetchRequiredText(CAP_PROBE_URL, CAP_PROBE_ORIGINS, {
+        timeoutMs: 5_000,
+      }),
+      "an under-cap registry response must pass through fetchRequiredText",
+    );
+
+    // Over-cap via Content-Length (review): the guarded reader rejects on
+    // the header BEFORE buffering, so a TINY body with an oversized
+    // content-length exercises the 5MB default wiring without allocating
+    // multi-megabyte buffers.
+    const tinyBody = new TextEncoder().encode("{}");
+    globalThis.fetch = async () =>
+      new Response(tinyBody, {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(6 * 1024 * 1024),
+        },
+      });
+    await assert.rejects(
+      fetchRequiredText(CAP_PROBE_URL, CAP_PROBE_ORIGINS, {
+        maxRetries: 0,
+        timeoutMs: 5_000,
+      }),
+      /Failed to fetch|exceeds the configured limit/u,
+      "an over-cap Content-Length must abort through the guarded fetch layer",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousFlag === undefined) {
+      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+    } else {
+      process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = previousFlag;
+    }
+  }
+});
+
+void test("fetchRequiredText aborts mid-stream when no Content-Length is present (review T2)", async () => {
+  const originalFetch = globalThis.fetch;
+  const previousFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  try {
+    // No content-length header: the streaming reader must still abort once
+    // the byte count passes maxBytes — covered with a tiny override so no
+    // large buffer is needed.
+    const body = new TextEncoder().encode("0123456789abcdef0123456789abcdef");
+    globalThis.fetch = async () =>
+      new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    await assert.rejects(
+      fetchRequiredText(CAP_PROBE_URL, CAP_PROBE_ORIGINS, {
+        maxBytes: 10,
+        maxRetries: 0,
+        timeoutMs: 5_000,
+      }),
+      /Failed to fetch|exceeds the configured limit/u,
+      "an over-cap stream without Content-Length must abort while reading",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousFlag === undefined) {
+      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+    } else {
+      process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = previousFlag;
+    }
+  }
+});
+
+void test("the packagist 25MB response budget is enforced through the same cap path (review T2)", async () => {
+  const originalFetch = globalThis.fetch;
+  const previousFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  try {
+    // packagist.ts passes SOURCE_SYNC_LARGE_RESPONSE_MAX_BYTES explicitly;
+    // the Content-Length pre-check aborts on the header alone, so the
+    // oversized budget is exercised with a tiny body.
+    const tinyBody = new TextEncoder().encode("{}");
+    globalThis.fetch = async () =>
+      new Response(tinyBody, {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(SOURCE_SYNC_LARGE_RESPONSE_MAX_BYTES + 1),
+        },
+      });
+    await assert.rejects(
+      fetchRequiredText(CAP_PROBE_URL, CAP_PROBE_ORIGINS, {
+        maxBytes: SOURCE_SYNC_LARGE_RESPONSE_MAX_BYTES,
+        maxRetries: 0,
+        timeoutMs: 5_000,
+      }),
+      /Failed to fetch|exceeds the configured limit/u,
+      "a response over the 25MB Packagist budget must abort through the guarded fetch layer",
+    );
+
+    // Control: an under-limit Content-Length passes.
+    globalThis.fetch = async () =>
+      new Response(tinyBody, {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "content-length": "1024",
+        },
+      });
+    await assert.doesNotReject(
+      fetchRequiredText(CAP_PROBE_URL, CAP_PROBE_ORIGINS, {
+        maxBytes: SOURCE_SYNC_LARGE_RESPONSE_MAX_BYTES,
+        timeoutMs: 5_000,
+      }),
+      "an under-limit Content-Length must pass the 25MB budget path",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousFlag === undefined) {
+      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+    } else {
+      process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = previousFlag;
+    }
+  }
 });
 
 // ── Stale-data fallback: consecutive failure tracking ───────────────────

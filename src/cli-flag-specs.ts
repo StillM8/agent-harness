@@ -21,6 +21,18 @@ function helpSubcommandSpec(domain: string): SubcommandFlagSpec {
 }
 
 /**
+ * Shared flag spec for `mirror bundle-explain` and its alias
+ * `mirror explain-bundle` (review S2): both spellings dispatch to the same
+ * command, so one spec object serves both table keys — a flag added to one
+ * can never drift out of the other.
+ */
+const BUNDLE_EXPLAIN_SPEC: SubcommandFlagSpec = {
+  knownFlags: new Set(["--bundle", "--json"]),
+  flagsWithValues: new Set(["--bundle"]),
+  usageHint: "agent-harness bundle explain --help",
+};
+
+/**
  * Flag spec table for mirror subcommands (#445): the shared unknown-flag
  * guard rejects typo'd flags before any mirror work or state write.
  */
@@ -46,16 +58,8 @@ export const MIRROR_SUBCOMMAND_FLAG_SPECS: Record<string, SubcommandFlagSpec> =
       flagsWithValues: new Set(),
       usageHint: "agent-harness mirror diff --help",
     },
-    "bundle-explain": {
-      knownFlags: new Set(["--bundle", "--json"]),
-      flagsWithValues: new Set(["--bundle"]),
-      usageHint: "agent-harness bundle explain --help",
-    },
-    "explain-bundle": {
-      knownFlags: new Set(["--bundle", "--json"]),
-      flagsWithValues: new Set(["--bundle"]),
-      usageHint: "agent-harness bundle explain --help",
-    },
+    "bundle-explain": BUNDLE_EXPLAIN_SPEC,
+    "explain-bundle": BUNDLE_EXPLAIN_SPEC,
     explain: {
       knownFlags: new Set(["--asset", "--mirror"]),
       flagsWithValues: new Set(["--asset", "--mirror"]),
@@ -63,6 +67,99 @@ export const MIRROR_SUBCOMMAND_FLAG_SPECS: Record<string, SubcommandFlagSpec> =
     },
     help: helpSubcommandSpec("mirror"),
   };
+
+/**
+ * Flag spec table for discover subcommands (review S3): replaces the
+ * ad-hoc per-case `hasUnknownFlag(rest, new Set([...]), ...)` blocks with
+ * the same shared table + guard primitive the other command domains use,
+ * so discover flag handling can never diverge from the pattern enforced
+ * everywhere else. Subcommands without options (breadth/recall/
+ * candidate-pool/stats/ard-export body flags) declare empty sets, so ANY
+ * flag is rejected exactly as before. demand-profile/sources/catalog/index
+ * are intentionally absent: they historically accepted options without
+ * validation and the sweep contract only covers the guarded set.
+ */
+export const DISCOVER_SUBCOMMAND_FLAG_SPECS: Record<
+  string,
+  SubcommandFlagSpec
+> = {
+  sync: {
+    knownFlags: new Set(["--full"]),
+    flagsWithValues: new Set(),
+    usageHint: "agent-harness discover sync --help",
+  },
+  select: {
+    knownFlags: new Set([
+      "--ai-enrich",
+      "--no-ai-enrich",
+      "--force",
+      "--require-ai-enrich",
+    ]),
+    flagsWithValues: new Set(),
+    usageHint: "agent-harness discover select --help",
+  },
+  full: {
+    knownFlags: new Set([
+      "--ai-enrich",
+      "--no-ai-enrich",
+      "--force",
+      "--require-ai-enrich",
+      "--quiet",
+      "--summary",
+      "--no-sync",
+      "--sync-all",
+      "--max-scan-bytes",
+    ]),
+    flagsWithValues: new Set(["--max-scan-bytes"]),
+    usageHint: "agent-harness discover full --help",
+  },
+  breadth: {
+    knownFlags: new Set(),
+    flagsWithValues: new Set(),
+    usageHint: "agent-harness discover breadth --help",
+  },
+  recall: {
+    knownFlags: new Set(),
+    flagsWithValues: new Set(),
+    usageHint: "agent-harness discover recall --help",
+  },
+  "candidate-pool": {
+    knownFlags: new Set(),
+    flagsWithValues: new Set(),
+    usageHint: "agent-harness discover candidate-pool --help",
+  },
+  enrich: {
+    knownFlags: new Set(["--force", "--require-ai-enrich"]),
+    flagsWithValues: new Set(),
+    usageHint: "agent-harness discover enrich --help",
+  },
+  stats: {
+    knownFlags: new Set(),
+    flagsWithValues: new Set(),
+    usageHint: "agent-harness discover stats --help",
+  },
+  diff: {
+    knownFlags: new Set(["--baseline", "--json"]),
+    flagsWithValues: new Set(["--baseline"]),
+    usageHint: "agent-harness discover diff --help",
+  },
+  "environment-index": {
+    knownFlags: new Set(["--json"]),
+    flagsWithValues: new Set(),
+    usageHint: "agent-harness discover environment-index --help",
+  },
+  "ard-export": {
+    knownFlags: new Set(["--quiet"]),
+    flagsWithValues: new Set(),
+    usageHint: "agent-harness discover ard-export --help",
+  },
+  inspect: {
+    knownFlags: new Set(["--source", "--id", "--limit"]),
+    flagsWithValues: new Set(["--source", "--id", "--limit"]),
+    usageHint: "agent-harness discover inspect --help",
+  },
+  help: helpSubcommandSpec("discover"),
+};
 
 /**
  * Flag spec table for install/stage subcommands (#445): the shared
