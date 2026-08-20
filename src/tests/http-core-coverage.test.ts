@@ -79,6 +79,10 @@ void test("guarded fetch test mocks serialize request bodies and parse json resp
       return new Response("not-json", { status: 200 });
     }
 
+    if (callCount === 4) {
+      return new Response("server-error", { status: 500, statusText: "" });
+    }
+
     return new Response("server-error", { status: 500 });
   };
 
@@ -102,6 +106,15 @@ void test("guarded fetch test mocks serialize request bodies and parse json resp
       body: Buffer.from("body"),
       resolveHostname: async () => [{ address: "8.8.8.8", family: 4 }],
     });
+    await assert.rejects(
+      fetchBytesWithGuards("https://example.com/api", {
+        allowedOrigins: ["https://example.com"],
+        body: "empty-status",
+        resolveHostname: async () => [{ address: "8.8.8.8", family: 4 }],
+        throwOnHttpError: true,
+      }),
+      /HTTP 500/u,
+    );
 
     assert.deepEqual(jsonResult, { ok: true, bodyText: "alpha=1&beta=2" });
     assert.equal(invalidJsonResult, null);
@@ -121,6 +134,11 @@ void test("guarded fetch test mocks serialize request bodies and parse json resp
         method: "POST",
         contentLength: String(Buffer.byteLength("body")),
         bodyText: "body",
+      },
+      {
+        method: "POST",
+        contentLength: String(Buffer.byteLength("empty-status")),
+        bodyText: "empty-status",
       },
     ]);
   } finally {

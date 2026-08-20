@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -106,6 +106,37 @@ void test("Claude Code wire writes a valid local marketplace/plugin tree and res
     assert.deepEqual(resetMarketplace.plugins, [
       { name: "existing", source: "./plugins/existing" },
     ]);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Claude Code reset tolerates a marketplace with a non-array plugins field", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-claude-plugin-edge-"),
+  );
+  try {
+    const marketplacePath = join(
+      workspaceRoot,
+      ".claude-plugin",
+      "marketplace.json",
+    );
+    await mkdir(join(workspaceRoot, ".claude-plugin"), { recursive: true });
+    await writeFile(
+      marketplacePath,
+      JSON.stringify({
+        name: "team-tools",
+        owner: { name: "Team" },
+        plugins: "not-an-array",
+      }),
+      "utf8",
+    );
+
+    await resetClaudeCodeNativeHost(workspaceRoot, undefined);
+    const resetMarketplace = JSON.parse(
+      await readFile(marketplacePath, "utf8"),
+    ) as { plugins: unknown[] };
+    assert.deepEqual(resetMarketplace.plugins, []);
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }

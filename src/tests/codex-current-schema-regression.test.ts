@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -202,6 +209,7 @@ void test("legacy Codex marketplaces are preserved non-destructively", async () 
     );
     await writeJsonFile(marketplacePath, {
       schemaVersion: 2,
+      interface: { displayName: 42 },
       plugins: [{ name: "existing", path: "./existing" }],
     });
 
@@ -222,6 +230,21 @@ void test("legacy Codex marketplaces are preserved non-destructively", async () 
       marketplace.plugins.find((plugin) => plugin.name === "agent-harness"),
       { name: "agent-harness", path: "./agent-harness" },
     );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex reset rethrows unexpected agent-profile directory errors", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-reset-edge-"),
+  );
+  try {
+    await mkdir(join(workspaceRoot, ".codex"), { recursive: true });
+    await writeFile(join(workspaceRoot, ".codex", "agents"), "not-a-directory");
+    await assert.rejects(resetCodexNativeHost(workspaceRoot, undefined), {
+      code: "ENOTDIR",
+    });
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }

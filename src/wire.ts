@@ -58,7 +58,7 @@ export async function runWire(
   } catch (error: unknown) {
     if (error instanceof WireModeUsageError) {
       console.error(
-        `error: ${error.message} Run '${error.usageHint ?? "agent-harness wire <host> --help"}' for usage.`,
+        `error: ${error.message} Run '${error.usageHint}' for usage.`,
       );
       return 1;
     }

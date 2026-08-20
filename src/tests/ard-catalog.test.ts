@@ -143,9 +143,22 @@ void test("writeArdCatalog skips malformed catalog entries and falls back to an 
       ...entry({ id: "malformed" }),
       capabilities: undefined,
     } as unknown as AssetCatalogEntry;
+    const malformedWithDisplayName = {
+      ...entry({ id: "", displayName: "Named malformed" }),
+      capabilities: undefined,
+    } as unknown as AssetCatalogEntry;
+    const malformedWithoutIdentity = {
+      ...entry({ id: "", displayName: "" }),
+      capabilities: undefined,
+    } as unknown as AssetCatalogEntry;
     await writeJsonLinesFile(
       join(projectRoot, "discover", "output", "catalog.selected.jsonl"),
-      [malformed, entry({ id: "valid" })],
+      [
+        malformed,
+        malformedWithDisplayName,
+        malformedWithoutIdentity,
+        entry({ id: "valid" }),
+      ],
     );
     await writeFile(join(projectRoot, "package.json"), "{}", "utf8");
 
@@ -266,6 +279,50 @@ void test("the dependency-free ARD schema validator reports core schema failures
   assert.ok(errors.some((error) => /expected type "string"/u.test(error)));
   assert.ok(errors.some((error) => /value is not in enum/u.test(error)));
   assert.ok(errors.some((error) => /does not match pattern/u.test(error)));
+});
+
+void test("the dependency-free ARD schema validator covers collection and format constraints", async () => {
+  const { validateJsonSchema } =
+    await import("../../scripts/validate-ard-schema.mjs");
+  const errors = validateJsonSchema(
+    {
+      uri: "not a uri",
+      dateTime: "not a date-time",
+      values: [1, 1],
+      attributes: { count: "not-an-integer" },
+      unexpected: true,
+    },
+    {
+      type: "object",
+      properties: {
+        uri: { type: "string", format: "uri" },
+        dateTime: { type: "string", format: "date-time" },
+        values: {
+          type: "array",
+          minItems: 3,
+          maxItems: 1,
+          uniqueItems: true,
+          items: { type: "number" },
+        },
+        attributes: {
+          type: "object",
+          properties: { label: { type: "string" } },
+          additionalProperties: { type: "integer" },
+        },
+      },
+      additionalProperties: false,
+    },
+  );
+
+  assert.ok(errors.some((error) => /expected URI/u.test(error)));
+  assert.ok(errors.some((error) => /expected RFC3339 date-time/u.test(error)));
+  assert.ok(errors.some((error) => /expected at least 3 items/u.test(error)));
+  assert.ok(errors.some((error) => /expected at most 1 items/u.test(error)));
+  assert.ok(errors.some((error) => /expected unique items/u.test(error)));
+  assert.ok(errors.some((error) => /expected type "integer"/u.test(error)));
+  assert.ok(
+    errors.some((error) => /unexpected property unexpected/u.test(error)),
+  );
 });
 
 void test("writeArdCatalog remains valid when Prettier is unavailable", async () => {

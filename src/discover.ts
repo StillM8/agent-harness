@@ -223,9 +223,6 @@ export async function runDiscover(
       return 0;
     }
     case "sync": {
-      if (hasUnknownFlagsForDiscoverCommand(command, rest)) {
-        return 1;
-      }
       const forceFullFlag = rest.includes("--full");
       if (!forceFullFlag && (await isCatalogIndexFresh(projectRoot))) {
         // The index is fresh but source-sync state may be stale or empty.
@@ -253,9 +250,6 @@ export async function runDiscover(
       return 0;
     }
     case "select": {
-      if (hasUnknownFlagsForDiscoverCommand(command, rest)) {
-        return 1;
-      }
       const aiEnrichmentFlags = parseAiEnrichmentFlags(rest);
       logDiscoverPhase("discover select", 1, 1, "Applying selection rules");
       await generateSelectionOutputs(projectRoot);
@@ -271,9 +265,6 @@ export async function runDiscover(
       );
     }
     case "full": {
-      if (hasUnknownFlagsForDiscoverCommand(command, rest)) {
-        return 1;
-      }
       const aiEnrichmentFlags = parseAiEnrichmentFlags(rest);
       const quietMode = rest.includes("--quiet");
       const summaryMode = rest.includes("--summary");
@@ -393,15 +384,9 @@ export async function runDiscover(
     case "recall":
     case "candidate-pool":
       // These subcommands take no options; any flag is unknown (#431).
-      if (hasUnknownFlagsForDiscoverCommand(command, rest)) {
-        return 1;
-      }
       await runDiscoveryBreadth(workingDirectory, projectRoot);
       return 0;
     case "enrich":
-      if (hasUnknownFlagsForDiscoverCommand(command, rest)) {
-        return 1;
-      }
       return handleAiEnrichmentResult(
         await orchestrateAiEnrichment(projectRoot, {
           trigger: "manual",
@@ -412,9 +397,6 @@ export async function runDiscover(
         }),
       );
     case "stats":
-      if (hasUnknownFlagsForDiscoverCommand(command, rest)) {
-        return 1;
-      }
       await printCatalogStats(projectRoot);
       return 0;
     case "diff":

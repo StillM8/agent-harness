@@ -76,3 +76,22 @@ void test("removeTreeWithRetries stops after the bounded retry budget", async ()
   assert.equal(attempts, 3);
   assert.equal(retryRemoveInternals.isRetryableRemoveError(error), true);
 });
+
+void test("removeTreeWithRetries covers default options, sleep, and error shapes", async () => {
+  let attempts = 0;
+  await removeTreeWithRetries("/tmp/default-retry", undefined, async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      const error = new Error("busy") as NodeJS.ErrnoException;
+      error.code = "EBUSY";
+      throw error;
+    }
+  });
+
+  assert.equal(attempts, 2);
+  assert.equal(retryRemoveInternals.isRetryableRemoveError(null), false);
+  assert.equal(
+    retryRemoveInternals.isRetryableRemoveError({ code: 123 }),
+    false,
+  );
+});

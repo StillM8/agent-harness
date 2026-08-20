@@ -534,6 +534,43 @@ void test("host adapter residual helpers cover duplicate snapshots and error for
         ],
       },
     );
+
+    const hookPath = join(root, "hook.md");
+    const relativeManifest = nativeWireInternals.buildCodexHooksManifest(
+      [
+        {
+          assetId: "hook-relative",
+          assetKind: "hook",
+          compatibilityMode: "adaptable",
+          content: "# Hook\n",
+          displayName: "Hook Relative",
+        },
+      ],
+      [hookPath],
+      { "hook-relative": hookPath },
+      join(root, "manifest", "hooks.json"),
+    );
+    assert.equal(
+      (relativeManifest?.hooks as Array<Record<string, unknown>>)[0]?.source,
+      "../hook.md",
+    );
+    const legacyManifest = nativeWireInternals.buildCodexHooksManifest(
+      [
+        {
+          assetId: "hook-relative",
+          assetKind: "hook",
+          compatibilityMode: "adaptable",
+          content: "# Hook\n",
+          displayName: "Hook Relative",
+        },
+      ],
+      [hookPath],
+      "legacy-hooks-path",
+    );
+    assert.equal(
+      (legacyManifest?.hooks as Array<Record<string, unknown>>)[0]?.source,
+      "hook-relative",
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

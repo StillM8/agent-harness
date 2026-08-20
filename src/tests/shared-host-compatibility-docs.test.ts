@@ -35,3 +35,12 @@ void test("recommend parent help points users to the shared compatibility refere
   assert.match(rendered, /SHARED-HOST-COMPATIBILITY\.md/u);
   assert.match(rendered, /'shared'.*not a wire\/workspace adapter/iu);
 });
+
+void test("recommend facade suppresses the shared note when help has options", async () => {
+  const exitCode = await runRecommend(
+    ["help", "--bogus"],
+    process.cwd(),
+    process.cwd(),
+  );
+  assert.equal(exitCode, 1);
+});

@@ -65,6 +65,7 @@ void test("ard registry sync paginates, persists referrals, and resumes cursors 
             displayName: "MCP Server",
             type: "application/mcp-server",
             url: "https://example.com/mcp-server",
+            metadata: { assetKind: "mcp-server" },
             data: { assetKind: "mcp-server" },
           },
         ],
