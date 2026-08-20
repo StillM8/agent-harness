@@ -7,6 +7,7 @@ import {
   isFlagLike,
   printUnknownArgumentError,
   hasUnknownFlag,
+  CliUsageError,
 } from "./cli-help-format.js";
 import { resolveProjectRoot } from "./files.js";
 import {
@@ -26,6 +27,13 @@ import {
   runHostPreflight,
 } from "./lib/preflight.js";
 
+class WireModeUsageError extends CliUsageError {
+  public constructor(message: string) {
+    super(message, "agent-harness wire <host> --help");
+    this.name = "WireModeUsageError";
+  }
+}
+
 /**
  * Dispatches host wire preview/apply/reset commands through the adapter
  * registry after lifecycle and adapter readiness diagnostics run.
@@ -44,7 +52,18 @@ export async function runWire(
     return 0;
   }
 
-  const mode = getWireMode(rest);
+  let mode: "preview" | "apply" | "reset";
+  try {
+    mode = getWireMode(rest);
+  } catch (error: unknown) {
+    if (error instanceof WireModeUsageError) {
+      console.error(
+        `error: ${error.message} Run '${error.usageHint ?? "agent-harness wire <host> --help"}' for usage.`,
+      );
+      return 1;
+    }
+    throw error;
+  }
 
   if (target === "help") {
     printWireHelp();
@@ -111,12 +130,30 @@ export async function runWire(
  * Resolves mutually-exclusive wire mode flags, defaulting to preview.
  */
 export function getWireMode(args: string[]): "preview" | "apply" | "reset" {
+  let optionsEnded = false;
+  const supportedModes = new Set(["preview", "apply", "reset"]);
+  for (const argument of args) {
+    if (argument === "--") {
+      optionsEnded = true;
+      continue;
+    }
+    if (optionsEnded || !isFlagLike(argument)) {
+      const message =
+        !optionsEnded && supportedModes.has(argument)
+          ? `Positional wire mode '${argument}' is not supported; use '--${argument}' instead.`
+          : `Unexpected positional argument '${argument}'; wire modes must be passed as '--preview', '--apply', or '--reset'.`;
+      throw new WireModeUsageError(message);
+    }
+  }
+
   const modeFlags = ["--reset", "--preview", "--apply"].filter((flag) =>
     args.includes(flag),
   );
 
   if (modeFlags.length > 1) {
-    throw new Error(`Conflicting wire mode flags: ${modeFlags.join(", ")}`);
+    throw new WireModeUsageError(
+      `Conflicting wire mode flags: ${modeFlags.join(", ")}; choose exactly one.`,
+    );
   }
 
   if (modeFlags[0] === "--reset") {

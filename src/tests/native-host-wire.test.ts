@@ -571,23 +571,29 @@ void test("Claude Code, Pi, and Codex native wire apply/reset manage project-loc
 });
 
 void test("Codex plugin manifest omits hook registration when hook assets are absent", () => {
-  assert.deepEqual(
-    nativeWireInternals.buildCodexPluginManifest([
-      {
-        assetId: "codex.skill",
-        assetKind: "skill",
-        displayName: "Codex Skill",
-        compatibilityMode: "native",
-        content: "# Codex skill\n",
-      },
-    ]),
+  const manifest = nativeWireInternals.buildCodexPluginManifest([
     {
-      name: "agent-harness",
-      version: "1.0.0",
-      description: "Project-local Agent Harness assets for OpenAI Codex.",
-      skills: "./skills",
+      assetId: "codex.skill",
+      assetKind: "skill",
+      displayName: "Codex Skill",
+      compatibilityMode: "native",
+      content: "# Codex skill\n",
     },
-  );
+  ]);
+  assert.equal(manifest.name, "agent-harness");
+  assert.equal(manifest.version, "2.1.0");
+  assert.equal(manifest.skills, "./skills/");
+  assert.equal("hooks" in manifest, false);
+  assert.deepEqual(manifest.author, { name: "Agent Harness" });
+  assert.deepEqual(manifest.interface, {
+    displayName: "Agent Harness",
+    shortDescription: "Curated project context and skills for Codex.",
+    longDescription:
+      "Project-local Agent Harness context, curated skills, and custom agents for OpenAI Codex.",
+    developerName: "Agent Harness",
+    category: "Productivity",
+    capabilities: ["Project context", "Skills", "Custom agents"],
+  });
 });
 
 void test("restoreManagedSectionFromSnapshot preserves other host sections in AGENTS.md", async () => {

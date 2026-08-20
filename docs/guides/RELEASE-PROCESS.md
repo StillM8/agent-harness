@@ -32,7 +32,7 @@ node -e "
 "
 ```
 
-If `generatedAt` is empty or `entries` is empty, the release must **fail** — publishing an empty ARD catalog violates the v0.9 spec. The regeneration step must run against a populated catalog before tagging and publishing.
+If `entries` is empty, the release must **fail** — publishing an empty ARD 1.0 catalog violates the release contract. The regeneration step must run against a populated catalog before tagging and publishing.
 
 ## Local release candidate gate
 

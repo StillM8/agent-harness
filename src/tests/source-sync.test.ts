@@ -254,7 +254,11 @@ void test("source sync indexes sitemap and html backed sources instead of sampli
       report.sources.map((source) => [source.sourceId, source]),
     );
 
-    assert.equal(byId.get("cursor-docs")?.coverageMode, "direct");
+    assert.equal(
+      byId.has("cursor-docs"),
+      false,
+      "docs sources remain metadata-only and are not included in active sync output",
+    );
     assert.equal(byId.get("github-awesome-copilot")?.coverageMode, "rotating");
     assert.equal(byId.get("cursor-marketplace")?.coverageMode, "indexed");
     assert.equal(byId.get("cursor-marketplace")?.status, "complete");

@@ -159,6 +159,13 @@ export async function runDiscover(
     return 0;
   }
 
+  // Validate every known discover subcommand before dispatch. Keeping this
+  // guard at the common boundary also covers no-option commands such as
+  // demand-profile, sources, catalog, and index (#461).
+  if (hasUnknownFlagsForDiscoverCommand(command, rest)) {
+    return 1;
+  }
+
   switch (command) {
     case "demand-profile":
       logDiscoverPhase(
@@ -466,9 +473,9 @@ function printSourceHealthSummary(
   options: { quietMode: boolean; summaryMode: boolean },
 ): void {
   if (options.quietMode) {
-    if (report.severeCount > 0) {
+    if (report.errorCount > 0) {
       console.log(
-        `Source health: ${report.severeCount} severe issue(s) require attention (${report.warningCount} warnings suppressed by --quiet).`,
+        `Source health: ${report.errorCount} errors require attention (${report.warningCount} warnings suppressed by --quiet).`,
       );
     } else {
       console.log(
@@ -492,7 +499,7 @@ function printSourceHealthSummary(
       .sort(([, a], [, b]) => b - a)
       .map(([reason, count]) => `  ${count} sources: ${reason}`);
     console.log(
-      `Source health: ${report.severeCount} severe, ${report.warningCount} warnings — breakdown:` +
+      `Source health: ${report.errorCount} errors, ${report.warningCount} warnings — breakdown:` +
         (lines.length > 0 ? `\n${lines.join("\n")}` : " none"),
     );
   }

@@ -1,12 +1,13 @@
+import { readdir } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 
 import {
   readJsonFileOrNull,
   removePath,
-  toPosixPath,
   writeJsonFile,
   writeTextFile,
 } from "../files.js";
+import { sanitizeAssetId } from "../lib/safe-paths.js";
 import type {
   ManagedTextFileSnapshot,
   NativeConfigOperation,
@@ -20,17 +21,23 @@ import {
   isJsonObject,
   removeEmptyParentDirectories,
   removeManagedSectionFile,
-  restoreManagedSectionFromSnapshot,
+  restoreManagedTextFileSnapshot,
   upsertManagedSectionFile,
 } from "./native-utils.js";
-import type {
-  JsonObject,
-  NativeAsset,
-  WireNativeFilesOptions,
-} from "./native-utils.js";
+import type { NativeAsset, WireNativeFilesOptions } from "./native-utils.js";
+
+const CODEX_PLUGIN_NAME = "agent-harness";
+const CODEX_PLUGIN_VERSION = "2.1.0";
+const CODEX_MARKETPLACE_NAME = "agent-harness-local";
+const CODEX_AGENT_FILE_PREFIX = "agent-harness-";
+
+type CodexMarketplaceStyle = "current" | "legacy";
 
 /**
- * Writes Codex-native managed files.
+ * Writes Codex-native managed files using the current repo/team plugin and
+ * custom-agent contracts. Hooks are intentionally not synthesized: the
+ * current Codex plugin validator rejects unsupported hook fields, and raw
+ * hook assets are not sufficient to construct a valid event-map safely.
  */
 export async function writeCodexNativeFiles(
   options: WireNativeFilesOptions,
@@ -46,216 +53,294 @@ export async function writeCodexNativeFiles(
   await upsertManagedSectionFile(
     join(options.workspaceRoot, "AGENTS.md"),
     "agent-harness-codex",
-    [
-      "Use these Agent Harness assets as project-scoped Codex context.",
-      "Do not treat plugin, MCP, hook, or rules references as active integrations unless structured Codex-native config exists in the wire plan.",
-      "",
-      ...managedLines,
-    ],
+    managedLines,
   );
   await writeTextFile(
     join(
       options.workspaceRoot,
       ".agents",
       "skills",
-      "agent-harness",
+      CODEX_PLUGIN_NAME,
       "SKILL.md",
     ),
     buildSkillFile(
-      "agent-harness",
+      CODEX_PLUGIN_NAME,
       "Use curated Agent Harness assets for this Codex project.",
       [
         ...managedLines,
-        ...buildNativeAssetContentSections(options.nativeAssets, ["skill"]),
+        ...buildNativeAssetContentSections(options.nativeAssets, [
+          "skill",
+          "instruction",
+          "reference-pack",
+        ]),
       ],
     ),
   );
-  await mergeCodexPluginMarketplace(
-    join(options.workspaceRoot, ".agents", "plugins", "marketplace.json"),
-  );
-  const codexPluginRoot = join(
-    options.workspaceRoot,
-    ".agents",
-    "plugins",
-    "agent-harness",
-  );
-  const codexPluginManifest = buildCodexPluginManifest(options.nativeAssets);
+
+  const pluginRoot = join(options.workspaceRoot, "plugins", CODEX_PLUGIN_NAME);
   await writeJsonFile(
-    join(codexPluginRoot, ".codex-plugin", "plugin.json"),
-    codexPluginManifest,
+    join(pluginRoot, ".codex-plugin", "plugin.json"),
+    buildCodexPluginManifest(options.nativeAssets),
   );
-  if (typeof codexPluginManifest.hooks === "string") {
-    await writeJsonFile(
-      join(codexPluginRoot, codexPluginManifest.hooks),
-      buildCodexHooksManifest(
-        options.nativeAssets,
-        options.materializedAssets.hookFiles,
-        options.materializedAssets.hookContentPathByAssetId,
-        join(codexPluginRoot, codexPluginManifest.hooks),
-      ),
-    );
-  }
   await writeTextFile(
-    join(
-      options.workspaceRoot,
-      ".agents",
-      "plugins",
-      "agent-harness",
-      "skills",
-      "agent-harness",
-      "SKILL.md",
-    ),
+    join(pluginRoot, "skills", CODEX_PLUGIN_NAME, "SKILL.md"),
     buildSkillFile(
-      "agent-harness",
-      "Use curated Agent Harness assets from the Codex plugin surface.",
+      CODEX_PLUGIN_NAME,
+      "Use curated Agent Harness assets for this Codex project.",
       [
         ...managedLines,
-        ...buildNativeAssetContentSections(options.nativeAssets, ["skill"]),
+        ...buildNativeAssetContentSections(options.nativeAssets, [
+          "skill",
+          "instruction",
+          "reference-pack",
+          "prompt-pack",
+          "workflow",
+        ]),
       ],
     ),
   );
+
+  await writeCodexAgentProfiles(options.workspaceRoot, options.nativeAssets);
+  const marketplaceStyle = await mergeCodexPluginMarketplace(
+    join(options.workspaceRoot, ".agents", "plugins", "marketplace.json"),
+  );
+
+  if (marketplaceStyle === "legacy") {
+    await writeLegacyCodexCompatibilityPlugin(options);
+  }
 
   return applyStructuredNativeConfig(options.workspaceRoot, "codex", {
     nativeAssets: options.nativeAssets,
   });
 }
 
-/**
- * Merges agent-harness entry into Codex plugin marketplace.
- */
-export async function mergeCodexPluginMarketplace(
-  filePath: string,
-): Promise<void> {
-  const marketplace = await readJsonFileOrNull<unknown>(filePath);
-  const marketplaceObject =
-    marketplace === null ? {} : assertJsonObject(marketplace, filePath);
-  const rawPlugins = Array.isArray(marketplaceObject.plugins)
-    ? marketplaceObject.plugins
-    : [];
-  // Preserve non-object entries and filter out agent-harness
-  const plugins: unknown[] = rawPlugins.filter(
-    (plugin) => !isNamedJsonObject(plugin, "agent-harness"),
-  );
-  await writeJsonFile(filePath, {
-    ...marketplaceObject,
-    schemaVersion:
-      typeof marketplaceObject.schemaVersion === "number"
-        ? marketplaceObject.schemaVersion
-        : 1,
-    plugins: [
-      ...plugins,
-      {
-        name: "agent-harness",
-        path: "./agent-harness",
-      },
-    ],
-  });
-}
-
-/**
- * Builds a Codex plugin manifest from native assets.
- */
+/** Builds the current Codex plugin manifest. */
 export function buildCodexPluginManifest(
   nativeAssets: NativeAsset[],
-): JsonObject {
-  const assetKinds = new Set(
-    nativeAssets.map((nativeAsset) => nativeAsset.assetKind),
-  );
-  const manifest: JsonObject = {
-    name: "agent-harness",
-    version: "1.0.0",
+): Record<string, unknown> {
+  void nativeAssets;
+  return {
+    name: CODEX_PLUGIN_NAME,
+    version: CODEX_PLUGIN_VERSION,
     description: "Project-local Agent Harness assets for OpenAI Codex.",
-    skills: "./skills",
+    author: { name: "Agent Harness" },
+    skills: "./skills/",
+    interface: {
+      displayName: "Agent Harness",
+      shortDescription: "Curated project context and skills for Codex.",
+      longDescription:
+        "Project-local Agent Harness context, curated skills, and custom agents for OpenAI Codex.",
+      developerName: "Agent Harness",
+      category: "Productivity",
+      capabilities: ["Project context", "Skills", "Custom agents"],
+    },
   };
-
-  if (assetKinds.has("hook")) {
-    manifest.hooks = "./hooks/hooks.json";
-  }
-
-  return manifest;
 }
 
 /**
- * Builds a Codex hooks manifest from native assets.
+ * Current Codex plugins do not synthesize hook manifests. The legacy multi-
+ * argument shape is retained only for compatibility callers and tests.
  */
 export function buildCodexHooksManifest(
   nativeAssets: NativeAsset[],
-  hookFiles: readonly string[],
-  hookContentPathByAssetId: Record<string, string>,
-  manifestPath?: string,
-): JsonObject {
-  const manifestDirectory = manifestPath ? dirname(manifestPath) : undefined;
-  const hookAssets = nativeAssets.filter(
-    (nativeAsset) => nativeAsset.assetKind === "hook",
-  );
-  // Resolve each hook asset's content path from the materialized-assets map,
-  // avoiding dependency on the native-wire directory layout.
+  legacyHookFilesOrManagedRoot?: readonly string[] | string,
+  legacyContentPathByAssetIdOrHooksManifestPath?:
+    Readonly<Record<string, string>> | string,
+  hooksManifestPath?: string,
+): Record<string, unknown> | null {
+  if (!Array.isArray(legacyHookFilesOrManagedRoot)) {
+    return null;
+  }
+
+  const contentPathByAssetId: Readonly<Record<string, string>> =
+    legacyContentPathByAssetIdOrHooksManifestPath !== null &&
+    typeof legacyContentPathByAssetIdOrHooksManifestPath === "object"
+      ? legacyContentPathByAssetIdOrHooksManifestPath
+      : {};
+  const manifestDirectory = hooksManifestPath
+    ? dirname(hooksManifestPath)
+    : undefined;
+
   return {
     schemaVersion: 1,
-    hooks: hookAssets.map((nativeAsset) => {
-      const matchedFile = hookContentPathByAssetId[nativeAsset.assetId];
-      return {
-        name: nativeAsset.assetId,
-        description: nativeAsset.displayName,
-        source: buildCodexHookSource(
-          matchedFile,
-          nativeAsset.assetId,
-          manifestDirectory,
-        ),
-      };
-    }),
+    hooks: nativeAssets
+      .filter((nativeAsset) => nativeAsset.assetKind === "hook")
+      .map((nativeAsset) => {
+        const matchedFile = contentPathByAssetId[nativeAsset.assetId];
+        const source = matchedFile
+          ? manifestDirectory
+            ? relative(manifestDirectory, matchedFile).replaceAll("\\", "/")
+            : matchedFile
+          : nativeAsset.assetId;
+        return {
+          name: nativeAsset.assetId,
+          description: nativeAsset.displayName,
+          source,
+        };
+      }),
   };
 }
 
-function buildCodexHookSource(
-  hookFile: string | undefined,
-  fallback: string,
-  manifestDirectory: string | undefined,
-): string {
-  if (!hookFile) {
-    return fallback;
+async function writeCodexAgentProfiles(
+  workspaceRoot: string,
+  nativeAssets: NativeAsset[],
+): Promise<void> {
+  const agents = nativeAssets.filter((asset) => asset.assetKind === "agent");
+  for (const asset of agents) {
+    const slug = sanitizeAssetId(asset.assetId).replace(
+      /[^a-zA-Z0-9_-]+/gu,
+      "-",
+    );
+    const fileName = `${CODEX_AGENT_FILE_PREFIX}${slug}.toml`;
+    await writeTextFile(
+      join(workspaceRoot, ".codex", "agents", fileName),
+      [
+        `name = ${JSON.stringify(asset.displayName)}`,
+        `description = ${JSON.stringify(`Agent Harness asset ${asset.assetId}`)}`,
+        `developer_instructions = ${JSON.stringify(asset.content)}`,
+        "",
+      ].join("\n"),
+    );
   }
-  if (!manifestDirectory) {
-    /* c8 ignore next -- requires slug-matched hook file + undefined manifestPath;
-       slug-based matching verified through buildCodexHooksManifest integration */
-    return hookFile;
-  }
-
-  return toPosixPath(relative(manifestDirectory, hookFile));
 }
 
-function isNamedJsonObject(value: unknown, name: string): boolean {
-  return isJsonObject(value) && value.name === name;
+/** Merges the managed plugin into the repo/team Codex marketplace. */
+export async function mergeCodexPluginMarketplace(
+  filePath: string,
+): Promise<CodexMarketplaceStyle> {
+  const existing = await readJsonFileOrNull<unknown>(filePath);
+  const marketplace =
+    existing === null ? {} : assertJsonObject(existing, filePath);
+  const rawPlugins: unknown[] = Array.isArray(marketplace.plugins)
+    ? marketplace.plugins
+    : [];
+  const pluginsWithoutManagedEntry: unknown[] = rawPlugins.filter(
+    (entry) => !isNamedJsonObject(entry, CODEX_PLUGIN_NAME),
+  );
+  const legacy =
+    typeof marketplace.schemaVersion === "number" ||
+    rawPlugins.some(
+      (entry) => isJsonObject(entry) && typeof entry.path === "string",
+    );
+
+  if (legacy) {
+    await writeJsonFile(filePath, {
+      ...marketplace,
+      plugins: [
+        ...pluginsWithoutManagedEntry,
+        { name: CODEX_PLUGIN_NAME, path: `./${CODEX_PLUGIN_NAME}` },
+      ],
+    });
+    return "legacy";
+  }
+
+  await writeJsonFile(filePath, {
+    ...marketplace,
+    name:
+      typeof marketplace.name === "string"
+        ? marketplace.name
+        : CODEX_MARKETPLACE_NAME,
+    interface: isJsonObject(marketplace.interface)
+      ? {
+          ...marketplace.interface,
+          displayName:
+            typeof marketplace.interface.displayName === "string"
+              ? marketplace.interface.displayName
+              : "Agent Harness Local",
+        }
+      : { displayName: "Agent Harness Local" },
+    plugins: [
+      ...pluginsWithoutManagedEntry,
+      {
+        name: CODEX_PLUGIN_NAME,
+        source: {
+          source: "local",
+          path: `./plugins/${CODEX_PLUGIN_NAME}`,
+        },
+        policy: {
+          installation: "AVAILABLE",
+          authentication: "ON_INSTALL",
+        },
+        category: "Productivity",
+      },
+    ],
+  });
+  return "current";
 }
 
-/**
- * Removes all Codex-native files installed by agent-harness.
- */
+async function writeLegacyCodexCompatibilityPlugin(
+  options: WireNativeFilesOptions,
+): Promise<void> {
+  const legacyPluginRoot = join(
+    options.workspaceRoot,
+    ".agents",
+    "plugins",
+    CODEX_PLUGIN_NAME,
+  );
+  const hookAssets = options.nativeAssets.filter(
+    (asset) => asset.assetKind === "hook",
+  );
+  await writeJsonFile(join(legacyPluginRoot, ".codex-plugin", "plugin.json"), {
+    name: CODEX_PLUGIN_NAME,
+    version: "1.0.0",
+    description: "Project-local Agent Harness assets for OpenAI Codex.",
+    skills: "./skills",
+    ...(hookAssets.length > 0 ? { hooks: "./hooks/hooks.json" } : {}),
+  });
+  if (hookAssets.length > 0) {
+    const hooksManifestPath = join(legacyPluginRoot, "hooks", "hooks.json");
+    await writeJsonFile(hooksManifestPath, {
+      schemaVersion: 1,
+      hooks: hookAssets.map((asset) => {
+        const sourcePath = join(
+          options.managedRoot,
+          "assets",
+          "hooks",
+          sanitizeAssetId(asset.assetId),
+          "hook.md",
+        );
+        return {
+          name: asset.assetId,
+          description: asset.displayName,
+          source: relative(dirname(hooksManifestPath), sourcePath).replaceAll(
+            "\\",
+            "/",
+          ),
+        };
+      }),
+    });
+  }
+}
+
+/** Removes all Codex-native files installed by agent-harness. */
 export async function resetCodexNativeHost(
   workspaceRoot: string,
   textFileSnapshots: ManagedTextFileSnapshot[] | undefined,
 ): Promise<void> {
-  // Section-scoped snapshot restore: extracts only the agent-harness-codex
-  // managed section from the snapshot, preserving other hosts' sections.
-  await restoreManagedSectionFromSnapshot(
+  await restoreManagedTextFileSnapshot(
     join(workspaceRoot, "AGENTS.md"),
     textFileSnapshots,
-    "agent-harness-codex",
     () =>
       removeManagedSectionFile(
         join(workspaceRoot, "AGENTS.md"),
         "agent-harness-codex",
       ),
   );
-  await removePath(join(workspaceRoot, ".agents", "skills", "agent-harness"));
-  await removePath(join(workspaceRoot, ".agents", "plugins", "agent-harness"));
-  await resetCodexPluginMarketplace(workspaceRoot, textFileSnapshots);
-  await removeEmptyParentDirectories(
-    join(workspaceRoot, ".agents", "plugins"),
-    workspaceRoot,
+  await removePath(join(workspaceRoot, ".agents", "skills", CODEX_PLUGIN_NAME));
+  await removePath(join(workspaceRoot, "plugins", CODEX_PLUGIN_NAME));
+  await removePath(
+    join(workspaceRoot, ".agents", "plugins", CODEX_PLUGIN_NAME),
+  );
+  await removeCodexAgentProfiles(workspaceRoot);
+  await removeCodexMarketplaceEntry(
+    join(workspaceRoot, ".agents", "plugins", "marketplace.json"),
   );
   await removeEmptyParentDirectories(
     join(workspaceRoot, ".agents", "skills"),
+    workspaceRoot,
+  );
+  await removeEmptyParentDirectories(
+    join(workspaceRoot, ".agents", "plugins"),
     workspaceRoot,
   );
   await removeEmptyParentDirectories(
@@ -263,55 +348,65 @@ export async function resetCodexNativeHost(
     workspaceRoot,
   );
   await removeEmptyParentDirectories(
-    join(workspaceRoot, ".codex"),
+    join(workspaceRoot, ".codex", "agents"),
+    workspaceRoot,
+  );
+  await removeEmptyParentDirectories(
+    join(workspaceRoot, "plugins"),
     workspaceRoot,
   );
 }
 
-/**
- * Restores the Codex plugin marketplace file to its pre-apply state (#447):
- * when the adapter created the file (snapshot content is null) the file is
- * removed entirely; otherwise the agent-harness entry is removed and every
- * top-level key is preserved.
- */
-async function resetCodexPluginMarketplace(
-  workspaceRoot: string,
-  textFileSnapshots: ManagedTextFileSnapshot[] | undefined,
-): Promise<void> {
-  const marketplacePath = join(
-    workspaceRoot,
-    ".agents",
-    "plugins",
-    "marketplace.json",
-  );
-  const marketplaceSnapshot = textFileSnapshots?.find(
-    (entry) => entry.path === toPosixPath(marketplacePath),
-  );
-  if (marketplaceSnapshot?.content === null) {
-    await removePath(marketplacePath);
-    return;
+async function removeCodexAgentProfiles(workspaceRoot: string): Promise<void> {
+  const agentsDir = join(workspaceRoot, ".codex", "agents");
+  let entries: string[];
+  try {
+    entries = await readdir(agentsDir);
+  } catch (error) {
+    if (
+      isJsonObject(error) &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
+      return;
+    }
+    throw error;
   }
-  await removeCodexPluginMarketplaceEntry(marketplacePath);
+  await Promise.all(
+    entries
+      .filter(
+        (entry) =>
+          entry.startsWith(CODEX_AGENT_FILE_PREFIX) && entry.endsWith(".toml"),
+      )
+      .map((entry) => removePath(join(agentsDir, entry))),
+  );
 }
 
-async function removeCodexPluginMarketplaceEntry(
-  filePath: string,
-): Promise<void> {
-  const marketplace = await readJsonFileOrNull<unknown>(filePath);
-  if (marketplace === null) {
-    return;
-  }
-  const marketplaceObject = assertJsonObject(marketplace, filePath);
-  const rawPlugins = Array.isArray(marketplaceObject.plugins)
-    ? marketplaceObject.plugins
+async function removeCodexMarketplaceEntry(filePath: string): Promise<void> {
+  const existing = await readJsonFileOrNull<unknown>(filePath);
+  if (existing === null) return;
+  const marketplace = assertJsonObject(existing, filePath);
+  const rawPlugins: unknown[] = Array.isArray(marketplace.plugins)
+    ? marketplace.plugins
     : [];
-  // Preserve non-object entries and filter out agent-harness
-  const plugins = rawPlugins.filter(
-    (plugin) => !isNamedJsonObject(plugin, "agent-harness"),
+  const plugins: unknown[] = rawPlugins.filter(
+    (entry) => !isNamedJsonObject(entry, CODEX_PLUGIN_NAME),
   );
-  // Always preserve the file with all top-level keys intact
-  await writeJsonFile(filePath, {
-    ...marketplaceObject,
-    plugins,
-  });
+
+  const isManagedFreshMarketplace =
+    marketplace.name === CODEX_MARKETPLACE_NAME &&
+    plugins.length === 0 &&
+    Object.keys(marketplace).every((key) =>
+      ["name", "interface", "plugins"].includes(key),
+    );
+  if (isManagedFreshMarketplace) {
+    await removePath(filePath);
+    return;
+  }
+
+  await writeJsonFile(filePath, { ...marketplace, plugins });
+}
+
+function isNamedJsonObject(value: unknown, name: string): boolean {
+  return isJsonObject(value) && value.name === name;
 }

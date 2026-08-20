@@ -437,9 +437,10 @@ void test("setup doctor resolves cumulative TimeoutError rejections to diagnosti
 
 void test("setup doctor surfaces uncaught adapter throws in the summary (#428)", async (t) => {
   const output: string[] = [];
-  t.mock.method(globalThis.console, "log", (...args: unknown[]) => {
-    output.push(args.map((value) => String(value)).join(" "));
-  });
+  t.mock.method(process.stderr, "write", ((chunk: string | Uint8Array) => {
+    output.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write);
   const ok = await setupInternals.runDoctor(["doctor"], undefined, {
     preflightRunner: async (): Promise<PreflightDiagnostic[]> => {
       throw new Error("preflight exploded");
@@ -447,7 +448,11 @@ void test("setup doctor surfaces uncaught adapter throws in the summary (#428)",
   });
   assert.equal(ok, false, "uncaught adapter throws fail the doctor run");
   assert.ok(
-    output.some((line) => line.includes("preflight threw unexpectedly")),
+    output.some(
+      (line) =>
+        line.includes("doctor-internal-error") &&
+        line.includes("preflight exploded"),
+    ),
     `expected the unexpected-throw summary, got: ${output.join("\n")}`,
   );
 });

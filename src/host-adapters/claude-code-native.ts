@@ -1,17 +1,24 @@
 import { join } from "node:path";
 
-import { removePath, writeTextFile } from "../files.js";
+import {
+  readJsonFileOrNull,
+  removePath,
+  writeJsonFile,
+  writeTextFile,
+} from "../files.js";
 import type {
   ManagedTextFileSnapshot,
   NativeConfigOperation,
 } from "../types.js";
 import {
   applyStructuredNativeConfig,
+  assertJsonObject,
   buildAgentFile,
   buildManagedInstructionLines,
   buildNativeAssetContentSections,
   buildPromptTemplate,
   buildSkillFile,
+  isJsonObject,
   removeEmptyParentDirectories,
   removeManagedSectionFile,
   restoreManagedTextFileSnapshot,
@@ -19,8 +26,14 @@ import {
 } from "./native-utils.js";
 import type { WireNativeFilesOptions } from "./native-utils.js";
 
+const CLAUDE_PLUGIN_NAME = "agent-harness";
+const CLAUDE_MARKETPLACE_NAME = "agent-harness-local";
+
 /**
- * Writes Claude Code-native managed files.
+ * Writes Claude Code-native managed files and a standards-compliant local
+ * plugin marketplace. The direct `.claude/` surfaces remain useful without a
+ * plugin installation; the marketplace provides a documented discovery path
+ * for users who want Claude Code to load the same curated context as a plugin.
  */
 export async function writeClaudeCodeNativeFiles(
   options: WireNativeFilesOptions,
@@ -91,8 +104,94 @@ export async function writeClaudeCodeNativeFiles(
     ]),
   );
 
+  await writeClaudePlugin(options, managedLines);
+
   return applyStructuredNativeConfig(options.workspaceRoot, "claude-code", {
     nativeAssets: options.nativeAssets,
+  });
+}
+
+async function writeClaudePlugin(
+  options: WireNativeFilesOptions,
+  managedLines: string[],
+): Promise<void> {
+  const pluginRoot = join(options.workspaceRoot, "plugins", CLAUDE_PLUGIN_NAME);
+  await writeJsonFile(join(pluginRoot, ".claude-plugin", "plugin.json"), {
+    name: CLAUDE_PLUGIN_NAME,
+    description: "Curated Agent Harness project assets for Claude Code.",
+  });
+  await writeTextFile(
+    join(pluginRoot, "skills", CLAUDE_PLUGIN_NAME, "SKILL.md"),
+    buildSkillFile(
+      CLAUDE_PLUGIN_NAME,
+      "Use curated Agent Harness assets for this Claude Code project.",
+      [
+        ...managedLines,
+        ...buildNativeAssetContentSections(options.nativeAssets, [
+          "skill",
+          "instruction",
+          "reference-pack",
+        ]),
+      ],
+    ),
+  );
+  await writeTextFile(
+    join(pluginRoot, "agents", `${CLAUDE_PLUGIN_NAME}.md`),
+    buildAgentFile(
+      CLAUDE_PLUGIN_NAME,
+      "Use curated Agent Harness agent assets for this project.",
+      buildNativeAssetContentSections(options.nativeAssets, ["agent"]),
+    ),
+  );
+  await writeTextFile(
+    join(pluginRoot, "commands", `${CLAUDE_PLUGIN_NAME}.md`),
+    buildPromptTemplate("Use curated Agent Harness assets for this task.", [
+      ...buildNativeAssetContentSections(options.nativeAssets, [
+        "prompt-pack",
+        "workflow",
+      ]),
+    ]),
+  );
+
+  await mergeClaudePluginMarketplace(
+    join(options.workspaceRoot, ".claude-plugin", "marketplace.json"),
+  );
+}
+
+/**
+ * Adds the local Agent Harness plugin to a Claude Code marketplace while
+ * preserving unrelated marketplace metadata and plugins.
+ */
+export async function mergeClaudePluginMarketplace(
+  filePath: string,
+): Promise<void> {
+  const existing = await readJsonFileOrNull<unknown>(filePath);
+  const marketplace =
+    existing === null ? {} : assertJsonObject(existing, filePath);
+  const rawPlugins: unknown[] = Array.isArray(marketplace.plugins)
+    ? marketplace.plugins
+    : [];
+  const plugins: unknown[] = rawPlugins.filter(
+    (plugin) => !isNamedJsonObject(plugin, CLAUDE_PLUGIN_NAME),
+  );
+
+  await writeJsonFile(filePath, {
+    ...marketplace,
+    name:
+      typeof marketplace.name === "string"
+        ? marketplace.name
+        : CLAUDE_MARKETPLACE_NAME,
+    owner: isJsonObject(marketplace.owner)
+      ? marketplace.owner
+      : { name: "Agent Harness" },
+    plugins: [
+      ...plugins,
+      {
+        name: CLAUDE_PLUGIN_NAME,
+        source: `./plugins/${CLAUDE_PLUGIN_NAME}`,
+        description: "Curated Agent Harness project assets for Claude Code.",
+      },
+    ],
   });
 }
 
@@ -129,7 +228,11 @@ export async function resetClaudeCodeNativeHost(
   await removePath(
     join(workspaceRoot, ".claude", "commands", "agent-harness.md"),
   );
-  // Clean up empty .claude subdirectories
+  await removePath(join(workspaceRoot, "plugins", CLAUDE_PLUGIN_NAME));
+  await removeClaudePluginMarketplaceEntry(
+    join(workspaceRoot, ".claude-plugin", "marketplace.json"),
+  );
+
   await removeEmptyParentDirectories(
     join(workspaceRoot, ".claude", "rules"),
     workspaceRoot,
@@ -150,4 +253,44 @@ export async function resetClaudeCodeNativeHost(
     join(workspaceRoot, ".claude"),
     workspaceRoot,
   );
+  await removeEmptyParentDirectories(
+    join(workspaceRoot, "plugins"),
+    workspaceRoot,
+  );
+  await removeEmptyParentDirectories(
+    join(workspaceRoot, ".claude-plugin"),
+    workspaceRoot,
+  );
+}
+
+async function removeClaudePluginMarketplaceEntry(
+  filePath: string,
+): Promise<void> {
+  const existing = await readJsonFileOrNull<unknown>(filePath);
+  if (existing === null) return;
+
+  const marketplace = assertJsonObject(existing, filePath);
+  const rawPlugins: unknown[] = Array.isArray(marketplace.plugins)
+    ? marketplace.plugins
+    : [];
+  const plugins: unknown[] = rawPlugins.filter(
+    (plugin) => !isNamedJsonObject(plugin, CLAUDE_PLUGIN_NAME),
+  );
+
+  if (
+    marketplace.name === CLAUDE_MARKETPLACE_NAME &&
+    plugins.length === 0 &&
+    Object.keys(marketplace).every((key) =>
+      ["name", "owner", "plugins"].includes(key),
+    )
+  ) {
+    await removePath(filePath);
+    return;
+  }
+
+  await writeJsonFile(filePath, { ...marketplace, plugins });
+}
+
+function isNamedJsonObject(value: unknown, name: string): boolean {
+  return isJsonObject(value) && value.name === name;
 }

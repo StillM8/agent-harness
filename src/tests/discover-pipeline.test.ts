@@ -300,7 +300,7 @@ void test("first-run sync hint stays silent when prior sync state exists (#428)"
   );
 });
 
-void test("printSourceHealthSummary prints severe counts in quiet mode (#428)", (t) => {
+void test("printSourceHealthSummary prints error counts in quiet mode (#428)", (t) => {
   const output: string[] = [];
   t.mock.method(globalThis.console, "log", (...args: unknown[]) => {
     output.push(args.map((value) => String(value)).join(" "));
@@ -308,15 +308,15 @@ void test("printSourceHealthSummary prints severe counts in quiet mode (#428)", 
   discoverInternals.printSourceHealthSummary(
     {
       sourceCount: 3,
-      severeCount: 2,
+      errorCount: 2,
       warningCount: 40,
       sources: [],
     } as never,
     { quietMode: true, summaryMode: false },
   );
   assert.ok(
-    output.join("\n").includes("2 severe issue(s)"),
-    `expected the severe quiet line, got: ${output.join("\n")}`,
+    output.join("\n").includes("2 errors require attention"),
+    `expected the error quiet line, got: ${output.join("\n")}`,
   );
 });
 
@@ -328,7 +328,7 @@ void test("printSourceHealthSummary aggregates warning reasons in summary mode (
   discoverInternals.printSourceHealthSummary(
     {
       sourceCount: 2,
-      severeCount: 0,
+      errorCount: 0,
       warningCount: 2,
       sources: [
         {
@@ -372,12 +372,12 @@ void test("discover catalog harvests the repo slice with fetch mocks (#428)", as
     buildCatalogSource({
       id: "synced-docs",
       name: "synced-docs",
-      kind: "docs",
+      kind: "registry",
     }),
     buildCatalogSource({
       id: "synced-empty",
       name: "synced-empty",
-      kind: "docs",
+      kind: "registry",
     }),
   ];
   await writeJsonFile(join(stateRoot, "discover", "sources.json"), {
@@ -386,7 +386,7 @@ void test("discover catalog harvests the repo slice with fetch mocks (#428)", as
   });
 
   // Seed indexed-source state so catalog reuses the cached entries for the
-  // docs source instead of harvesting it.
+  // registry source instead of harvesting it.
   const { mkdir } = await import("node:fs/promises");
   await mkdir(join(stateRoot, "state", "discover"), { recursive: true });
   await writeJsonFile(
@@ -427,7 +427,7 @@ void test("discover catalog harvests the repo slice with fetch mocks (#428)", as
       source: {
         sourceId: "synced-docs",
         authorityTier: "trusted-community",
-        sourceKind: "docs",
+        sourceKind: "registry",
         sourcePriority: 50,
         originUrl: "https://example.com/synced-docs",
         publisher: "docs-publisher",
@@ -742,7 +742,7 @@ void test("printSourceHealthSummary renders the empty breakdown suffix in summar
   discoverInternals.printSourceHealthSummary(
     {
       sourceCount: 1,
-      severeCount: 0,
+      errorCount: 0,
       warningCount: 0,
       sources: [],
     } as never,
