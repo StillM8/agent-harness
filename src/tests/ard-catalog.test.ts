@@ -330,6 +330,17 @@ void test("the dependency-free ARD schema validator covers collection and format
   );
 });
 
+void test("the ARD schema validator direct entrypoint validates the canonical catalog", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { stdout, stderr } = await promisify(execFile)(
+    process.execPath,
+    [join(process.cwd(), "scripts", "validate-ard-schema.mjs")],
+    { cwd: process.cwd() },
+  );
+  assert.match(`${stdout}${stderr}`, /ARD schema validation passed:/u);
+});
+
 void test("writeArdCatalog remains valid when Prettier is unavailable", async () => {
   const projectRoot = await mkdtemp(
     join(tmpdir(), "agent-harness-ard-fallback-"),

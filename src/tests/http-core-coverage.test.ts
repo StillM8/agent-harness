@@ -120,6 +120,10 @@ void test("guarded fetch test mocks serialize request bodies and parse json resp
     );
     assert.equal(emptyStatusError.message, "HTTP 418");
     assert.equal(emptyStatusError.status, 418);
+    const namedStatusError = httpInternals.buildHttpStatusError(
+      new Response("failure", { status: 418, statusText: "I'm a teapot" }),
+    );
+    assert.equal(namedStatusError.message, "HTTP 418 I'm a teapot");
 
     assert.deepEqual(jsonResult, { ok: true, bodyText: "alpha=1&beta=2" });
     assert.equal(invalidJsonResult, null);
