@@ -28,17 +28,21 @@ export async function removeTreeWithRetries(
   const maxRetries = options.maxRetries ?? 10;
   const retryDelayMs = options.retryDelayMs ?? 50;
 
-  for (let attempt = 0; ; attempt += 1) {
+  let attempt = 0;
+  const removeAttempt = async (): Promise<void> => {
     try {
       await remove(path, { force: true, recursive: true });
-      return;
     } catch (error) {
       if (!isRetryableRemoveError(error) || attempt >= maxRetries) {
         throw error;
       }
       await sleep(retryDelayMs * (attempt + 1));
+      attempt += 1;
+      await removeAttempt();
     }
-  }
+  };
+
+  await removeAttempt();
 }
 
 function isRetryableRemoveError(error: unknown): boolean {

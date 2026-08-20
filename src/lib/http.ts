@@ -823,6 +823,7 @@ function concatenateChunks(
 export const httpInternals = {
   fetchWithPinnedResolution,
   requestWithPinnedAddress,
+  buildHttpStatusError,
   serializeRequestBody,
   buildResponseHeaders,
   isPrivateIpv4Address,

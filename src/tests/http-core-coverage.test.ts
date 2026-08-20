@@ -115,6 +115,11 @@ void test("guarded fetch test mocks serialize request bodies and parse json resp
       }),
       /HTTP 500/u,
     );
+    const emptyStatusError = httpInternals.buildHttpStatusError(
+      new Response("failure", { status: 418, statusText: "" }),
+    );
+    assert.equal(emptyStatusError.message, "HTTP 418");
+    assert.equal(emptyStatusError.status, 418);
 
     assert.deepEqual(jsonResult, { ok: true, bodyText: "alpha=1&beta=2" });
     assert.equal(invalidJsonResult, null);

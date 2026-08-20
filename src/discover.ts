@@ -400,21 +400,12 @@ export async function runDiscover(
       await printCatalogStats(projectRoot);
       return 0;
     case "diff":
-      if (hasUnknownFlagsForDiscoverCommand(command, rest)) {
-        return 1;
-      }
       await writeDiscoverDiffReport(projectRoot, rest);
       return 0;
     case "environment-index":
-      if (hasUnknownFlagsForDiscoverCommand(command, rest)) {
-        return 1;
-      }
       await writeEnvironmentIndex(projectRoot, rest);
       return 0;
     case "ard-export": {
-      if (hasUnknownFlagsForDiscoverCommand(command, rest)) {
-        return 1;
-      }
       // Try to resolve a real version from the workspace root (not --state-root)
       // so the ARD catalog carries the correct publisher version.
       let pkgVersion: string | undefined;
@@ -437,9 +428,6 @@ export async function runDiscover(
       return 0;
     }
     case "inspect":
-      if (hasUnknownFlagsForDiscoverCommand(command, rest)) {
-        return 1;
-      }
       await inspectCatalog(projectRoot, rest);
       return 0;
     case "help":

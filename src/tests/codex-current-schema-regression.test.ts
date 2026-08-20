@@ -13,6 +13,7 @@ import test from "node:test";
 
 import {
   buildCodexHooksManifest,
+  mergeCodexPluginMarketplace,
   resetCodexNativeHost,
   writeCodexNativeFiles,
 } from "../host-adapters/codex-native.js";
@@ -230,6 +231,32 @@ void test("legacy Codex marketplaces are preserved non-destructively", async () 
       marketplace.plugins.find((plugin) => plugin.name === "agent-harness"),
       { name: "agent-harness", path: "./agent-harness" },
     );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("current Codex marketplace repairs a non-string interface display name", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-interface-edge-"),
+  );
+  try {
+    const marketplacePath = join(
+      workspaceRoot,
+      ".agents",
+      "plugins",
+      "marketplace.json",
+    );
+    await writeJsonFile(marketplacePath, {
+      interface: { displayName: 42 },
+      plugins: [],
+    });
+
+    assert.equal(await mergeCodexPluginMarketplace(marketplacePath), "current");
+    const marketplace = JSON.parse(await readFile(marketplacePath, "utf8")) as {
+      interface: { displayName: unknown };
+    };
+    assert.equal(marketplace.interface.displayName, "Agent Harness Local");
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }

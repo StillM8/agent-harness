@@ -229,20 +229,23 @@ void test("writeArdCatalog emits a canonical generated catalog that validates ag
       ),
     );
 
-    const { validateJsonSchema } =
+    const { validateArdCatalogFile, validateJsonSchema } =
       await import("../../scripts/validate-ard-schema.mjs");
-    const schema = JSON.parse(
-      await readFile(
-        join(
-          process.cwd(),
-          "discover",
-          "schema",
-          "ard-ai-catalog-1.0.schema.json",
-        ),
-        "utf8",
-      ),
-    ) as Record<string, unknown>;
+    const schemaPath = join(
+      process.cwd(),
+      "discover",
+      "schema",
+      "ard-ai-catalog-1.0.schema.json",
+    );
+    const schema = JSON.parse(await readFile(schemaPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
     assert.deepEqual(validateJsonSchema(catalog, schema), []);
+    assert.deepEqual(
+      await validateArdCatalogFile(result.filePath, schemaPath),
+      [],
+    );
   } finally {
     await rm(projectRoot, { recursive: true, force: true });
   }
@@ -251,6 +254,8 @@ void test("writeArdCatalog emits a canonical generated catalog that validates ag
 void test("the dependency-free ARD schema validator reports core schema failures", async () => {
   const { validateJsonSchema } =
     await import("../../scripts/validate-ard-schema.mjs");
+  assert.deepEqual(validateJsonSchema(null, { type: "null" }), []);
+  assert.deepEqual(validateJsonSchema("future", { type: "future-type" }), []);
   const errors = validateJsonSchema(
     {
       ref: "value",
