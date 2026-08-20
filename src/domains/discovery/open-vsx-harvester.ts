@@ -158,6 +158,7 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values)];
 }
 
+/** Exposes Open VSX parsing helpers for focused tests. */
 export const openVsxHarvesterInternals = {
   buildOpenVsxQuery,
   isRecord,

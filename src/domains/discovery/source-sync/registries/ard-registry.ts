@@ -267,6 +267,7 @@ function asOptionalRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+/** Exposes ARD registry conversion helpers for focused tests. */
 export const ardRegistryInternals = {
   ardTypeToAssetKind,
   extractArdTrustSignals,

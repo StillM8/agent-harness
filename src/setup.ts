@@ -120,6 +120,7 @@ function hasUnknownFlagsForSetupCommand(
   );
 }
 
+/** Optional preflight hooks used to make setup-doctor tests deterministic. */
 export type AdapterPreflightFunctions = PreflightFunctionOverrides;
 
 async function runAdapterPreflightWithTimeout(
@@ -558,6 +559,7 @@ function printSetupHelp(): void {
   });
 }
 
+/** Exposes setup-doctor helpers for focused tests. */
 export const setupInternals = {
   DOCTOR_ADAPTER_TIMEOUT_MS,
   hasUnknownFlagsForSetupCommand,

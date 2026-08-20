@@ -54,4 +54,5 @@ export function isTokenCoincidenceWithoutSemanticEvidence(
   });
 }
 
+/** Exposes recommendation evidence constants for focused tests. */
 export const evidenceQualityInternals = { COLLISION_PRONE_TOKENS } as const;

@@ -25,6 +25,7 @@ export interface InstallBundleOutcomeSummary {
   failed: number;
 }
 
+/** Summarizes the staged/skipped assets for the requested install scope. */
 export async function summarizeInstallBundleOutcome(
   projectRoot: string,
   args: readonly string[],
@@ -59,12 +60,14 @@ export async function summarizeInstallBundleOutcome(
   return { staged, skipped, failed: 0 };
 }
 
+/** Formats an install outcome for human-readable CLI output. */
 export function formatInstallBundleOutcomeSummary(
   summary: InstallBundleOutcomeSummary,
 ): string {
   return `Install bundle summary: staged=${summary.staged} skipped=${summary.skipped} failed=${summary.failed}`;
 }
 
+/** Returns whether an install outcome contains unresolved work. */
 export function installBundleOutcomeHasProblems(
   summary: InstallBundleOutcomeSummary,
 ): boolean {

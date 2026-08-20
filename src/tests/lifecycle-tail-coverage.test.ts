@@ -597,8 +597,12 @@ void test("discover ard-export tolerates an unreadable package.json (#428)", asy
     const { readFile } = await import("node:fs/promises");
     const catalog = JSON.parse(
       await readFile(join(stateRoot, ".well-known", "ai-catalog.json"), "utf8"),
-    ) as { publisher: { name?: string } };
-    assert.ok(catalog.publisher, "ard catalog written");
+    ) as {
+      specVersion?: string;
+      host?: { identifier?: string };
+    };
+    assert.equal(catalog.specVersion, "1.0");
+    assert.equal(catalog.host?.identifier, "https://ar27111994.dev");
   } finally {
     chdir(originalCwd);
   }

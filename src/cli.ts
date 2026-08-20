@@ -100,6 +100,7 @@ async function main(): Promise<number> {
   }
 }
 
+/** Dispatches one CLI domain and returns its process exit code. */
 export async function runDomainCommand(
   domain: string | undefined,
   args: string[],
@@ -492,6 +493,7 @@ if (
     });
 }
 
+/** Exposes CLI dispatch helpers for focused tests. */
 export const cliInternals = {
   mapBundleSubcommandForHelp,
   runDomainCommand,

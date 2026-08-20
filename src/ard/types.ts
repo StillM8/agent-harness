@@ -69,6 +69,7 @@ export const ARD_TRUST_SIGNALS = [
   "ard-signed",
 ] as const;
 
+/** Union of the trust-signal identifiers recognized during ARD conversion. */
 export type ArdTrustSignal = (typeof ARD_TRUST_SIGNALS)[number];
 
 /**
@@ -81,6 +82,7 @@ export interface ArdSignalDescription {
   description: string;
 }
 
+/** Maps local trust-signal identifiers to internal attestation descriptions. */
 export const TRUST_SIGNAL_TO_ATTESTATION: Record<string, ArdSignalDescription> =
   {
     "ard-identity-bound": {

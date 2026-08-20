@@ -11,6 +11,7 @@ import {
 } from "./cli-help-format.js";
 import { printCommandHelp } from "./lib/cli-output.js";
 
+/** Prints help for one discover subcommand. */
 export function printDiscoverSubcommandHelp(subcommand: string): void {
   const helpTexts: Record<string, SubcommandHelpEntry> = {
     sources: {
@@ -195,6 +196,7 @@ export function printDiscoverSubcommandHelp(subcommand: string): void {
   });
 }
 
+/** Prints the top-level discover command help. */
 export function printDiscoverHelp(): void {
   printCommandHelp({
     heading: "discover commands:",
@@ -293,6 +295,7 @@ export function printDiscoverHelp(): void {
   });
 }
 
+/** Prints help for the complete discover pipeline. */
 export function printDiscoverFullHelp(): void {
   printCommandHelp({
     heading: "discover full — Run the complete discovery pipeline in one pass",
@@ -349,6 +352,7 @@ export function printDiscoverFullHelp(): void {
   });
 }
 
+/** Prints help for the broad discovery sweep and its aliases. */
 export function printDiscoverBreadthHelp(): void {
   printCommandHelp({
     heading:

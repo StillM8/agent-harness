@@ -347,8 +347,9 @@ void test("source index applies default sync coverage and records optional confi
       sourceIndex.enabledSources.map((source) => [source.id, source]),
     );
 
-    assert.equal(byId.get("cursor-docs")?.coverageMode, "direct");
-    assert.equal(byId.get("cursor-docs")?.syncStatus, "not-applicable");
+    // Docs sources are retained as metadata but excluded from enabled-source
+    // lifecycle output.
+    assert.equal(byId.has("cursor-docs"), false);
     assert.equal(byId.get("mcp-registry")?.coverageMode, "sampled");
     assert.equal(byId.get("mcp-registry")?.syncStatus, "unsupported");
     assert.equal(byId.get("mattpocock-skills")?.coverageMode, "rotating");

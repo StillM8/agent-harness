@@ -327,6 +327,7 @@ export function extractErrorMessage(error: unknown): string {
   return error.message;
 }
 
+/** Exposes ARD conversion helpers for focused tests without widening runtime APIs. */
 export const ardCatalogInternals = {
   resolveHttpUrl,
   sanitizePublisherFqdn,

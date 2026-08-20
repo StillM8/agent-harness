@@ -1,5 +1,6 @@
 import { rm } from "node:fs/promises";
 
+/** Controls retry timing for transient filesystem removal failures. */
 export interface RetryRemoveOptions {
   maxRetries?: number;
   retryDelayMs?: number;
@@ -54,4 +55,5 @@ function defaultSleep(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
+/** Exposes removal classification helpers for focused tests. */
 export const retryRemoveInternals = { isRetryableRemoveError } as const;
