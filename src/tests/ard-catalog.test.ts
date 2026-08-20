@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   buildArdUrn,
   deriveArdTrustManifest,
+  ardCatalogInternals,
   extractErrorMessage,
   mapEntryToArd,
   resolveArdUpdatedAt,
@@ -102,6 +103,76 @@ void test("invalid and epoch update timestamps are omitted", () => {
   );
 });
 
+void test("ARD mapping helpers cover safe fallbacks and inline metadata", () => {
+  const { resolveHttpUrl, sanitizePublisherFqdn, sanitizeUrnSegment } =
+    ardCatalogInternals;
+
+  assert.equal(sanitizePublisherFqdn("!!!"), "agent-harness.local");
+  assert.equal(sanitizeUrnSegment("!!!", "fallback"), "fallback");
+  assert.equal(resolveHttpUrl(undefined), undefined);
+  assert.equal(resolveHttpUrl("ftp://example.com/catalog"), undefined);
+  assert.equal(resolveHttpUrl("not-a-url"), undefined);
+
+  const mapped = mapEntryToArd(
+    {
+      ...entry(),
+      assetKind: "future-kind" as unknown as AssetCatalogEntry["assetKind"],
+      hosts: [],
+      source: { ...entry().source, originUrl: "local-only" },
+      install: { ...entry().install, manifestEntry: undefined },
+    },
+    "!!!",
+    "2.1.0",
+  );
+
+  assert.equal(mapped.type, "application/ai-skill");
+  assert.deepEqual(mapped.data, {
+    assetKind: "future-kind",
+    sourceId: "fixture-source",
+    compatibilityMode: "native",
+    manifestEntry: null,
+  });
+  assert.match(mapped.identifier, /agent-harness\.local/u);
+});
+
+void test("writeArdCatalog skips malformed catalog entries and falls back to an unknown package version", async () => {
+  const projectRoot = await mkdtemp(join(tmpdir(), "agent-harness-ard-edge-"));
+  try {
+    const { writeJsonLinesFile } = await import("../files.js");
+    const malformed = {
+      ...entry({ id: "malformed" }),
+      capabilities: undefined,
+    } as unknown as AssetCatalogEntry;
+    await writeJsonLinesFile(
+      join(projectRoot, "discover", "output", "catalog.selected.jsonl"),
+      [malformed, entry({ id: "valid" })],
+    );
+    await writeFile(join(projectRoot, "package.json"), "{}", "utf8");
+
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) =>
+      warnings.push(args.map(String).join(" "));
+    try {
+      const result = await writeArdCatalog(
+        projectRoot,
+        undefined,
+        async (raw) => raw,
+      );
+      assert.equal(result.entryCount, 1);
+      const catalog = JSON.parse(
+        await readFile(result.filePath, "utf8"),
+      ) as ArdCatalog;
+      assert.equal(catalog.entries[0]?.version, "0.0.0");
+      assert.match(warnings.join("\n"), /skipping malformed entry/u);
+    } finally {
+      console.warn = originalWarn;
+    }
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
 void test("writeArdCatalog emits a canonical generated catalog that validates against the vendored public schema", async () => {
   const projectRoot = await mkdtemp(join(tmpdir(), "agent-harness-ard-v1-"));
   try {
@@ -162,6 +233,39 @@ void test("writeArdCatalog emits a canonical generated catalog that validates ag
   } finally {
     await rm(projectRoot, { recursive: true, force: true });
   }
+});
+
+void test("the dependency-free ARD schema validator reports core schema failures", async () => {
+  const { validateJsonSchema } =
+    await import("../../scripts/validate-ard-schema.mjs");
+  const errors = validateJsonSchema(
+    {
+      ref: "value",
+      oneOf: true,
+      wrongType: 42,
+      enum: "unexpected",
+      pattern: "not-ok",
+    },
+    {
+      type: "object",
+      properties: {
+        ref: { $ref: "#/$defs/missing" },
+        oneOf: { oneOf: [{ type: "string" }, { type: "number" }] },
+        wrongType: { type: "string" },
+        enum: { enum: ["ok"] },
+        pattern: { type: "string", pattern: "^ok$" },
+      },
+      $defs: {},
+    },
+  );
+
+  assert.ok(errors.some((error) => /unresolved schema reference/u.test(error)));
+  assert.ok(
+    errors.some((error) => /expected exactly one oneOf branch/u.test(error)),
+  );
+  assert.ok(errors.some((error) => /expected type "string"/u.test(error)));
+  assert.ok(errors.some((error) => /value is not in enum/u.test(error)));
+  assert.ok(errors.some((error) => /does not match pattern/u.test(error)));
 });
 
 void test("writeArdCatalog remains valid when Prettier is unavailable", async () => {

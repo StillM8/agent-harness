@@ -166,7 +166,7 @@ export function buildReferenceSourceCatalogEntry(
       examplesFound: false,
       docsLinked: true,
       lineCount: hasSemanticContent
-        ? (harvestedContent?.split(/\r?\n/u).length ?? 0)
+        ? harvestedContent!.split(/\r?\n/u).length
         : 0,
       rootPath: originUrl,
       classification: buildClassificationConfidence({

@@ -13,9 +13,11 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { runDiscover, discoverInternals } from "../discover.js";
+import { harvestCatalogSourceEntries } from "../discover-pipeline.js";
 import { restoreEnvVar } from "./env-test-utils.js";
 import { writeJsonFile } from "../files.js";
 import { clearRuntimeConfig } from "../config/runtime.js";
+import type { SelectionRegistry, SourceDefinition } from "../types.js";
 
 async function makeDiscoverRoot(t: {
   after: (fn: () => void | Promise<void>) => void;
@@ -56,6 +58,59 @@ async function makeDiscoverRoot(t: {
 
   return { workspaceRoot, stateRoot };
 }
+
+void test("discover catalog dispatches docs sources through the reference harvester", async (t) => {
+  const { workspaceRoot } = await makeDiscoverRoot(t);
+  const originalFetch = globalThis.fetch;
+  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  globalThis.fetch = async () =>
+    new Response("# Reference docs\n\nUseful guidance.", { status: 200 });
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+  });
+
+  const source = {
+    id: "docs-dispatch",
+    name: "Docs Dispatch",
+    kind: "docs",
+    authorityTier: "official-first-party",
+    hosts: ["codex"],
+    assetKinds: ["reference-pack"],
+    discoveryMode: "catalog",
+    priority: 90,
+    enabled: true,
+    endpoints: { docsUrl: "https://example.com/docs" },
+    rules: {
+      officialPreferred: true,
+      allowMirror: true,
+      allowInstall: false,
+    },
+  } as unknown as SourceDefinition;
+  const selectionRegistry = {
+    schemaVersion: 1,
+    selectionPolicies: {
+      officialBeatsPopularity: true,
+      starsAreTieBreakerOnly: true,
+      preferNativeOverAdaptable: true,
+      preferLowerRiskWhenEquivalent: true,
+      preferLowerContextCostWhenEquivalent: true,
+      communityDefaultPolicy: "catalog-only-unless-promoted",
+    },
+    rankingOrder: [],
+    duplicateGroups: [],
+  } as SelectionRegistry;
+
+  const entries = await harvestCatalogSourceEntries(
+    source,
+    "docs",
+    null,
+    selectionRegistry,
+    workspaceRoot,
+  );
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.source.sourceId, "docs-dispatch");
+});
 
 void test("discover sync/index/select/full complete on an empty source universe (#428)", async (t) => {
   const { workspaceRoot, stateRoot } = await makeDiscoverRoot(t);
@@ -230,6 +285,13 @@ void test("discover --help for a non-specific subcommand prints parent help (#42
 
 void test("discover full and breadth reject unknown flags before running (#428)", async (t) => {
   const { workspaceRoot, stateRoot } = await makeDiscoverRoot(t);
+  for (const command of ["sync", "select", "enrich", "stats"]) {
+    assert.equal(
+      await runDiscover([command, "--bogus"], workspaceRoot, stateRoot),
+      1,
+      `discover ${command} --bogus must exit 1`,
+    );
+  }
   assert.equal(
     await runDiscover(["full", "--bogus"], workspaceRoot, stateRoot),
     1,

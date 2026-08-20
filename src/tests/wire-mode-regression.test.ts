@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getWireMode, runWire } from "../wire.js";
+import { getWireMode, runWire, runWireEntrypoint } from "../wire.js";
 
 void test("wire mode parsing rejects positional mode tokens with flag guidance", () => {
   for (const mode of ["preview", "apply", "reset"] as const) {
@@ -24,6 +24,14 @@ void test("wire mode parsing keeps canonical flag behavior", () => {
   assert.equal(getWireMode(["--preview"]), "preview");
   assert.equal(getWireMode(["--apply"]), "apply");
   assert.equal(getWireMode(["--reset"]), "reset");
+  assert.equal(getWireMode(["--"]), "preview");
+});
+
+void test("wire mode parsing treats an option terminator as a positional boundary", () => {
+  assert.throws(
+    () => getWireMode(["--", "--preview"]),
+    /wire modes must be passed/u,
+  );
 });
 
 void test("wire dispatch rejects positional apply before host preflight", async () => {
@@ -45,4 +53,36 @@ void test("wire dispatch rejects positional apply before host preflight", async 
   } finally {
     console.error = originalError;
   }
+});
+
+void test("wire dispatch rethrows unexpected parser errors", async () => {
+  await assert.rejects(
+    runWire(
+      ["opencode", {} as unknown as string],
+      process.cwd(),
+      process.cwd(),
+    ),
+  );
+});
+
+void test("wire entrypoint converts unexpected failures to a non-zero exit code", async (t) => {
+  const output: string[] = [];
+  const originalExitCode = process.exitCode;
+  t.mock.method(console, "error", (...args: unknown[]) => {
+    output.push(args.map(String).join(" "));
+  });
+
+  process.exitCode = undefined;
+  await runWireEntrypoint(
+    ["opencode"],
+    process.cwd(),
+    process.cwd(),
+    async () => {
+      throw new Error("wire fixture failure");
+    },
+  );
+
+  assert.equal(process.exitCode, 1);
+  assert.match(output.join("\n"), /wire fixture failure/u);
+  process.exitCode = originalExitCode;
 });

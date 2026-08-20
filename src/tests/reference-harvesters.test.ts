@@ -63,6 +63,43 @@ void test("generic extension registry items stay reference-only", async (context
   assert.equal(items[0]?.installMethod, "registry-summary");
 });
 
+void test("reference harvester dispatches the Open VSX registry source", async (context) => {
+  const originalFetch = globalThis.fetch;
+  const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        extensions: [
+          {
+            namespace: "acme",
+            name: "open-vsx-tool",
+            displayName: "Open VSX Tool",
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+    restoreFetchMockFlag(previousFetchMockFlag);
+  });
+
+  const items = await harvestReferenceItems(
+    {
+      ...buildExtensionRegistrySource(),
+      id: "open-vsx-registry",
+      name: "Open VSX Registry",
+      endpoints: { repo: "https://open-vsx.org/api/-/search" },
+    },
+    null,
+  );
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.publisherName, "acme");
+  assert.equal(items[0]?.installMethod, "open-vsx-registry");
+});
+
 void test("generic docs harvester respects configured reference caps", async (context) => {
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;

@@ -800,5 +800,6 @@ export const githubHarvesterInternals = {
   collectRepositoryTrustEvidence,
   isDependencyDirectoryPath,
   isImplementationOnlyRepositoryPath,
+  matchesSourcePathFilters,
   buildGitHubCatalogEntry,
 } as const;

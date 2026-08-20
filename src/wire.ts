@@ -171,6 +171,28 @@ export function getWireMode(args: string[]): "preview" | "apply" | "reset" {
   return "preview";
 }
 
+/** Runs the direct wire CLI entrypoint and preserves unexpected error stacks. */
+export async function runWireEntrypoint(
+  args: string[],
+  workingDirectory: string,
+  projectRoot: string,
+  dispatch: (
+    args: string[],
+    workingDirectory: string,
+    projectRoot: string,
+  ) => Promise<number> = runWire,
+): Promise<void> {
+  try {
+    const exitCode = await dispatch(args, workingDirectory, projectRoot);
+    process.exitCode = exitCode;
+  } catch (error: unknown) {
+    // Wire never throws CliUsageError (user-input failures return exit
+    // codes); any rejection here is a genuine bug and keeps its stack.
+    console.error(error);
+    process.exitCode = 1;
+  }
+}
+
 /**
  * Prints help for a specific wire target or parent help (#383).
  */
@@ -228,14 +250,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const projectRoot = resolveProjectRoot(fileURLToPath(import.meta.url));
   const workingDirectory = process.cwd();
 
-  runWire(args, workingDirectory, projectRoot)
-    .then((exitCode) => {
-      process.exitCode = exitCode;
-    })
-    .catch((error: unknown) => {
-      // Wire never throws CliUsageError (user-input failures return exit
-      // codes); any rejection here is a genuine bug and keeps its stack.
-      console.error(error);
-      process.exitCode = 1;
-    });
+  void runWireEntrypoint(args, workingDirectory, projectRoot);
 }

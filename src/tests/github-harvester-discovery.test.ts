@@ -1463,6 +1463,34 @@ void test("OMS PKI verification does not award trust when signature does not ver
 
 const { isDependencyDirectoryPath } = githubHarvesterInternals;
 
+void test("github path filters reject excluded paths and preserve explicit manifests", () => {
+  const source = {
+    ...buildSource(),
+    includePaths: ["packages/**"],
+    excludePaths: ["packages/private/**"],
+  };
+  assert.equal(
+    githubHarvesterInternals.matchesSourcePathFilters(
+      "packages/private/index.ts",
+      source,
+    ),
+    false,
+  );
+  assert.equal(
+    githubHarvesterInternals.matchesSourcePathFilters(
+      "packages/public/index.ts",
+      source,
+    ),
+    true,
+  );
+  assert.equal(
+    githubHarvesterInternals.isImplementationOnlyRepositoryPath(
+      "src/plugin.json",
+    ),
+    false,
+  );
+});
+
 void test("isDependencyDirectoryPath detects node_modules prefix", () => {
   assert.equal(isDependencyDirectoryPath("node_modules/foo"), true);
   assert.equal(isDependencyDirectoryPath("node_modules/pkg/index.js"), true);

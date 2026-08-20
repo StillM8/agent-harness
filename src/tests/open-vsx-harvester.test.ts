@@ -85,6 +85,10 @@ void test("Open VSX payload parsing accepts known collection keys and rejects ma
   assert.deepEqual(readExtensionRecords({ results: [{ name: "two" }] }), [
     { name: "two" },
   ]);
+  assert.deepEqual(
+    readExtensionRecords({ extensions: { items: [{ name: "nested" }] } }),
+    [{ name: "nested" }],
+  );
   assert.deepEqual(readExtensionRecords({ items: [{ name: "three" }] }), [
     { name: "three" },
   ]);
@@ -234,6 +238,23 @@ void test("Open VSX harvest handles rich, fallback, bounded, and failed response
     requestedUrls[3] ?? "",
     /^https:\/\/open-vsx\.org\/api\/-\/search\?/u,
   );
+});
+
+void test("Open VSX harvest ignores invalid JSON responses", async (t) => {
+  const originalFetch = globalThis.fetch;
+  const previousMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  globalThis.fetch = async () => new Response("{", { status: 200 });
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    if (previousMockFlag === undefined) {
+      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+    } else {
+      process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = previousMockFlag;
+    }
+  });
+
+  assert.deepEqual(await harvestOpenVsxExtensions(source(), null), []);
 });
 
 function demandProfile(
