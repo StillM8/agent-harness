@@ -256,6 +256,15 @@ void test("the dependency-free ARD schema validator reports core schema failures
     await import("../../scripts/validate-ard-schema.mjs");
   assert.deepEqual(validateJsonSchema(null, { type: "null" }), []);
   assert.deepEqual(validateJsonSchema("future", { type: "future-type" }), []);
+  assert.deepEqual(
+    validateJsonSchema("value", 42 as unknown as Record<string, unknown>),
+    [],
+  );
+  assert.ok(
+    validateJsonSchema("value", { $ref: "external-schema" }).some((error) =>
+      /unresolved schema reference/u.test(error),
+    ),
+  );
   const errors = validateJsonSchema(
     {
       ref: "value",
@@ -333,12 +342,50 @@ void test("the dependency-free ARD schema validator covers collection and format
 void test("the ARD schema validator direct entrypoint validates the canonical catalog", async () => {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
+  const scriptPath = join(process.cwd(), "scripts", "validate-ard-schema.mjs");
   const { stdout, stderr } = await promisify(execFile)(
     process.execPath,
-    [join(process.cwd(), "scripts", "validate-ard-schema.mjs")],
+    [scriptPath],
     { cwd: process.cwd() },
   );
   assert.match(`${stdout}${stderr}`, /ARD schema validation passed:/u);
+
+  const explicitCatalog = join(process.cwd(), ".well-known", "ai-catalog.json");
+  const explicitRun = await promisify(execFile)(
+    process.execPath,
+    [scriptPath, explicitCatalog],
+    { cwd: process.cwd() },
+  );
+  assert.match(
+    `${explicitRun.stdout}${explicitRun.stderr}`,
+    /ARD schema validation passed:/u,
+  );
+
+  const invalidRoot = await mkdtemp(join(tmpdir(), "agent-harness-ard-cli-"));
+  try {
+    const invalidCatalog = join(invalidRoot, "invalid.json");
+    await writeFile(invalidCatalog, "{}", "utf8");
+    await assert.rejects(
+      promisify(execFile)(process.execPath, [scriptPath, invalidCatalog], {
+        cwd: process.cwd(),
+      }),
+      (error: unknown) => {
+        const childError = error as {
+          code?: number;
+          stdout?: string;
+          stderr?: string;
+        };
+        assert.equal(childError.code, 1);
+        assert.match(
+          `${childError.stdout ?? ""}${childError.stderr ?? ""}`,
+          /ARD schema validation failed/u,
+        );
+        return true;
+      },
+    );
+  } finally {
+    await rm(invalidRoot, { recursive: true, force: true });
+  }
 });
 
 void test("writeArdCatalog remains valid when Prettier is unavailable", async () => {
