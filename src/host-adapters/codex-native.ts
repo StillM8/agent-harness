@@ -25,11 +25,22 @@ import {
   upsertManagedSectionFile,
 } from "./native-utils.js";
 import type { NativeAsset, WireNativeFilesOptions } from "./native-utils.js";
+import {
+  removeManagedMarketplaceEntries,
+  replaceManagedMarketplaceEntry,
+} from "./marketplace-utils.js";
 
 const CODEX_PLUGIN_NAME = "agent-harness";
 const CODEX_PLUGIN_VERSION = "2.1.0";
 const CODEX_MARKETPLACE_NAME = "agent-harness-local";
 const CODEX_AGENT_FILE_PREFIX = "agent-harness-";
+const CODEX_PLUGIN_SOURCE_PATH = `./plugins/${CODEX_PLUGIN_NAME}`;
+const CODEX_LEGACY_PLUGIN_PATH = `./${CODEX_PLUGIN_NAME}`;
+const CODEX_MANAGED_MARKETPLACE_ENTRY = {
+  name: CODEX_PLUGIN_NAME,
+  localSourcePath: CODEX_PLUGIN_SOURCE_PATH,
+  legacyPath: CODEX_LEGACY_PLUGIN_PATH,
+} as const;
 
 type CodexMarketplaceStyle = "current" | "legacy";
 
@@ -214,9 +225,6 @@ export async function mergeCodexPluginMarketplace(
   const rawPlugins: unknown[] = Array.isArray(marketplace.plugins)
     ? marketplace.plugins
     : [];
-  const pluginsWithoutManagedEntry: unknown[] = rawPlugins.filter(
-    (entry) => !isNamedJsonObject(entry, CODEX_PLUGIN_NAME),
-  );
   const legacy =
     typeof marketplace.schemaVersion === "number" ||
     rawPlugins.some(
@@ -226,10 +234,11 @@ export async function mergeCodexPluginMarketplace(
   if (legacy) {
     await writeJsonFile(filePath, {
       ...marketplace,
-      plugins: [
-        ...pluginsWithoutManagedEntry,
-        { name: CODEX_PLUGIN_NAME, path: `./${CODEX_PLUGIN_NAME}` },
-      ],
+      plugins: replaceManagedMarketplaceEntry(
+        rawPlugins,
+        CODEX_MANAGED_MARKETPLACE_ENTRY,
+        { name: CODEX_PLUGIN_NAME, path: CODEX_LEGACY_PLUGIN_PATH },
+      ),
     });
     return "legacy";
   }
@@ -249,13 +258,14 @@ export async function mergeCodexPluginMarketplace(
               : "Agent Harness Local",
         }
       : { displayName: "Agent Harness Local" },
-    plugins: [
-      ...pluginsWithoutManagedEntry,
+    plugins: replaceManagedMarketplaceEntry(
+      rawPlugins,
+      CODEX_MANAGED_MARKETPLACE_ENTRY,
       {
         name: CODEX_PLUGIN_NAME,
         source: {
           source: "local",
-          path: `./plugins/${CODEX_PLUGIN_NAME}`,
+          path: CODEX_PLUGIN_SOURCE_PATH,
         },
         policy: {
           installation: "AVAILABLE",
@@ -263,7 +273,7 @@ export async function mergeCodexPluginMarketplace(
         },
         category: "Productivity",
       },
-    ],
+    ),
   });
   return "current";
 }
@@ -389,8 +399,9 @@ async function removeCodexMarketplaceEntry(filePath: string): Promise<void> {
   const rawPlugins: unknown[] = Array.isArray(marketplace.plugins)
     ? marketplace.plugins
     : [];
-  const plugins: unknown[] = rawPlugins.filter(
-    (entry) => !isNamedJsonObject(entry, CODEX_PLUGIN_NAME),
+  const plugins = removeManagedMarketplaceEntries(
+    rawPlugins,
+    CODEX_MANAGED_MARKETPLACE_ENTRY,
   );
 
   const isManagedFreshMarketplace =
@@ -405,8 +416,4 @@ async function removeCodexMarketplaceEntry(filePath: string): Promise<void> {
   }
 
   await writeJsonFile(filePath, { ...marketplace, plugins });
-}
-
-function isNamedJsonObject(value: unknown, name: string): boolean {
-  return isJsonObject(value) && value.name === name;
 }
