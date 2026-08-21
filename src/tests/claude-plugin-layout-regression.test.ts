@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  mergeClaudePluginMarketplace,
   resetClaudeCodeNativeHost,
   writeClaudeCodeNativeFiles,
 } from "../host-adapters/claude-code-native.js";
@@ -56,6 +57,8 @@ void test("Claude Code wire writes a valid local marketplace/plugin tree and res
       ),
     ) as Record<string, unknown>;
     assert.equal(manifest.name, "agent-harness");
+    assert.equal(manifest.version, "2.1.0");
+    assert.deepEqual(manifest.author, { name: "Agent Harness" });
     assert.equal("commands" in manifest, false);
     assert.equal("agents" in manifest, false);
     assert.equal("skills" in manifest, false);
@@ -106,6 +109,56 @@ void test("Claude Code wire writes a valid local marketplace/plugin tree and res
     assert.deepEqual(resetMarketplace.plugins, [
       { name: "existing", source: "./plugins/existing" },
     ]);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Claude marketplace preserves a user-owned same-name plugin on apply and reset", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-claude-marketplace-owner-"),
+  );
+  try {
+    const marketplacePath = join(
+      workspaceRoot,
+      ".claude-plugin",
+      "marketplace.json",
+    );
+    const userOwnedEntry = {
+      name: "agent-harness",
+      source: {
+        source: "github",
+        repo: "example-user/external-agent-harness",
+        ref: "v9.9.9",
+      },
+      description: "User-owned plugin with a colliding public name",
+    };
+    await import("../files.js").then(({ writeJsonFile }) =>
+      writeJsonFile(marketplacePath, {
+        name: "team-tools",
+        owner: { name: "Team" },
+        plugins: [userOwnedEntry],
+      }),
+    );
+
+    await mergeClaudePluginMarketplace(marketplacePath);
+    const merged = JSON.parse(await readFile(marketplacePath, "utf8")) as {
+      plugins: Array<Record<string, unknown>>;
+    };
+    assert.deepEqual(merged.plugins[0], userOwnedEntry);
+    assert.ok(
+      merged.plugins.some(
+        (plugin) =>
+          plugin.name === "agent-harness" &&
+          plugin.source === "./plugins/agent-harness",
+      ),
+    );
+
+    await resetClaudeCodeNativeHost(workspaceRoot, undefined);
+    const reset = JSON.parse(await readFile(marketplacePath, "utf8")) as {
+      plugins: Array<Record<string, unknown>>;
+    };
+    assert.deepEqual(reset.plugins, [userOwnedEntry]);
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }
