@@ -25,9 +25,19 @@ import {
   upsertManagedSectionFile,
 } from "./native-utils.js";
 import type { WireNativeFilesOptions } from "./native-utils.js";
+import {
+  removeManagedMarketplaceEntries,
+  replaceManagedMarketplaceEntry,
+} from "./marketplace-utils.js";
 
 const CLAUDE_PLUGIN_NAME = "agent-harness";
+const CLAUDE_PLUGIN_VERSION = "2.1.0";
 const CLAUDE_MARKETPLACE_NAME = "agent-harness-local";
+const CLAUDE_PLUGIN_SOURCE_PATH = `./plugins/${CLAUDE_PLUGIN_NAME}`;
+const CLAUDE_MANAGED_MARKETPLACE_ENTRY = {
+  name: CLAUDE_PLUGIN_NAME,
+  sourcePath: CLAUDE_PLUGIN_SOURCE_PATH,
+} as const;
 
 /**
  * Writes Claude Code-native managed files and a standards-compliant local
@@ -119,6 +129,8 @@ async function writeClaudePlugin(
   await writeJsonFile(join(pluginRoot, ".claude-plugin", "plugin.json"), {
     name: CLAUDE_PLUGIN_NAME,
     description: "Curated Agent Harness project assets for Claude Code.",
+    version: CLAUDE_PLUGIN_VERSION,
+    author: { name: "Agent Harness" },
   });
   await writeTextFile(
     join(pluginRoot, "skills", CLAUDE_PLUGIN_NAME, "SKILL.md"),
@@ -171,10 +183,6 @@ export async function mergeClaudePluginMarketplace(
   const rawPlugins: unknown[] = Array.isArray(marketplace.plugins)
     ? marketplace.plugins
     : [];
-  const plugins: unknown[] = rawPlugins.filter(
-    (plugin) => !isNamedJsonObject(plugin, CLAUDE_PLUGIN_NAME),
-  );
-
   await writeJsonFile(filePath, {
     ...marketplace,
     name:
@@ -184,14 +192,15 @@ export async function mergeClaudePluginMarketplace(
     owner: isJsonObject(marketplace.owner)
       ? marketplace.owner
       : { name: "Agent Harness" },
-    plugins: [
-      ...plugins,
+    plugins: replaceManagedMarketplaceEntry(
+      rawPlugins,
+      CLAUDE_MANAGED_MARKETPLACE_ENTRY,
       {
         name: CLAUDE_PLUGIN_NAME,
-        source: `./plugins/${CLAUDE_PLUGIN_NAME}`,
+        source: CLAUDE_PLUGIN_SOURCE_PATH,
         description: "Curated Agent Harness project assets for Claude Code.",
       },
-    ],
+    ),
   });
 }
 
@@ -273,8 +282,9 @@ async function removeClaudePluginMarketplaceEntry(
   const rawPlugins: unknown[] = Array.isArray(marketplace.plugins)
     ? marketplace.plugins
     : [];
-  const plugins: unknown[] = rawPlugins.filter(
-    (plugin) => !isNamedJsonObject(plugin, CLAUDE_PLUGIN_NAME),
+  const plugins = removeManagedMarketplaceEntries(
+    rawPlugins,
+    CLAUDE_MANAGED_MARKETPLACE_ENTRY,
   );
 
   if (
@@ -289,8 +299,4 @@ async function removeClaudePluginMarketplaceEntry(
   }
 
   await writeJsonFile(filePath, { ...marketplace, plugins });
-}
-
-function isNamedJsonObject(value: unknown, name: string): boolean {
-  return isJsonObject(value) && value.name === name;
 }
