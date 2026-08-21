@@ -209,6 +209,28 @@ void test("source health report distinguishes active, dormant, stale, failed, an
   assert.equal(sourceEntry(noEntryReport, "empty-source")?.duplicateRate, 0);
 });
 
+void test("source health reports validate against the vendored schema", async () => {
+  const report = buildSourceHealthReport(
+    [buildSource("schema-source")],
+    [],
+    [],
+    [],
+  );
+  const schema = JSON.parse(
+    await readFile(
+      join(process.cwd(), "discover", "schema", "source-health.schema.json"),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+  const { validateJsonSchema } =
+    await import("../../scripts/validate-ard-schema.mjs");
+
+  assert.deepEqual(
+    validateJsonSchema(JSON.parse(JSON.stringify(report)), schema),
+    [],
+  );
+});
+
 void test("source health writer emits health, drift, and maintenance reports", async () => {
   const projectRoot = await mkdtemp(
     join(tmpdir(), "agent-harness-source-health-"),
