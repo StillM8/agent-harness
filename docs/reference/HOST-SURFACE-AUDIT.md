@@ -115,6 +115,8 @@ Official docs:
 - <https://code.claude.com/docs/en/slash-commands>
 - <https://code.claude.com/docs/en/sub-agents>
 - <https://code.claude.com/docs/en/hooks>
+- <https://code.claude.com/docs/en/plugins>
+- <https://code.claude.com/docs/en/plugin-marketplaces>
 - <https://code.claude.com/docs/en/settings>
 
 | Surface                                             | Classification     | Notes                                                                                                |
@@ -126,6 +128,8 @@ Official docs:
 | `.claude/skills/`                                   | documented         | Native skills surface                                                                                |
 | `.claude/commands/`                                 | compatibility-path | Compatibility-supported; modern docs emphasize skills first                                          |
 | `.mcp.json` / `.claude/settings*.json` MCP settings | documented         | Synthesized when an asset includes structured host-native config payloads for those documented files |
+| `.claude-plugin/marketplace.json`                   | documented         | Project-local marketplace index containing the managed `./plugins/agent-harness` source              |
+| `plugins/agent-harness/.claude-plugin/plugin.json`  | documented         | Managed local plugin manifest with version and author metadata                                       |
 | `.claude/agent-harness/`                            | harness-managed    | Managed reference tree for non-native assets                                                         |
 
 ## Pi
@@ -139,15 +143,18 @@ Official docs:
 - <https://pi.dev/docs/latest/packages>
 - <https://pi.dev/docs/latest/usage>
 
-| Surface                                  | Classification  | Notes                                                                                                   |
-| ---------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------- |
-| `AGENTS.md`                              | documented      | Native Pi instructions/context surface                                                                  |
-| `SYSTEM.md`                              | documented      | Project system-prompt augmentation surface used by Pi                                                   |
-| `.pi/skills/`                            | documented      | Native Pi skill surface                                                                                 |
-| `.pi/prompts/`                           | documented      | Native Pi prompt-template surface                                                                       |
-| `.pi/settings.json` `skills` / `prompts` | documented      | Adapter now writes documented top-level arrays                                                          |
-| `.pi/extensions/` / `.pi/packages/`      | documented      | Synthesized when an asset includes structured host-native config payloads for those documented surfaces |
-| `.pi/agent-harness/`                     | harness-managed | Managed reference tree for non-native assets                                                            |
+| Surface                                  | Classification  | Notes                                                                                                    |
+| ---------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------- |
+| `AGENTS.md`                              | documented      | Native Pi instructions/context surface                                                                   |
+| `SYSTEM.md`                              | documented      | Project system-prompt augmentation surface used by Pi                                                    |
+| `.pi/skills/`                            | documented      | Native Pi skill surface                                                                                  |
+| `.pi/prompts/`                           | documented      | Native Pi prompt-template surface                                                                        |
+| `.pi/settings.json` `skills` / `prompts` | documented      | Adapter now writes documented top-level arrays                                                           |
+| `.pi/extensions/` / `.pi/packages/`      | stage-only      | Staged or synthesized as references when payloads exist; the Pi adapter does not claim wire-time install |
+| `.pi/agent-harness/`                     | harness-managed | Managed reference tree for non-native assets                                                             |
+
+Pi native extension/package capabilities are intentionally stage-only in v2.1.0. They remain available
+for review and explicit host-side installation, but `wire pi` does not silently install or activate them.
 
 ## OpenAI Codex
 
@@ -188,7 +195,7 @@ Cursor now has a separate checked-in source entry for its own official marketpla
 
 ---
 
-## Host Compatibility Gaps — v2.0.0 audit (#314)
+## Host Compatibility Gaps — current audit
 
 ### 1. Cursor — VS Code extension partial compatibility
 
@@ -198,11 +205,11 @@ Cursor is a VS Code fork and supports installing extensions from the VS Code Mar
 
 **Evidence:** <https://cursor.com/help/customization/extensions>
 
-### 2. Windsurf — VS Code extension partial compatibility
+### 2. Windsurf — removed compatibility target
 
-**Status:** Documented. Windsurf is a VS Code fork with the same extension compatibility characteristics as Cursor. Windsurf entries in source packs should include `"windsurf"` in the `hosts` array when assets are VS Code extension-compatible.
+**Status:** Not a registered v2.1.0 host. Windsurf was removed from the compatible-host matrix in #475, so source packs must not imply that the harness wires or targets it.
 
-**Evidence:** <https://docs.windsurf.com/windsurf/cascade/mcp>
+The adapter-development guide uses a neutral example host instead of Windsurf-specific wiring.
 
 ### 3. GitHub Copilot CLI / copilot-vscode — Claude Code plugin format partial compatibility
 
