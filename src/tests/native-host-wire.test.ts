@@ -429,6 +429,7 @@ void test("Claude Code, Pi, and Codex native wire apply/reset manage project-loc
             schemaVersion: 2,
             plugins: [
               { name: "existing", path: "./existing" },
+              { name: "agent-harness", path: "./stale-agent-harness" },
               "ignored malformed entry",
               { name: "agent-harness", path: "./agent-harness" },
             ],
@@ -559,6 +560,7 @@ void test("Claude Code, Pi, and Codex native wire apply/reset manage project-loc
             schemaVersion: 2,
             plugins: [
               { name: "existing", path: "./existing" },
+              { name: "agent-harness", path: "./stale-agent-harness" },
               "ignored malformed entry",
             ],
           },
