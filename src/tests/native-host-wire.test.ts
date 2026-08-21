@@ -573,15 +573,7 @@ void test("Claude Code, Pi, and Codex native wire apply/reset manage project-loc
 });
 
 void test("Codex plugin manifest omits hook registration when hook assets are absent", () => {
-  const manifest = nativeWireInternals.buildCodexPluginManifest([
-    {
-      assetId: "codex.skill",
-      assetKind: "skill",
-      displayName: "Codex Skill",
-      compatibilityMode: "native",
-      content: "# Codex skill\n",
-    },
-  ]);
+  const manifest = nativeWireInternals.buildCodexPluginManifest();
   assert.equal(manifest.name, "agent-harness");
   assert.equal(manifest.version, "2.1.0");
   assert.equal(manifest.skills, "./skills/");
