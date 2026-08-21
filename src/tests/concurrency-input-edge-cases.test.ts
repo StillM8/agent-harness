@@ -428,7 +428,7 @@ void test("mergeCodexPluginMarketplace filters existing agent-harness entry and 
       schemaVersion: 1,
       plugins: [
         { name: "other-plugin", path: "./other" },
-        { name: "agent-harness", path: "./old-agent-harness" },
+        { name: "agent-harness", path: "./agent-harness" },
       ],
     });
     await mergeCodexPluginMarketplace(mktPath);
