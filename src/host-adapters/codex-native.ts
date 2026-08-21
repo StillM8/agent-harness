@@ -91,7 +91,7 @@ export async function writeCodexNativeFiles(
   const pluginRoot = join(options.workspaceRoot, "plugins", CODEX_PLUGIN_NAME);
   await writeJsonFile(
     join(pluginRoot, ".codex-plugin", "plugin.json"),
-    buildCodexPluginManifest(options.nativeAssets),
+    buildCodexPluginManifest(),
   );
   await writeTextFile(
     join(pluginRoot, "skills", CODEX_PLUGIN_NAME, "SKILL.md"),
@@ -126,10 +126,7 @@ export async function writeCodexNativeFiles(
 }
 
 /** Builds the current Codex plugin manifest. */
-export function buildCodexPluginManifest(
-  nativeAssets: NativeAsset[],
-): Record<string, unknown> {
-  void nativeAssets;
+export function buildCodexPluginManifest(): Record<string, unknown> {
   return {
     name: CODEX_PLUGIN_NAME,
     version: CODEX_PLUGIN_VERSION,
