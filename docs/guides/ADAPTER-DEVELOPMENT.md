@@ -2,7 +2,7 @@
 
 How to create a new host adapter for `agent-harness`. This guide walks through
 registration, lifecycle wiring, capability matrix, and testing — with a worked
-example for a hypothetical Windsurf adapter.
+example for a hypothetical ExampleHost adapter.
 
 ## Architecture Overview
 
@@ -21,28 +21,28 @@ configurations. Each adapter handles:
 
 ### 1. Choose a Host Identifier
 
-Pick a unique `id` for your adapter (e.g. `"windsurf"`). This becomes the CLI
+Pick a unique `id` for your adapter (e.g. `"my-adapter"`). This becomes the CLI
 command target:
 
 ```bash
-agent-harness workspace windsurf
-agent-harness wire windsurf --preview
+agent-harness workspace my-adapter
+agent-harness wire my-adapter --preview
 ```
 
 ### 2. Create the Adapter Module
 
-Create `src/host-adapters/windsurf.ts`:
+Create `src/host-adapters/my-adapter.ts`:
 
 ```typescript
 import type { HostAdapter, HostAdapterModule } from "./types.js";
 import { collectActivatedAssetPrerequisiteDiagnostics } from "../lib/asset-prerequisites.js";
 
 const adapter: HostAdapter = {
-  id: "windsurf",
-  displayName: "Windsurf",
-  aliases: ["windsurf-ide"],
+  id: "my-adapter",
+  displayName: "ExampleHost",
+  aliases: ["my-adapter-ide"],
   lifecycleHost: "opencode",
-  wireHost: "windsurf" as HostTarget,
+  wireHost: "my-adapter" as HostTarget,
   hostKind: "native",
   mutatesHostPaths: true,
   supportedAssetKinds: [
@@ -53,17 +53,17 @@ const adapter: HostAdapter = {
     "instruction",
   ],
   requiresLifecycleHostPaths: true,
-  hostNativeConfig: buildWindsurfNativeConfig,
+  hostNativeConfig: buildExampleHostNativeConfig,
   hostCommands: {
     preflight: {
-      command: "windsurf",
+      command: "my-adapter",
       args: ["--version"],
       timeoutMs: 5000,
     },
   },
 };
 
-async function buildWindsurfNativeConfig(
+async function buildExampleHostNativeConfig(
   context: HostNativeConfigContext,
 ): Promise<AssetHostNativeConfig> {
   // ... implement native config generation
@@ -71,7 +71,7 @@ async function buildWindsurfNativeConfig(
 
 export default {
   adapter,
-  buildNativeConfig: buildWindsurfNativeConfig,
+  buildNativeConfig: buildExampleHostNativeConfig,
 } satisfies HostAdapterModule;
 ```
 
@@ -81,22 +81,22 @@ Add your adapter to `src/host-adapters/registry.ts`:
 
 ```typescript
 // In the registry's loadAdapters() or static list:
-import windsurfModule from "./windsurf.js";
+import myAdapterModule from "./my-adapter.js";
 
 const adapters: HostAdapterModule[] = [
   // ... existing adapters
-  windsurfModule,
+  myAdapterModule,
 ];
 ```
 
 ### 4. Define the Lifecycle Contract
 
-| Concept               | Value        | Why                                         |
-| --------------------- | ------------ | ------------------------------------------- |
-| `lifecycleHost`       | `"opencode"` | Reuses OpenCode-compatible bundle structure |
-| `wireHost`            | `"windsurf"` | Unique wire target for file placement       |
-| `mutatesHostPaths`    | `true`       | Adapter writes files to workspace           |
-| `supportedAssetKinds` | `[...]`      | Which asset types this host can consume     |
+| Concept               | Value          | Why                                         |
+| --------------------- | -------------- | ------------------------------------------- |
+| `lifecycleHost`       | `"opencode"`   | Reuses OpenCode-compatible bundle structure |
+| `wireHost`            | `"my-adapter"` | Unique wire target for file placement       |
+| `mutatesHostPaths`    | `true`         | Adapter writes files to workspace           |
+| `supportedAssetKinds` | `[...]`        | Which asset types this host can consume     |
 
 Lifecycle hosts determine which bundles assets are sourced from:
 
@@ -106,11 +106,11 @@ Lifecycle hosts determine which bundles assets are sourced from:
 
 ### 5. Implement Native Configuration
 
-Each activated asset can produce host-native file payloads. For Windsurf, this
-might mean writing `.windsurf/mcp.json` and `.windsurf/skills.json`:
+Each activated asset can produce host-native file payloads. For ExampleHost, this
+might mean writing `.my-adapter/mcp.json` and `.my-adapter/skills.json`:
 
 ```typescript
-async function buildWindsurfNativeConfig(
+async function buildExampleHostNativeConfig(
   context: HostNativeConfigContext,
 ): Promise<AssetHostNativeConfig> {
   const mcpServers: Record<string, unknown> = {};
@@ -125,7 +125,7 @@ async function buildWindsurfNativeConfig(
     }
     if (asset.assetKind === "skill") {
       skills[assetId] = {
-        path: `.windsurf/skills/${assetId}.md`,
+        path: `.my-adapter/skills/${assetId}.md`,
       };
     }
   }
@@ -133,12 +133,12 @@ async function buildWindsurfNativeConfig(
   return {
     files: [
       {
-        path: ".windsurf/mcp.json",
+        path: ".my-adapter/mcp.json",
         format: "json",
         content: { mcpServers },
       },
       {
-        path: ".windsurf/skills.json",
+        path: ".my-adapter/skills.json",
         format: "json",
         content: { skills },
       },
@@ -150,7 +150,7 @@ async function buildWindsurfNativeConfig(
 ### 6. Implement the Wire-in Handler
 
 The `wire` step places generated native config files into the workspace. For
-Windsurf, this follows the same pattern as other opencode-hosted adapters:
+ExampleHost, this follows the same pattern as other opencode-hosted adapters:
 
 - Preview mode: print the planned file paths and diff against existing files
 - Apply mode: write the files to the workspace
@@ -167,7 +167,7 @@ Preflight checks verify the host CLI is installed:
 ```typescript
 hostCommands: {
   preflight: {
-    command: "windsurf",
+    command: "my-adapter",
     args: ["--version"],
     timeoutMs: 5000,
   },
@@ -185,17 +185,17 @@ If your host supports programmatic install of extensions/plugins:
 ```typescript
 hostCommands: {
   install: {
-    command: "windsurf",
+    command: "my-adapter",
     args: ["extension", "install"],
     installArgTemplate: "${extensionId}",
   },
   verify: {
-    command: "windsurf",
+    command: "my-adapter",
     args: ["extension", "list", "--installed"],
     verifyMatchPattern: "${extensionId}",
   },
   remove: {
-    command: "windsurf",
+    command: "my-adapter",
     args: ["extension", "uninstall"],
     removeArgTemplate: "${extensionId}",
   },
@@ -205,7 +205,7 @@ hostCommands: {
 ### 9. Add Recommendation Policy
 
 Create a recommendation policy file at
-`discover/recommendation-policy/windsurf.json`:
+`discover/recommendation-policy/my-adapter.json`:
 
 ```json
 {
@@ -231,7 +231,7 @@ Add your host to `src/host-adapters/compatibility-matrix.ts`:
 ```typescript
 export const COMPATIBLE_HOSTS: Record<HostTarget, CompatibleHost[]> = {
   // ... existing entries
-  windsurf: [{ hostId: "windsurf", installDiffers: false }],
+  "my-adapter": [{ hostId: "my-adapter", installDiffers: false }],
 };
 ```
 
@@ -243,24 +243,24 @@ automatically picks up new adapters from the registry.
 
 ### 12. Test Your Adapter
 
-Create `src/tests/host-adapters/windsurf.test.ts`:
+Create `src/tests/host-adapters/my-adapter.test.ts`:
 
 ```typescript
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { resolveHostAdapter } from "../../host-adapters/registry.js";
-import windsurfModule from "../../host-adapters/windsurf.js";
+import myAdapterModule from "../../host-adapters/my-adapter.js";
 
-void test("windsurf adapter is registered", () => {
-  const adapter = resolveHostAdapter("windsurf");
+void test("my-adapter adapter is registered", () => {
+  const adapter = resolveHostAdapter("my-adapter");
   assert.ok(adapter != null);
-  assert.equal(adapter.id, "windsurf");
+  assert.equal(adapter.id, "my-adapter");
   assert.equal(adapter.lifecycleHost, "opencode");
 });
 
-void test("windsurf adapter produces native config", async () => {
-  const config = await windsurfModule.buildNativeConfig({
+void test("my-adapter adapter produces native config", async () => {
+  const config = await myAdapterModule.buildNativeConfig({
     activatedAssets: {},
     projectRoot: "/tmp/test",
     workingDirectory: "/tmp/test",
@@ -268,7 +268,7 @@ void test("windsurf adapter produces native config", async () => {
   assert.ok(Array.isArray(config.files));
 });
 
-void test("windsurf workspace --help shows windsurf-specific help", async () => {
+void test("my-adapter workspace --help shows my-adapter-specific help", async () => {
   // Use the built-cli-harness to verify CLI integration
 });
 ```
