@@ -64,7 +64,7 @@ export async function summarizeInstallBundleOutcome(
 export function formatInstallBundleOutcomeSummary(
   summary: InstallBundleOutcomeSummary,
 ): string {
-  return `Install bundle summary: staged=${summary.staged} skipped=${summary.skipped} failed=${summary.failed}`;
+  return `Install bundle summary (latest batch): staged=${summary.staged} skipped=${summary.skipped} failed=${summary.failed}`;
 }
 
 /** Returns whether an install outcome contains unresolved work. */
