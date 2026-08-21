@@ -110,7 +110,7 @@ void test("tampered mirror artifacts produce a skipped summary and non-zero inst
     assert.match(output.join("\n"), /Mirror artifact hash mismatch/u);
     assert.match(
       output.join("\n"),
-      /Install bundle summary: staged=0 skipped=1 failed=0/u,
+      /Install bundle summary \(latest batch\): staged=0 skipped=1 failed=0/u,
     );
   } finally {
     await rm(projectRoot, { recursive: true, force: true });
@@ -166,7 +166,7 @@ void test("bundle outcome summaries honor bundle and asset scopes", async () => 
     assert.equal(installBundleOutcomeHasProblems(filtered), true);
     assert.equal(
       formatInstallBundleOutcomeSummary(filtered),
-      "Install bundle summary: staged=0 skipped=1 failed=0",
+      "Install bundle summary (latest batch): staged=0 skipped=1 failed=0",
     );
 
     assert.equal(
