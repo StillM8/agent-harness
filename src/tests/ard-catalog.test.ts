@@ -103,6 +103,21 @@ void test("invalid and epoch update timestamps are omitted", () => {
   );
 });
 
+void test("checked-in ARD catalog contains no epoch-dated legacy entries", async () => {
+  const catalog = JSON.parse(
+    await readFile(
+      join(process.cwd(), ".well-known", "ai-catalog.json"),
+      "utf8",
+    ),
+  ) as ArdCatalog;
+  const epochLegacyEntries = catalog.entries.filter(
+    (item) =>
+      item.identifier.includes(":legacy:") &&
+      item.updatedAt === "1970-01-01T00:00:00.000Z",
+  );
+  assert.deepEqual(epochLegacyEntries, []);
+});
+
 void test("ARD mapping helpers cover safe fallbacks and inline metadata", () => {
   const { resolveHttpUrl, sanitizePublisherFqdn, sanitizeUrnSegment } =
     ardCatalogInternals;
