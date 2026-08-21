@@ -366,7 +366,7 @@ A packaged CLI keeps checked-in discovery and mirror policy assets read-only and
 
 ### Building a comprehensive catalog
 
-The default `discover full` builds a demand-driven catalog — fast for per-workspace use but limited in breadth (~11,500+ entries from 50+ sources). To build a truly comprehensive catalog across millions of available assets, use the two-phase offline index workflow:
+The default `discover full` builds a demand-driven catalog — fast for per-workspace use but limited in breadth (~11,500+ entries from 50+ configured sources, including asset-producing sources). To build a truly comprehensive catalog across millions of available assets, use the two-phase offline index workflow:
 
 **Phase 1 (offline, one-time or CI):** Build the full index across all sources.
 
@@ -598,7 +598,7 @@ agent-harness discover environment-index
 
 ### Reducing source health noise
 
-`discover full` produces source health warnings for every configured source. With 50+ sources, most warnings are expected — e.g. "entries produced but none survived selection" for registries irrelevant to your workspace. Three flags help manage output and performance:
+`discover full` produces source health warnings for every configured source. With 50+ configured sources, most warnings are expected — e.g. "entries produced but none survived selection" for registries irrelevant to your workspace. Three flags help manage output and performance:
 
 - **`--quiet`**: suppress expected warnings; only severe/error conditions are shown
 - **`--summary`**: print aggregate warning counts grouped by reason instead of per-source lines
@@ -607,7 +607,7 @@ agent-harness discover environment-index
 ```bash
 agent-harness discover full --quiet    # only errors, warnings suppressed
 agent-harness discover full --summary  # aggregate breakdown by reason
-agent-harness discover full --sync-all # full sync of all 50+ sources
+agent-harness discover full --sync-all # full sync of all configured sources
 ```
 
 Demand-based filtering (#419) automatically narrows source sync to only ecosystem-relevant sources. After demand detection, `discover full` prints a summary like `[discover full] Detected TypeScript project. Syncing 12/50 demand-relevant sources (38 skipped). Use --sync-all for full sync or --no-sync to skip entirely.` This reduces first-run sync time from 5+ minutes to under 60 seconds for typical single-stack projects. Use `--sync-all` for the legacy full-sync behaviour, or `--no-sync` to skip sync entirely.
@@ -1011,7 +1011,7 @@ npm run rebuild:full
 
 All host-specific behavior lives behind `src/host-adapters/`. Generic orchestration lives in `src/workspace.ts`, `src/wire.ts`, `src/pipeline.ts`, `src/install.ts`, `src/activate.ts`, and related lifecycle modules.
 
-For the checked-in host-surface classification backing the current README wording, see [`HOST-SURFACE-AUDIT.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/HOST-SURFACE-AUDIT.md).
+For the checked-in host-surface classification backing the current README wording, see [`HOST-SURFACE-AUDIT.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/HOST-SURFACE-AUDIT.md). Cross-host catalog-target behavior is documented in [`SHARED-HOST-COMPATIBILITY.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/SHARED-HOST-COMPATIBILITY.md), and the v2.1.0 release details are in [`docs/releases/v2.1.0.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/releases/v2.1.0.md).
 
 Unless noted otherwise, lifecycle file paths shown in this section are relative to the configured state root. In repository-local development that is the repository root; in packaged CLI usage the default state root is workspace-local `.agent-harness/`.
 
@@ -1816,6 +1816,8 @@ Known boundaries:
 - [`LOGGING-STRATEGY.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/guides/LOGGING-STRATEGY.md) - current decision and guardrails for CLI output/logging vs a full logging library
 - [`RECOMMENDATION-POLICY-PLAYBOOK.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/playbooks/RECOMMENDATION-POLICY-PLAYBOOK.md) - how to inspect and tweak ranking policy only after recall looks healthy
 - [`HOST-SURFACE-AUDIT.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/HOST-SURFACE-AUDIT.md) - checked-in matrix mapping host-facing paths/settings to documented, compatibility, harness-managed, or implementation-detail status
+- [`SHARED-HOST-COMPATIBILITY.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/SHARED-HOST-COMPATIBILITY.md) - shared compatibility and catalog-target semantics
+- [`v2.1.0 release notes`](https://github.com/ar27111994/agent-harness/blob/main/docs/releases/v2.1.0.md) - release scope, migration notes, validation, and catalog provenance
 - [`SECURITY.md`](https://github.com/ar27111994/agent-harness/blob/main/SECURITY.md) - vulnerability reporting and supported-version policy
 - [`ROADMAP.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/ROADMAP.md) - gap analysis and long-range direction
 - [`IMPLEMENTATION-PLAN.md`](https://github.com/ar27111994/agent-harness/blob/main/docs/reference/IMPLEMENTATION-PLAN.md) - milestone-oriented execution plan
