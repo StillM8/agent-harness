@@ -236,6 +236,58 @@ void test("legacy Codex marketplaces are preserved non-destructively", async () 
   }
 });
 
+void test("Codex marketplace preserves a user-owned same-name plugin on apply and reset", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-marketplace-owner-"),
+  );
+  try {
+    const marketplacePath = join(
+      workspaceRoot,
+      ".agents",
+      "plugins",
+      "marketplace.json",
+    );
+    const userOwnedEntry = {
+      name: "agent-harness",
+      source: {
+        source: "github",
+        repo: "example-user/external-agent-harness",
+        ref: "v9.9.9",
+      },
+      policy: { installation: "MANUAL", authentication: "NONE" },
+    };
+    await writeJsonFile(marketplacePath, {
+      name: "team-marketplace",
+      interface: { displayName: "Team Marketplace" },
+      plugins: [userOwnedEntry],
+    });
+
+    await mergeCodexPluginMarketplace(marketplacePath);
+    const merged = JSON.parse(await readFile(marketplacePath, "utf8")) as {
+      plugins: Array<Record<string, unknown>>;
+    };
+    assert.deepEqual(merged.plugins[0], userOwnedEntry);
+    assert.ok(
+      merged.plugins.some(
+        (plugin) =>
+          plugin.name === "agent-harness" &&
+          typeof plugin.source === "object" &&
+          plugin.source !== null &&
+          (plugin.source as Record<string, unknown>).path ===
+            "./plugins/agent-harness",
+      ),
+    );
+
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    const reset = JSON.parse(await readFile(marketplacePath, "utf8")) as {
+      plugins: Array<Record<string, unknown>>;
+    };
+    assert.deepEqual(reset.plugins, [userOwnedEntry]);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 void test("current Codex marketplace repairs a non-string interface display name", async () => {
   const workspaceRoot = await mkdtemp(
     join(tmpdir(), "agent-harness-codex-interface-edge-"),
