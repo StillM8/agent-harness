@@ -2,7 +2,6 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/ards-project/ard-spec/main/spec/schemas/ai-catalog.schema.json",
   "$comment": "Vendored ARD 1.0 snapshot from ards-project/ard-spec. Refresh from the upstream schema when ARD_SPEC_VERSION changes, then rerun validate:ard-schema and the catalog tests.",
-  "$comment": "Vendored ARD 1.0 snapshot from ards-project/ard-spec. Refresh from the upstream schema when ARD_SPEC_VERSION changes, then rerun validate:ard-schema and the catalog tests.",
   "title": "AICatalogManifest",
   "description": "JSON Schema for the ai-catalog.json capability manifest, defining how AI artifacts are advertised.",
   "type": "object",
