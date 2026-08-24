@@ -87,6 +87,6 @@ void test("ARD query builder uses workspace demand or a useful fallback", () => 
 });
 
 void test("trust score mapping retains imported ARD and OMS signals", () => {
-  assert.ok((TRUST_SIGNAL_SCORE_BOOST["ard-signed"] ?? 0) > 0);
-  assert.ok((TRUST_SIGNAL_SCORE_BOOST["oms-signed"] ?? 0) > 0);
+  assert.equal(TRUST_SIGNAL_SCORE_BOOST["ard-signed"], 5);
+  assert.equal(TRUST_SIGNAL_SCORE_BOOST["oms-signed"], 5);
 });

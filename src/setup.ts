@@ -176,10 +176,15 @@ async function runAdapterPreflightWithTimeout(
       }),
     ]);
   } catch (err) {
+    // The outer doctor runner owns the cumulative timeout diagnostic. Do not
+    // relabel a cumulative abort as an adapter-specific timeout here.
+    if (cumulativeSignal?.aborted) {
+      throw err;
+    }
     if (err instanceof DOMException && err.name === "TimeoutError") {
       return [doctorTimeoutDiagnostic(adapter, adapterTimeoutMs)];
     }
-    if (combined.signal.aborted) {
+    if (signal.aborted) {
       return [doctorTimeoutDiagnostic(adapter, adapterTimeoutMs)];
     }
     throw err;
@@ -196,6 +201,20 @@ function doctorTimeoutDiagnostic(
     message: `Preflight check timed out after ${adapterTimeoutMs}ms.`,
     action:
       "Increase AGENT_HARNESS_SETUP_DOCTOR_HOST_TIMEOUT_MS or check the host CLI for hanging processes.",
+  };
+}
+
+function cumulativeTimeoutDiagnostic(
+  adapter: HostAdapter,
+  cumulativeTimeoutMs: number,
+  adapterTimeoutMs: number,
+): PreflightDiagnostic {
+  return {
+    severity: "warning",
+    code: `${adapter.id}-cumulative-timeout`,
+    message: `Preflight check exceeded cumulative timeout of ${cumulativeTimeoutMs}ms (per-adapter timeout: ${adapterTimeoutMs}ms).`,
+    action:
+      "Increase AGENT_HARNESS_SETUP_DOCTOR_TIMEOUT_MS or check for hanging host processes.",
   };
 }
 
@@ -288,13 +307,11 @@ async function runDoctor(
               { once: true },
             );
           }).catch((): PreflightDiagnostic[] => [
-            {
-              severity: "warning",
-              code: `${adapter.id}-cumulative-timeout`,
-              message: `Preflight check exceeded cumulative timeout of ${cumulativeTimeoutMs}ms (per-adapter timeout: ${adapterTimeoutMs}ms).`,
-              action:
-                "Increase AGENT_HARNESS_SETUP_DOCTOR_TIMEOUT_MS or check for hanging host processes.",
-            },
+            cumulativeTimeoutDiagnostic(
+              adapter,
+              cumulativeTimeoutMs,
+              adapterTimeoutMs,
+            ),
           ]),
         ]);
       } catch (err) {
@@ -303,13 +320,11 @@ async function runDoctor(
             `    timed out after ${cumulativeTimeoutMs}ms cumulative budget\n`,
           );
           return [
-            {
-              severity: "warning",
-              code: `${adapter.id}-cumulative-timeout`,
-              message: `Preflight check exceeded cumulative timeout of ${cumulativeTimeoutMs}ms (per-adapter timeout: ${adapterTimeoutMs}ms).`,
-              action:
-                "Increase AGENT_HARNESS_SETUP_DOCTOR_TIMEOUT_MS or check for hanging host processes.",
-            },
+            cumulativeTimeoutDiagnostic(
+              adapter,
+              cumulativeTimeoutMs,
+              adapterTimeoutMs,
+            ),
           ] satisfies PreflightDiagnostic[];
         }
         throw err;
@@ -603,8 +618,33 @@ export const setupInternals = {
 
     for (const [resultIndex, result] of adapterResults.entries()) {
       if (result.status === "rejected") {
-        hasErrors = true;
         const adapterId = adapters[resultIndex].id;
+        if (effectiveCumulativeSignal.aborted) {
+          results.push({
+            adapterId,
+            diagnostics: [
+              cumulativeTimeoutDiagnostic(
+                adapters[resultIndex],
+                effectiveCumulativeMs,
+                adapterTimeoutMs,
+              ),
+            ],
+          });
+          continue;
+        }
+        if (
+          result.reason instanceof DOMException &&
+          result.reason.name === "TimeoutError"
+        ) {
+          results.push({
+            adapterId,
+            diagnostics: [
+              doctorTimeoutDiagnostic(adapters[resultIndex], adapterTimeoutMs),
+            ],
+          });
+          continue;
+        }
+        hasErrors = true;
         results.push({
           adapterId,
           diagnostics: [

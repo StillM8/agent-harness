@@ -164,6 +164,35 @@ void test("Claude marketplace preserves a user-owned same-name plugin on apply a
   }
 });
 
+void test("Claude reset removes a marketplace generated from an empty workspace", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-claude-generated-marketplace-"),
+  );
+  try {
+    const marketplacePath = join(
+      workspaceRoot,
+      ".claude-plugin",
+      "marketplace.json",
+    );
+
+    await writeClaudeCodeNativeFiles({
+      workspaceRoot,
+      managedRoot: join(workspaceRoot, ".claude", "agent-harness"),
+      nativeAssets: [nativeAsset("claude.skill", "skill", "Skill body")],
+      materializedAssets: emptyMaterializedAssets(),
+      mcpServers: [],
+    });
+    await readFile(marketplacePath, "utf8");
+
+    await resetClaudeCodeNativeHost(workspaceRoot, undefined);
+    await assert.rejects(readFile(marketplacePath, "utf8"), {
+      code: "ENOENT",
+    });
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 void test("Claude Code reset tolerates a marketplace with a non-array plugins field", async () => {
   const workspaceRoot = await mkdtemp(
     join(tmpdir(), "agent-harness-claude-plugin-edge-"),
@@ -190,6 +219,28 @@ void test("Claude Code reset tolerates a marketplace with a non-array plugins fi
       await readFile(marketplacePath, "utf8"),
     ) as { plugins: unknown[] };
     assert.deepEqual(resetMarketplace.plugins, []);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Claude Code reset preserves an unmarked same-name plugin directory", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-claude-plugin-owned-"),
+  );
+  try {
+    const userFile = join(
+      workspaceRoot,
+      "plugins",
+      "agent-harness",
+      "user-owned.md",
+    );
+    await mkdir(join(workspaceRoot, "plugins", "agent-harness"), {
+      recursive: true,
+    });
+    await writeFile(userFile, "user content\n", "utf8");
+    await resetClaudeCodeNativeHost(workspaceRoot, undefined);
+    assert.equal(await readFile(userFile, "utf8"), "user content\n");
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }

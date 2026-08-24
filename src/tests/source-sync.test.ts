@@ -15,7 +15,7 @@ import {
   SOURCE_SYNC_STATE_OUTPUT_PATH,
 } from "../domains/discovery/output-paths.js";
 import { syncIndexedSources } from "../domains/discovery/source-sync.js";
-import { restoreEnvVar } from "./env-test-utils.js";
+import { restoreEnvVar, setHttpTestFetchMocks } from "./env-test-utils.js";
 
 type SourceSyncReport = {
   schemaVersion: 1;
@@ -1056,7 +1056,7 @@ function installFetchMock(
 ): () => void {
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
 
   globalThis.fetch = async (input) => {
     const url =
@@ -1075,7 +1075,7 @@ function installFetchMock(
   return () => {
     globalThis.fetch = originalFetch;
     if (previousFetchMockFlag === undefined) {
-      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+      setHttpTestFetchMocks(false);
       return;
     }
     restoreEnvVar("AGENT_HARNESS_TEST_FETCH_MOCKS", previousFetchMockFlag);

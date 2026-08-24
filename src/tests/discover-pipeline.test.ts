@@ -14,7 +14,7 @@ import test from "node:test";
 
 import { runDiscover, discoverInternals } from "../discover.js";
 import { harvestCatalogSourceEntries } from "../discover-pipeline.js";
-import { restoreEnvVar } from "./env-test-utils.js";
+import { restoreEnvVar, setHttpTestFetchMocks } from "./env-test-utils.js";
 import { writeJsonFile } from "../files.js";
 import { clearRuntimeConfig } from "../config/runtime.js";
 import type { SelectionRegistry, SourceDefinition } from "../types.js";
@@ -62,12 +62,13 @@ async function makeDiscoverRoot(t: {
 void test("discover catalog dispatches docs sources through the reference harvester", async (t) => {
   const { workspaceRoot } = await makeDiscoverRoot(t);
   const originalFetch = globalThis.fetch;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+  setHttpTestFetchMocks(true);
   globalThis.fetch = async () =>
     new Response("# Reference docs\n\nUseful guidance.", { status: 200 });
   t.after(() => {
     globalThis.fetch = originalFetch;
-    delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+    restoreEnvVar("AGENT_HARNESS_TEST_FETCH_MOCKS", previousFetchMockFlag);
   });
 
   const source = {
@@ -551,7 +552,7 @@ void test("discover catalog harvests the repo slice with fetch mocks (#428)", as
   // recursive tree, and readme. Anything else fails loudly.
   const originalFetch = globalThis.fetch;
   const previousMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   globalThis.fetch = async (input: RequestInfo | URL) => {
     const url =
       typeof input === "string"
@@ -605,7 +606,7 @@ void test("discover catalog harvests the repo slice with fetch mocks (#428)", as
   t.after(() => {
     globalThis.fetch = originalFetch;
     if (previousMockFlag === undefined) {
-      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+      setHttpTestFetchMocks(false);
     } else {
       restoreEnvVar("AGENT_HARNESS_TEST_FETCH_MOCKS", previousMockFlag);
     }
@@ -728,7 +729,7 @@ void test("discover catalog continues the repo slice when the batch does not wra
 
   const originalFetch = globalThis.fetch;
   const previousMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   globalThis.fetch = async (input: RequestInfo | URL) => {
     const url =
       typeof input === "string"
@@ -776,7 +777,7 @@ void test("discover catalog continues the repo slice when the batch does not wra
   t.after(() => {
     globalThis.fetch = originalFetch;
     if (previousMockFlag === undefined) {
-      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+      setHttpTestFetchMocks(false);
     } else {
       restoreEnvVar("AGENT_HARNESS_TEST_FETCH_MOCKS", previousMockFlag);
     }

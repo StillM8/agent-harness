@@ -15,6 +15,15 @@ const defaultCatalogPath = join(
   ".well-known",
   "ai-catalog.json",
 );
+const KNOWN_SCHEMA_TYPES = new Set([
+  "null",
+  "array",
+  "object",
+  "integer",
+  "number",
+  "string",
+  "boolean",
+]);
 
 /**
  * Validates the subset of JSON Schema draft 2020-12 used by the canonical ARD
@@ -28,12 +37,23 @@ export function validateJsonSchema(
   path = "$",
 ) {
   const errors = [];
+  validateSchemaDefinition(schema, "$schema", errors, new Set());
   validateNode(value, schema, rootSchema, path, errors);
   return errors;
 }
 
 function validateNode(value, schema, rootSchema, path, errors) {
-  if (!schema || typeof schema !== "object") return;
+  // Keep null schemas as unconstrained nodes for compatibility with the
+  // existing validator contract; report every other non-object schema node.
+  if (schema === null) return;
+  if (typeof schema === "boolean") {
+    if (!schema) errors.push(`${path}: schema rejected value`);
+    return;
+  }
+  if (typeof schema !== "object" || Array.isArray(schema)) {
+    errors.push(`${path}: schema node must be an object`);
+    return;
+  }
 
   if (typeof schema.$ref === "string") {
     const target = resolveRef(schema.$ref, rootSchema);
@@ -75,7 +95,19 @@ function validateNode(value, schema, rootSchema, path, errors) {
     errors.push(`${path}: value is not in enum ${JSON.stringify(schema.enum)}`);
   }
 
+  if (Object.hasOwn(schema, "const") && !deepEqualJson(value, schema.const)) {
+    errors.push(
+      `${path}: value does not equal const ${JSON.stringify(schema.const)}`,
+    );
+  }
+
   if (typeof value === "string") {
+    if (
+      typeof schema.minLength === "number" &&
+      value.length < schema.minLength
+    ) {
+      errors.push(`${path}: expected at least ${schema.minLength} characters`);
+    }
     if (schema.pattern && !new RegExp(schema.pattern, "u").test(value)) {
       errors.push(`${path}: does not match pattern ${schema.pattern}`);
     }
@@ -84,6 +116,15 @@ function validateNode(value, schema, rootSchema, path, errors) {
     }
     if (schema.format === "date-time" && !isDateTime(value)) {
       errors.push(`${path}: expected RFC3339 date-time`);
+    }
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (typeof schema.minimum === "number" && value < schema.minimum) {
+      errors.push(`${path}: expected number >= ${schema.minimum}`);
+    }
+    if (typeof schema.maximum === "number" && value > schema.maximum) {
+      errors.push(`${path}: expected number <= ${schema.maximum}`);
     }
   }
 
@@ -156,6 +197,75 @@ function validateNode(value, schema, rootSchema, path, errors) {
   }
 }
 
+function validateSchemaDefinition(schema, path, errors, seen) {
+  if (schema === null) return;
+  if (typeof schema === "boolean") return;
+  if (typeof schema !== "object" || Array.isArray(schema)) {
+    errors.push(`${path}: schema node must be an object`);
+    return;
+  }
+  if (seen.has(schema)) return;
+  seen.add(schema);
+
+  if (schema.type !== undefined) {
+    const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+    for (const type of types) {
+      if (typeof type !== "string" || !KNOWN_SCHEMA_TYPES.has(type)) {
+        errors.push(
+          `${path}.type: unknown schema type ${JSON.stringify(type)}`,
+        );
+      }
+    }
+  }
+
+  for (const keyword of ["oneOf", "anyOf", "allOf"]) {
+    if (Array.isArray(schema[keyword])) {
+      schema[keyword].forEach((candidate, index) =>
+        validateSchemaDefinition(
+          candidate,
+          `${path}.${keyword}[${index}]`,
+          errors,
+          seen,
+        ),
+      );
+    }
+  }
+  if (Object.hasOwn(schema, "not")) {
+    validateSchemaDefinition(schema.not, `${path}.not`, errors, seen);
+  }
+  if (Object.hasOwn(schema, "items")) {
+    validateSchemaDefinition(schema.items, `${path}.items`, errors, seen);
+  }
+  if (isObject(schema.properties)) {
+    for (const [key, propertySchema] of Object.entries(schema.properties)) {
+      validateSchemaDefinition(
+        propertySchema,
+        `${path}.properties.${key}`,
+        errors,
+        seen,
+      );
+    }
+  }
+  if (Object.hasOwn(schema, "additionalProperties")) {
+    validateSchemaDefinition(
+      schema.additionalProperties,
+      `${path}.additionalProperties`,
+      errors,
+      seen,
+    );
+  }
+  if (isObject(schema.$defs)) {
+    for (const [key, definition] of Object.entries(schema.$defs)) {
+      validateSchemaDefinition(
+        definition,
+        `${path}.$defs.${key}`,
+        errors,
+        seen,
+      );
+    }
+  }
+}
+
 function resolveRef(ref, rootSchema) {
   if (!ref.startsWith("#/")) return null;
   return ref
@@ -189,9 +299,34 @@ function matchesType(value, expected) {
       case "boolean":
         return typeof value === type;
       default:
-        return true;
+        return false;
     }
   });
+}
+
+function deepEqualJson(left, right) {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((entry, index) => deepEqualJson(entry, right[index]))
+    );
+  }
+  if (isObject(left) || isObject(right)) {
+    if (!isObject(left) || !isObject(right)) return false;
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    return (
+      leftKeys.length === rightKeys.length &&
+      leftKeys.every(
+        (key) =>
+          Object.hasOwn(right, key) && deepEqualJson(left[key], right[key]),
+      )
+    );
+  }
+  return false;
 }
 
 function isObject(value) {

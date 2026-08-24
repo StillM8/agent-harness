@@ -29,6 +29,10 @@ import {
   removeManagedMarketplaceEntries,
   replaceManagedMarketplaceEntry,
 } from "./marketplace-utils.js";
+import {
+  hasManagedPluginMarker,
+  writeManagedPluginMarker,
+} from "./ownership-marker.js";
 
 const CODEX_PLUGIN_NAME = "agent-harness";
 const CODEX_PLUGIN_VERSION = "2.1.0";
@@ -89,6 +93,7 @@ export async function writeCodexNativeFiles(
   );
 
   const pluginRoot = join(options.workspaceRoot, "plugins", CODEX_PLUGIN_NAME);
+  await writeManagedPluginMarker(pluginRoot, CODEX_PLUGIN_NAME);
   await writeJsonFile(
     join(pluginRoot, ".codex-plugin", "plugin.json"),
     buildCodexPluginManifest(),
@@ -145,26 +150,17 @@ export function buildCodexPluginManifest(): Record<string, unknown> {
   };
 }
 
-/**
- * Current Codex plugins do not synthesize hook manifests. The legacy multi-
- * argument shape is retained only for compatibility callers and tests.
- */
-export function buildCodexHooksManifest(
-  nativeAssets: NativeAsset[],
-  legacyHookFilesOrManagedRoot?: readonly string[] | string,
-  legacyContentPathByAssetIdOrHooksManifestPath?:
-    Readonly<Record<string, string>> | string,
-  hooksManifestPath?: string,
-): Record<string, unknown> | null {
-  if (!Array.isArray(legacyHookFilesOrManagedRoot)) {
-    return null;
-  }
+/** Current Codex plugins do not synthesize hook manifests. */
+export function buildCodexHooksManifest(): null {
+  return null;
+}
 
-  const contentPathByAssetId: Readonly<Record<string, string>> =
-    legacyContentPathByAssetIdOrHooksManifestPath !== null &&
-    typeof legacyContentPathByAssetIdOrHooksManifestPath === "object"
-      ? legacyContentPathByAssetIdOrHooksManifestPath
-      : {};
+/** Builds the legacy hook manifest used by legacy Codex plugin layouts. */
+export function buildLegacyCodexHooksManifest(
+  nativeAssets: readonly NativeAsset[],
+  contentPathByAssetId: Readonly<Record<string, string>>,
+  hooksManifestPath?: string,
+): Record<string, unknown> {
   const manifestDirectory = hooksManifestPath
     ? dirname(hooksManifestPath)
     : undefined;
@@ -284,6 +280,7 @@ async function writeLegacyCodexCompatibilityPlugin(
     "plugins",
     CODEX_PLUGIN_NAME,
   );
+  await writeManagedPluginMarker(legacyPluginRoot, CODEX_PLUGIN_NAME);
   const hookAssets = options.nativeAssets.filter(
     (asset) => asset.assetKind === "hook",
   );
@@ -334,10 +331,19 @@ export async function resetCodexNativeHost(
       ),
   );
   await removePath(join(workspaceRoot, ".agents", "skills", CODEX_PLUGIN_NAME));
-  await removePath(join(workspaceRoot, "plugins", CODEX_PLUGIN_NAME));
-  await removePath(
-    join(workspaceRoot, ".agents", "plugins", CODEX_PLUGIN_NAME),
+  const pluginRoot = join(workspaceRoot, "plugins", CODEX_PLUGIN_NAME);
+  if (await hasManagedPluginMarker(pluginRoot, CODEX_PLUGIN_NAME)) {
+    await removePath(pluginRoot);
+  }
+  const legacyPluginRoot = join(
+    workspaceRoot,
+    ".agents",
+    "plugins",
+    CODEX_PLUGIN_NAME,
   );
+  if (await hasManagedPluginMarker(legacyPluginRoot, CODEX_PLUGIN_NAME)) {
+    await removePath(legacyPluginRoot);
+  }
   await removeCodexAgentProfiles(workspaceRoot);
   await removeCodexMarketplaceEntry(
     join(workspaceRoot, ".agents", "plugins", "marketplace.json"),

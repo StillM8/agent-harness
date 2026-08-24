@@ -1,3 +1,4 @@
+import { setHttpTestFetchMocks } from "./env-test-utils.js";
 import assert from "node:assert/strict";
 import type { ClientRequest, IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
@@ -43,7 +44,7 @@ void test("fetchWithTimeout propagates an already-aborted caller signal", async 
 void test("guarded fetch test mocks serialize request bodies and parse json responses", async () => {
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
 
   const observed: Array<{
     method: string | undefined;
@@ -159,7 +160,7 @@ void test("guarded fetch test mocks serialize request bodies and parse json resp
 void test("guarded fetch mocks respect explicit methods and array-buffer request bodies", async () => {
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   const bodyBuffer = new TextEncoder().encode("array-buffer-body");
   let observedMethod: string | undefined;
   let observedBody: string | undefined;
@@ -390,6 +391,9 @@ void test("pinned http requests preserve sparse status and multi-value headers",
 });
 
 function restoreEnv(name: string, value: string | undefined): void {
+  if (name === "AGENT_HARNESS_TEST_FETCH_MOCKS") {
+    setHttpTestFetchMocks(value === "1");
+  }
   if (value === undefined) {
     delete process.env[name];
     return;
@@ -406,16 +410,17 @@ async function withFetchMock(
 ): Promise<void> {
   const originalFetch = globalThis.fetch;
   const previousFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   globalThis.fetch = async () => new Response(body, { status: 200 });
   try {
     await run();
   } finally {
     globalThis.fetch = originalFetch;
     if (previousFlag === undefined) {
-      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+      setHttpTestFetchMocks(false);
     } else {
       process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = previousFlag;
+      setHttpTestFetchMocks(previousFlag === "1");
     }
   }
 }

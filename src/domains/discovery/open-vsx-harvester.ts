@@ -39,7 +39,11 @@ export async function harvestOpenVsxExtensions(
   return readExtensionRecords(payload)
     .slice(0, MAX_RESULTS)
     .flatMap((record) => {
-      const namespace = readString(record.namespace);
+      const namespace =
+        readString(record.namespace) ??
+        (isRecord(record.namespace)
+          ? readString(record.namespace.name)
+          : undefined);
       const name = readString(record.name);
       if (!namespace || !name) {
         return [];
@@ -70,6 +74,9 @@ export async function harvestOpenVsxExtensions(
           installMethod: "open-vsx-registry",
           manifestEntry: extensionId,
           publisherName: namespace,
+          // The Open VSX registry publisher is trusted only when the response
+          // explicitly carries namespace/publisher verification evidence.
+          publisherVerified: readPublisherVerification(record),
           installs: downloadCount,
           lastUpdated: timestamp,
           ...(version ? { version } : {}),
@@ -147,6 +154,21 @@ function readFiniteNumber(value: unknown): number | undefined {
     : undefined;
 }
 
+function readPublisherVerification(record: Record<string, unknown>): boolean {
+  const namespace = isRecord(record.namespace) ? record.namespace : undefined;
+  const publisher = isRecord(record.publisher) ? record.publisher : undefined;
+  const candidates = [
+    record.publisherVerified,
+    record.namespaceVerified,
+    publisher?.verified,
+    namespace?.verified,
+  ];
+  return (
+    candidates.find((value): value is boolean => typeof value === "boolean") ??
+    false
+  );
+}
+
 function tokenize(value: string): string[] {
   return value
     .toLowerCase()
@@ -164,6 +186,7 @@ export const openVsxHarvesterInternals = {
   isRecord,
   readExtensionRecords,
   readFiniteNumber,
+  readPublisherVerification,
   readString,
   resolveOpenVsxEndpoint,
   tokenize,

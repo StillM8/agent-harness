@@ -36,11 +36,16 @@ void test("recommend parent help points users to the shared compatibility refere
   assert.match(rendered, /'shared'.*not a wire\/workspace adapter/iu);
 });
 
-void test("recommend facade suppresses the shared note when help has options", async () => {
+void test("recommend facade suppresses the shared note when help has options", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "log", (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  });
   const exitCode = await runRecommend(
     ["help", "--bogus"],
     process.cwd(),
     process.cwd(),
   );
   assert.equal(exitCode, 1);
+  assert.doesNotMatch(lines.join("\n"), /SHARED-HOST-COMPATIBILITY\.md/u);
 });

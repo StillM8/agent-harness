@@ -111,6 +111,11 @@ export function buildReferenceSourceCatalogEntry(
   const installMethod =
     harvestedItem?.installMethod ??
     (wasHarvested ? `${source.kind}-summary` : `${source.kind}-reference`);
+  const publisherName =
+    harvestedItem?.publisherName ?? source.publisher?.name ?? source.id;
+  const publisherVerified = harvestedItem
+    ? harvestedItem.publisherVerified === true
+    : (source.publisher?.verified ?? false);
 
   return {
     id: buildCatalogId(source.id, originUrl),
@@ -125,16 +130,15 @@ export function buildReferenceSourceCatalogEntry(
       sourceKind: source.kind,
       sourcePriority: source.priority,
       originUrl,
-      publisher:
-        harvestedItem?.publisherName ?? source.publisher?.name ?? source.id,
-      publisherVerified: source.publisher?.verified ?? false,
+      publisher: publisherName,
+      publisherVerified,
     },
     trust: {
       score: computeTrustScore({
         authorityTier: source.authorityTier,
         sourceKind: source.kind,
         sourcePriority: source.priority,
-        publisherVerified: source.publisher?.verified ?? false,
+        publisherVerified,
         compatibilityMode,
         installMethod,
       }),
@@ -143,7 +147,7 @@ export function buildReferenceSourceCatalogEntry(
           authorityTier: source.authorityTier,
           sourceKind: source.kind,
           sourcePriority: source.priority,
-          publisherVerified: source.publisher?.verified ?? false,
+          publisherVerified,
           compatibilityMode,
           installMethod,
         }),

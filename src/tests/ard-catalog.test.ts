@@ -270,10 +270,16 @@ void test("the dependency-free ARD schema validator reports core schema failures
   const { validateJsonSchema } =
     await import("../../scripts/validate-ard-schema.mjs");
   assert.deepEqual(validateJsonSchema(null, { type: "null" }), []);
-  assert.deepEqual(validateJsonSchema("future", { type: "future-type" }), []);
+  assert.ok(
+    validateJsonSchema("future", { type: "future-type" }).some((error) =>
+      /unknown schema type/u.test(error),
+    ),
+  );
   assert.deepEqual(
-    validateJsonSchema("value", 42 as unknown as Record<string, unknown>),
-    [],
+    validateJsonSchema("value", 42 as unknown as Record<string, unknown>).some(
+      (error) => /schema node must be an object/u.test(error),
+    ),
+    true,
   );
   assert.ok(
     validateJsonSchema("value", { $ref: "external-schema" }).some((error) =>
@@ -308,6 +314,38 @@ void test("the dependency-free ARD schema validator reports core schema failures
   assert.ok(errors.some((error) => /expected type "string"/u.test(error)));
   assert.ok(errors.some((error) => /value is not in enum/u.test(error)));
   assert.ok(errors.some((error) => /does not match pattern/u.test(error)));
+
+  const constraintErrors = validateJsonSchema(
+    { schemaVersion: "", count: -1, duplicateRate: 1.5 },
+    {
+      type: "object",
+      properties: {
+        schemaVersion: { type: "string", const: "1.0", minLength: 3 },
+        count: { type: "integer", minimum: 0 },
+        duplicateRate: { type: "number", minimum: 0, maximum: 1 },
+      },
+    },
+  );
+  assert.ok(
+    constraintErrors.some((error) => /does not equal const/u.test(error)),
+  );
+  assert.ok(
+    constraintErrors.some((error) =>
+      /expected at least 3 characters/u.test(error),
+    ),
+  );
+  assert.ok(
+    constraintErrors.some((error) => /expected number >= 0/u.test(error)),
+  );
+  assert.ok(
+    constraintErrors.some((error) => /expected number <= 1/u.test(error)),
+  );
+  assert.ok(
+    validateJsonSchema(
+      {},
+      { type: "object", properties: { broken: { type: "unknown" } } },
+    ).some((error) => /unknown schema type/u.test(error)),
+  );
 });
 
 void test("the dependency-free ARD schema validator covers collection and format constraints", async () => {

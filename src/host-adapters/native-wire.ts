@@ -44,6 +44,7 @@ import {
   resetCodexNativeHost,
   buildCodexPluginManifest,
   buildCodexHooksManifest,
+  buildLegacyCodexHooksManifest,
 } from "./codex-native.js";
 import {
   buildAssetMarkdown,
@@ -797,4 +798,5 @@ export const nativeWireInternals = {
   validateManagedTextFileSnapshots,
   buildCodexPluginManifest,
   buildCodexHooksManifest,
+  buildLegacyCodexHooksManifest,
 };

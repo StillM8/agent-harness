@@ -1,3 +1,4 @@
+import { setHttpTestFetchMocks } from "./env-test-utils.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,7 +12,7 @@ void test("pack harvester does not emit MCP implementation files as assets", asy
   const projectRoot = await mkdtemp(join(tmpdir(), "agent-harness-impl-pack-"));
   const originalFetch = globalThis.fetch;
   const previousMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
 
   globalThis.fetch = async (input) => {
     const url =
@@ -61,9 +62,10 @@ void test("pack harvester does not emit MCP implementation files as assets", asy
   context.after(async () => {
     globalThis.fetch = originalFetch;
     if (previousMockFlag === undefined) {
-      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+      setHttpTestFetchMocks(false);
     } else {
       process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = previousMockFlag;
+      setHttpTestFetchMocks(previousMockFlag === "1");
     }
     await rm(projectRoot, { recursive: true, force: true });
   });
@@ -81,7 +83,7 @@ void test("pack harvester still recognizes a conventional MCP executable entrypo
   const projectRoot = await mkdtemp(join(tmpdir(), "agent-harness-mcp-entry-"));
   const originalFetch = globalThis.fetch;
   const previousMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
 
   globalThis.fetch = async (input) => {
     const url =
@@ -124,9 +126,10 @@ void test("pack harvester still recognizes a conventional MCP executable entrypo
   context.after(async () => {
     globalThis.fetch = originalFetch;
     if (previousMockFlag === undefined) {
-      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+      setHttpTestFetchMocks(false);
     } else {
       process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = previousMockFlag;
+      setHttpTestFetchMocks(previousMockFlag === "1");
     }
     await rm(projectRoot, { recursive: true, force: true });
   });

@@ -653,16 +653,16 @@ function isExecutableMcpServerPath(
   normalizedPath: string,
   source: SourceDefinition,
 ): boolean {
-  if (!/\.(js|ts|mjs|cjs|mts|cts)$/u.test(normalizedPath)) {
-    return false;
-  }
-
   if (
     source.mcpServerPaths?.some((pathPattern) =>
       matchesSourcePathPattern(normalizedPath, pathPattern),
     )
   ) {
     return true;
+  }
+
+  if (!/\.(js|ts|mjs|cjs|mts|cts)$/u.test(normalizedPath)) {
+    return false;
   }
 
   return /(^|\/)(mcp[-_ ]?servers?|servers?\/.*mcp|.*mcp[-_ ]?server.*)(\/|\.|$)/u.test(

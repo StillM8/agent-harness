@@ -1,3 +1,4 @@
+import { setHttpTestFetchMocks } from "./env-test-utils.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -174,7 +175,7 @@ function installFetchMock(
 ): () => void {
   const originalFetch = globalThis.fetch;
   const previousMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
 
   globalThis.fetch = async (input, init) => {
     const url =
@@ -189,9 +190,10 @@ function installFetchMock(
   return () => {
     globalThis.fetch = originalFetch;
     if (previousMockFlag === undefined) {
-      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+      setHttpTestFetchMocks(false);
     } else {
       process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = previousMockFlag;
+      setHttpTestFetchMocks(previousMockFlag === "1");
     }
   };
 }

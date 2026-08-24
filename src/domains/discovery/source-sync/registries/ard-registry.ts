@@ -6,7 +6,7 @@
  * pagination via pageToken.
  */
 
-import type { SourceDefinition } from "../../../../types.js";
+import type { AssetKind, SourceDefinition } from "../../../../types.js";
 import { buildReferenceSourceCatalogEntry } from "../../reference-source-harvester.js";
 import { splitIntoKeywords, uniqueStrings } from "../../catalog-utils.js";
 import {
@@ -34,6 +34,24 @@ const DEFAULT_PORTFOLIO_FIT = 0.5;
 const ARD_SCORE_MAX = 100;
 const SYNTHETIC_CAPABILITY_QUERY_LIMIT = 3;
 const ARD_REPRESENTATIVE_QUERY_LIMIT = 5;
+const ASSET_KINDS = new Set<AssetKind>([
+  "skill",
+  "plugin",
+  "mcp-server",
+  "agent",
+  "instruction",
+  "workflow",
+  "hook",
+  "extension",
+  "prompt-pack",
+  "reference-pack",
+  "payable-api",
+  "acp-agent",
+]);
+
+function isAssetKind(value: string | undefined): value is AssetKind {
+  return value !== undefined && ASSET_KINDS.has(value as AssetKind);
+}
 
 function extractArdTrustSignals(tm?: Record<string, unknown>): string[] {
   const signals: string[] = [];
@@ -145,8 +163,9 @@ export async function syncArdRegistrySource(
       const inlineData = asOptionalRecord(result.data);
       const roundTripAssetKind =
         getString(metadata?.assetKind) ?? getString(inlineData?.assetKind);
-      const assetKind = (roundTripAssetKind || ardTypeToAssetKind(ardType)) as
-        "skill" | "mcp-server" | "agent" | "reference-pack" | "payable-api";
+      const assetKind = isAssetKind(roundTripAssetKind)
+        ? roundTripAssetKind
+        : ardTypeToAssetKind(ardType);
 
       const resultCapabilities = Array.isArray(result.capabilities)
         ? result.capabilities.filter(

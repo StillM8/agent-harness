@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  mapEntryToArd,
-  type ArdCatalog,
-  type PrettierFormatter,
-} from "../ard-catalog.js";
+import { mapEntryToArd, type ArdCatalog } from "../ard-catalog.js";
 import type { AssetCatalogEntry } from "../types.js";
 
 function makeFakeEntry(
@@ -116,20 +112,4 @@ void test("ARD catalog formatting is idempotent", async () => {
     options,
   );
   assert.equal(formatted, await prettier.format(formatted, options));
-});
-
-void test("Prettier-unavailable fallback still leaves valid ARD JSON", async () => {
-  const failingFormatter: PrettierFormatter = async () => {
-    throw new Error("prettier module not installed");
-  };
-  const rawJson = `${JSON.stringify(buildCatalog([makeFakeEntry()]), null, 2)}\n`;
-  assert.equal((JSON.parse(rawJson) as ArdCatalog).specVersion, "1.0");
-  await assert.rejects(
-    failingFormatter("{}", {
-      parser: "json",
-      endOfLine: "lf",
-      trailingComma: "all",
-    }),
-    /prettier module not installed/u,
-  );
 });

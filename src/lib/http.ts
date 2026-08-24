@@ -52,12 +52,22 @@ export interface FetchWithGuardsOptions {
 
 type HttpsRequest = typeof request;
 let httpsRequest: HttpsRequest = request;
+let testFetchMocksEnabled = false;
 
 function setHttpsRequestForTests(nextRequest: HttpsRequest): () => void {
   const previousRequest = httpsRequest;
   httpsRequest = nextRequest;
   return () => {
     httpsRequest = previousRequest;
+  };
+}
+
+/** Enables the guarded-fetch mock path for controlled tests only. */
+function setTestFetchMocksForTests(enabled: boolean): () => void {
+  const previous = testFetchMocksEnabled;
+  testFetchMocksEnabled = enabled;
+  return () => {
+    testFetchMocksEnabled = previous;
   };
 }
 
@@ -388,7 +398,7 @@ function toFetchBody(body: string | Buffer | null): BodyInit | null {
 }
 
 function shouldUseTestFetchMock(): boolean {
-  return process.env.AGENT_HARNESS_TEST_FETCH_MOCKS === "1";
+  return testFetchMocksEnabled;
 }
 
 async function fetchWithPinnedResolution(
@@ -830,5 +840,6 @@ export const httpInternals = {
   isPrivateIpv6Address,
   withBodyReadTimeout,
   setHttpsRequestForTests,
+  setTestFetchMocksForTests,
   normalizeResolvedHostnameAddresses,
 };

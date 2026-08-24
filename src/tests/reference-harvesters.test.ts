@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { clearRuntimeConfigForTests } from "../config/runtime.js";
-import { restoreEnvVar } from "./env-test-utils.js";
+import { restoreEnvVar, setHttpTestFetchMocks } from "./env-test-utils.js";
 import {
   fetchVsCodeMarketplaceItemsForQuery,
   harvestReferenceItems,
@@ -12,7 +12,7 @@ import type { DemandProfile, SourceDefinition } from "../types.js";
 void test("generic docs harvester extracts same-origin reference links", async (context) => {
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   globalThis.fetch = async () =>
     new Response(
       `<html><head><title>Docs Home</title></head><body>
@@ -43,7 +43,7 @@ void test("generic docs harvester extracts same-origin reference links", async (
 void test("generic extension registry items stay reference-only", async (context) => {
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   globalThis.fetch = async () =>
     new Response("# Extension Gallery\n\nReview extension metadata.\n", {
       status: 200,
@@ -66,7 +66,7 @@ void test("generic extension registry items stay reference-only", async (context
 void test("reference harvester dispatches the Open VSX registry source", async (context) => {
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   globalThis.fetch = async () =>
     new Response(
       JSON.stringify({
@@ -105,7 +105,7 @@ void test("generic docs harvester respects configured reference caps", async (co
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
   const previousMaxItems =
     process.env.AGENT_HARNESS_GENERIC_REFERENCE_MAX_ITEMS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   process.env.AGENT_HARNESS_GENERIC_REFERENCE_MAX_ITEMS = "2";
   clearRuntimeConfigForTests();
   globalThis.fetch = async () =>
@@ -141,7 +141,7 @@ void test("generic docs harvester respects configured reference caps", async (co
 void test("VS Code marketplace harvester produces native extension assets", async (context) => {
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   let observedMethod: string | undefined;
   const observedBodies: string[] = [];
   globalThis.fetch = async (_url, init) => {
@@ -195,7 +195,7 @@ void test("generic docs harvester handles invalid origins markdown links and fai
 
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   const responses = [
     new Response("missing", { status: 404 }),
     new Response(
@@ -232,7 +232,7 @@ void test("generic docs harvester handles invalid origins markdown links and fai
 void test("VS Code marketplace normalization skips malformed entries and uses safe fallbacks", async (context) => {
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   const responses = [
     new Response(JSON.stringify({ results: "not-an-array" }), { status: 200 }),
     new Response(
@@ -304,7 +304,7 @@ void test("VS Code marketplace normalization skips malformed entries and uses sa
 void test("generic docs harvester falls back to source names and ignores malformed links", async (context) => {
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   globalThis.fetch = async () =>
     new Response(
       [
@@ -332,7 +332,7 @@ void test("generic docs harvester falls back to source names and ignores malform
 void test("generic docs harvester resolves fallback origins and preserves invalid entities", async (context) => {
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   const infiniteEntity = `&#${"9".repeat(400)};`;
   const responses = [
     new Response(
@@ -396,7 +396,7 @@ void test("VS Code marketplace harvester uses default queries and rejects invali
 
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   const observedQueries: string[] = [];
   globalThis.fetch = async (_url, init) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as {
@@ -450,7 +450,7 @@ void test("VS Code marketplace harvester uses default queries and rejects invali
 void test("VS Code marketplace normalization keeps allowed item URLs and finite install stats", async (context) => {
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   globalThis.fetch = async () =>
     new Response(
       JSON.stringify({
@@ -497,7 +497,7 @@ void test("VS Code marketplace normalization keeps allowed item URLs and finite 
 
 function restoreFetchMockFlag(previousValue: string | undefined): void {
   if (previousValue === undefined) {
-    delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+    setHttpTestFetchMocks(false);
     return;
   }
 

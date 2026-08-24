@@ -13,7 +13,7 @@ import test from "node:test";
 
 import { cliInternals } from "../cli.js";
 import { clearRuntimeConfig } from "../config/runtime.js";
-import { restoreEnvVar } from "./env-test-utils.js";
+import { restoreEnvVar, setHttpTestFetchMocks } from "./env-test-utils.js";
 import { runDiscover, discoverInternals } from "../discover.js";
 import {
   SOURCE_SYNC_ENTRIES_OUTPUT_PATH,
@@ -959,22 +959,19 @@ void test("setup doctor adapter runner: non-timeout throw, aborted-signal diagno
     /boom/u,
   );
 
-  // Same throw after the cumulative signal already fired → the catch
-  // returns a timeout diagnostic instead of crashing.
+  // Same throw after the cumulative signal already fired → the outer doctor
+  // runner owns the cumulative diagnostic, so this helper rethrows.
   const aborted = AbortSignal.timeout(0);
   await new Promise((resolve) => setTimeout(resolve, 5));
-  const diagnostics = await setupInternals.runAdapterPreflightWithTimeout(
-    adapter,
-    5_000,
-    undefined,
-    aborted,
-    preflightFns,
-  );
-  assert.ok(
-    diagnostics.some(
-      (diagnostic) => diagnostic.code === `${adapter.id}-doctor-timeout`,
+  await assert.rejects(
+    setupInternals.runAdapterPreflightWithTimeout(
+      adapter,
+      5_000,
+      undefined,
+      aborted,
+      preflightFns,
     ),
-    "aborted-signal fallback returns a timeout diagnostic",
+    /boom/u,
   );
 
   // Already-aborted cumulative signal → the wireSignal branch aborts the
@@ -1140,13 +1137,13 @@ void test(
     // the single selected skill.
     const originalFetch = globalThis.fetch;
     const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-    process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+    setHttpTestFetchMocks(true);
     globalThis.fetch = async () =>
       new Response("# fixture skill\ncontent", { status: 200 });
     t.after(() => {
       globalThis.fetch = originalFetch;
       if (previousFetchMockFlag === undefined) {
-        delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+        setHttpTestFetchMocks(false);
       } else {
         restoreEnvVar("AGENT_HARNESS_TEST_FETCH_MOCKS", previousFetchMockFlag);
       }
@@ -1270,13 +1267,13 @@ void test(
 
     const originalFetch = globalThis.fetch;
     const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-    process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+    setHttpTestFetchMocks(true);
     globalThis.fetch = async () =>
       new Response("# fixture skill\ncontent", { status: 200 });
     t.after(() => {
       globalThis.fetch = originalFetch;
       if (previousFetchMockFlag === undefined) {
-        delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+        setHttpTestFetchMocks(false);
       } else {
         restoreEnvVar("AGENT_HARNESS_TEST_FETCH_MOCKS", previousFetchMockFlag);
       }
@@ -1368,13 +1365,13 @@ void test(
 
     const originalFetch = globalThis.fetch;
     const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-    process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+    setHttpTestFetchMocks(true);
     globalThis.fetch = async () =>
       new Response("# docs fixture\ncontent", { status: 200 });
     t.after(() => {
       globalThis.fetch = originalFetch;
       if (previousFetchMockFlag === undefined) {
-        delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+        setHttpTestFetchMocks(false);
       } else {
         restoreEnvVar("AGENT_HARNESS_TEST_FETCH_MOCKS", previousFetchMockFlag);
       }

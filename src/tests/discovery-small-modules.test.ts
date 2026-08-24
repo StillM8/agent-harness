@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { readJsonFile, writeJsonFile, writeJsonLinesFile } from "../files.js";
-import { restoreEnvVar } from "./env-test-utils.js";
+import { restoreEnvVar, setHttpTestFetchMocks } from "./env-test-utils.js";
 import {
   catalogInspectionInternals,
   inspectCatalog,
@@ -520,7 +520,7 @@ void test("source registry rejects invalid source-pack entry fields", async () =
 void test("reference harvester query helpers sanitize demand signals and normalize marketplace pages", async (context) => {
   const originalFetch = globalThis.fetch;
   const previousFetchMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   const requestBodies: string[] = [];
 
   globalThis.fetch = async (_input, init) => {
@@ -635,7 +635,7 @@ async function captureConsole(action: () => Promise<void>): Promise<string> {
 
 function restoreFetchMockFlag(previousValue: string | undefined): void {
   if (previousValue === undefined) {
-    delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+    setHttpTestFetchMocks(false);
     return;
   }
 

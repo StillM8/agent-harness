@@ -23,7 +23,7 @@ export async function runRecommend(
   );
   const [command] = args;
   if (
-    (command === "help" || command === undefined) &&
+    command === "help" &&
     !args.some((arg) => arg !== "help" && arg.startsWith("-"))
   ) {
     console.log(

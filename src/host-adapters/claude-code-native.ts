@@ -29,6 +29,10 @@ import {
   removeManagedMarketplaceEntries,
   replaceManagedMarketplaceEntry,
 } from "./marketplace-utils.js";
+import {
+  hasManagedPluginMarker,
+  writeManagedPluginMarker,
+} from "./ownership-marker.js";
 
 const CLAUDE_PLUGIN_NAME = "agent-harness";
 const CLAUDE_PLUGIN_VERSION = "2.1.0";
@@ -126,6 +130,7 @@ async function writeClaudePlugin(
   managedLines: string[],
 ): Promise<void> {
   const pluginRoot = join(options.workspaceRoot, "plugins", CLAUDE_PLUGIN_NAME);
+  await writeManagedPluginMarker(pluginRoot, CLAUDE_PLUGIN_NAME);
   await writeJsonFile(join(pluginRoot, ".claude-plugin", "plugin.json"), {
     name: CLAUDE_PLUGIN_NAME,
     description: "Curated Agent Harness project assets for Claude Code.",
@@ -237,7 +242,10 @@ export async function resetClaudeCodeNativeHost(
   await removePath(
     join(workspaceRoot, ".claude", "commands", "agent-harness.md"),
   );
-  await removePath(join(workspaceRoot, "plugins", CLAUDE_PLUGIN_NAME));
+  const pluginRoot = join(workspaceRoot, "plugins", CLAUDE_PLUGIN_NAME);
+  if (await hasManagedPluginMarker(pluginRoot, CLAUDE_PLUGIN_NAME)) {
+    await removePath(pluginRoot);
+  }
   await removeClaudePluginMarketplaceEntry(
     join(workspaceRoot, ".claude-plugin", "marketplace.json"),
   );

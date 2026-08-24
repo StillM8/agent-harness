@@ -31,6 +31,12 @@ export interface HarvestedReferenceItem {
    */
   publisherName?: string;
   /**
+   * Whether the harvested item publisher is explicitly verified by the item
+   * registry. This is intentionally separate from source-level publisher
+   * verification because a registry owner does not verify every item.
+   */
+  publisherVerified?: boolean;
+  /**
    * Additional trust signals for this item (e.g. `"oms-signed"`,
    * `"oms-trust-anchor"`) harvested from the source payload. These are merged
    * with the base trust signals derived from the source's authority tier and

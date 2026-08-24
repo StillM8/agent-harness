@@ -127,7 +127,7 @@ void test("Codex wire emits current marketplace, plugin manifest, and project cu
       (manifest.interface as Record<string, unknown>).displayName,
       "Agent Harness",
     );
-    assert.equal(buildCodexHooksManifest(nativeAssets), null);
+    assert.equal(buildCodexHooksManifest(), null);
 
     const agentFiles = await readdir(join(workspaceRoot, ".codex", "agents"));
     const managedAgents = agentFiles.filter(
@@ -324,6 +324,28 @@ void test("Codex reset rethrows unexpected agent-profile directory errors", asyn
     await assert.rejects(resetCodexNativeHost(workspaceRoot, undefined), {
       code: "ENOTDIR",
     });
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex reset preserves an unmarked plugin and tolerates a missing agents path", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-reset-missing-path-"),
+  );
+  try {
+    const userFile = join(
+      workspaceRoot,
+      "plugins",
+      "agent-harness",
+      "user-owned.md",
+    );
+    await mkdir(join(workspaceRoot, "plugins", "agent-harness"), {
+      recursive: true,
+    });
+    await writeFile(userFile, "user content\n", "utf8");
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    assert.equal(await readFile(userFile, "utf8"), "user content\n");
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }

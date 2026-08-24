@@ -1,3 +1,4 @@
+import { setHttpTestFetchMocks } from "./env-test-utils.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -5,7 +6,12 @@ import {
   harvestOpenVsxExtensions,
   openVsxHarvesterInternals,
 } from "../domains/discovery/open-vsx-harvester.js";
-import type { DemandProfile, SourceDefinition } from "../types.js";
+import { buildReferenceSourceCatalogEntry } from "../domains/discovery/reference-source-harvester.js";
+import type {
+  DemandProfile,
+  SelectionRegistry,
+  SourceDefinition,
+} from "../types.js";
 
 const DEFAULT_SEARCH_ENDPOINT = "https://open-vsx.org/api/-/search";
 
@@ -116,7 +122,7 @@ void test("Open VSX scalar helpers normalize registry metadata", () => {
 void test("Open VSX harvest handles rich, fallback, bounded, and failed responses", async (t) => {
   const originalFetch = globalThis.fetch;
   const previousMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
 
   const requestedUrls: string[] = [];
   const responses = [
@@ -131,6 +137,7 @@ void test("Open VSX harvest handles rich, fallback, bounded, and failed response
             version: "2.1.0",
             downloadCount: 123,
             timestamp: "2026-08-18T00:00:00.000Z",
+            namespaceVerified: false,
           },
           {
             namespace: "acme space",
@@ -176,9 +183,10 @@ void test("Open VSX harvest handles rich, fallback, bounded, and failed response
   t.after(() => {
     globalThis.fetch = originalFetch;
     if (previousMockFlag === undefined) {
-      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+      setHttpTestFetchMocks(false);
     } else {
       process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = previousMockFlag;
+      setHttpTestFetchMocks(previousMockFlag === "1");
     }
   });
 
@@ -190,6 +198,7 @@ void test("Open VSX harvest handles rich, fallback, bounded, and failed response
   assert.equal(rich.displayName, "Useful Extension");
   assert.equal(rich.manifestEntry, "acme.useful-extension");
   assert.equal(rich.publisherName, "acme");
+  assert.equal(rich.publisherVerified, false);
   assert.equal(rich.installs, 123);
   assert.equal(Reflect.get(rich, "version"), "2.1.0");
   assert.equal(rich.lastUpdated, "2026-08-18T00:00:00.000Z");
@@ -240,17 +249,43 @@ void test("Open VSX harvest handles rich, fallback, bounded, and failed response
   );
 });
 
+void test("Open VSX item verification does not inherit source publisher trust", () => {
+  const entry = buildReferenceSourceCatalogEntry(
+    source(),
+    null,
+    buildSelectionRegistry(),
+    {
+      harvestedItem: {
+        displayName: "Unverified Extension",
+        originUrl: "https://open-vsx.org/extension/unverified/example",
+        summary: "",
+        capabilities: ["extension"],
+        assetKind: "extension",
+        compatibilityMode: "native",
+        installMethod: "open-vsx-registry",
+        publisherName: "unverified",
+        publisherVerified: false,
+      },
+    },
+  );
+
+  assert.equal(entry.source.publisher, "unverified");
+  assert.equal(entry.source.publisherVerified, false);
+  assert.equal(entry.trust.signals.includes("publisher-verified"), false);
+});
+
 void test("Open VSX harvest ignores invalid JSON responses", async (t) => {
   const originalFetch = globalThis.fetch;
   const previousMockFlag = process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
-  process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = "1";
+  setHttpTestFetchMocks(true);
   globalThis.fetch = async () => new Response("{", { status: 200 });
   t.after(() => {
     globalThis.fetch = originalFetch;
     if (previousMockFlag === undefined) {
-      delete process.env.AGENT_HARNESS_TEST_FETCH_MOCKS;
+      setHttpTestFetchMocks(false);
     } else {
       process.env.AGENT_HARNESS_TEST_FETCH_MOCKS = previousMockFlag;
+      setHttpTestFetchMocks(previousMockFlag === "1");
     }
   });
 
@@ -301,5 +336,21 @@ function source(
       allowMirror: false,
       allowInstall: false,
     },
+  };
+}
+
+function buildSelectionRegistry(): SelectionRegistry {
+  return {
+    schemaVersion: 1,
+    selectionPolicies: {
+      officialBeatsPopularity: true,
+      starsAreTieBreakerOnly: true,
+      preferNativeOverAdaptable: true,
+      preferLowerRiskWhenEquivalent: true,
+      preferLowerContextCostWhenEquivalent: true,
+      communityDefaultPolicy: "catalog-only-unless-promoted",
+    },
+    rankingOrder: [],
+    duplicateGroups: [],
   };
 }
