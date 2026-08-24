@@ -411,6 +411,30 @@ void test("runDoctorWithAdapters accepts separate cumulativeTimeoutMs", async ()
   assert.equal(hasErrors, false);
 });
 
+void test("runDoctorWithAdapters maps adapter TimeoutError rejections", async () => {
+  const adapter = buildNoRuntimeAdapter("adapter-timeout");
+  const { results, hasErrors } = await runDoctorWithAdapters(
+    [adapter],
+    5_000,
+    undefined,
+    30_000,
+    async () => {
+      throw new DOMException("adapter timed out", "TimeoutError");
+    },
+  );
+
+  assert.equal(hasErrors, false);
+  assert.deepEqual(results[0]?.diagnostics, [
+    {
+      severity: "warning",
+      code: "adapter-timeout-doctor-timeout",
+      message: "Preflight check timed out after 5000ms.",
+      action:
+        "Increase AGENT_HARNESS_SETUP_DOCTOR_HOST_TIMEOUT_MS or check the host CLI for hanging processes.",
+    },
+  ]);
+});
+
 void test("setup doctor flags error-severity diagnostics through the injected runner (#428)", async () => {
   const ok = await setupInternals.runDoctor(["doctor"], undefined, {
     preflightRunner: async (): Promise<PreflightDiagnostic[]> => [

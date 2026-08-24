@@ -15,6 +15,13 @@ import {
   readResponseBytesWithLimit,
 } from "../lib/http.js";
 
+void test("test fetch mock injection restores its previous state", () => {
+  const restoreEnabled = httpInternals.setTestFetchMocksForTests(true);
+  restoreEnabled();
+  const restoreDisabled = httpInternals.setTestFetchMocksForTests(false);
+  restoreDisabled();
+});
+
 void test("fetchWithTimeout propagates an already-aborted caller signal", async () => {
   const originalFetch = globalThis.fetch;
   const controller = new AbortController();
@@ -339,6 +346,7 @@ void test("http guards cover branch-only address and lookup variants", async () 
   assert.deepEqual(singleResult, { address: "1.1.1.1", family: 4 });
 
   for (const address of [
+    "172.16.0.1",
     "100.64.0.1",
     "192.0.0.8",
     "192.88.99.1",
@@ -348,6 +356,14 @@ void test("http guards cover branch-only address and lookup variants", async () 
   ]) {
     assert.equal(httpInternals.isPrivateIpv4Address(address), true, address);
   }
+  assert.equal(httpInternals.isPrivateIpv4Address("172.32.0.1"), false);
+});
+
+void test("DNS resolution rejects localhost as a non-public hostname", async () => {
+  await assert.rejects(
+    assertPublicInternetResolution(new URL("https://localhost/path")),
+    /non-public/u,
+  );
 });
 
 void test("pinned http requests preserve sparse status and multi-value headers", async () => {

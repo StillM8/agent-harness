@@ -992,6 +992,69 @@ void test("setup doctor adapter runner: non-timeout throw, aborted-signal diagno
   assert.deepEqual(raced, [], "race resolves with the preflight result");
 });
 
+void test("setup doctor maps adapter-specific timeout failures", async () => {
+  const { setupInternals } = await import("../setup.js");
+  const { listHostAdapters } = await import("../host-adapters/registry.js");
+  const adapter = listHostAdapters()[0];
+  const preflightFns = {
+    runHostPreflight: async () => [],
+    runAdapterPreflight: async () => {
+      throw new DOMException("adapter timed out", "TimeoutError");
+    },
+    collectActivatedAssetPrerequisiteDiagnostics: async () => [],
+  } as never;
+
+  const diagnostics = await setupInternals.runAdapterPreflightWithTimeout(
+    adapter,
+    5_000,
+    undefined,
+    undefined,
+    preflightFns,
+  );
+  assert.deepEqual(diagnostics, [
+    {
+      severity: "warning",
+      code: `${adapter.id}-doctor-timeout`,
+      message: "Preflight check timed out after 5000ms.",
+      action:
+        "Increase AGENT_HARNESS_SETUP_DOCTOR_HOST_TIMEOUT_MS or check the host CLI for hanging processes.",
+    },
+  ]);
+});
+
+void test("setup doctor maps a non-timeout error after the adapter signal aborts", async () => {
+  const { setupInternals } = await import("../setup.js");
+  const { listHostAdapters } = await import("../host-adapters/registry.js");
+  const adapter = listHostAdapters()[0];
+  const originalTimeout = AbortSignal.timeout;
+  const controller = new AbortController();
+  (AbortSignal as unknown as { timeout: () => AbortSignal }).timeout = () =>
+    controller.signal;
+
+  try {
+    const preflightFns = {
+      runHostPreflight: async () => [],
+      runAdapterPreflight: async () => {
+        controller.abort(new Error("adapter signal aborted"));
+        throw new Error("adapter failed after abort");
+      },
+      collectActivatedAssetPrerequisiteDiagnostics: async () => [],
+    } as never;
+
+    const diagnostics = await setupInternals.runAdapterPreflightWithTimeout(
+      adapter,
+      5_000,
+      undefined,
+      undefined,
+      preflightFns,
+    );
+    assert.equal(diagnostics[0]?.code, `${adapter.id}-doctor-timeout`);
+  } finally {
+    (AbortSignal as unknown as { timeout: typeof originalTimeout }).timeout =
+      originalTimeout;
+  }
+});
+
 void test(
   "workspace host pipeline completes end-to-end and applies the wire-in (#428)",
   { timeout: 180_000 },

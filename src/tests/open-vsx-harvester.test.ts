@@ -101,8 +101,13 @@ void test("Open VSX payload parsing accepts known collection keys and rejects ma
 });
 
 void test("Open VSX scalar helpers normalize registry metadata", () => {
-  const { readFiniteNumber, readString, tokenize, uniqueStrings } =
-    openVsxHarvesterInternals;
+  const {
+    readFiniteNumber,
+    readPublisherVerification,
+    readString,
+    tokenize,
+    uniqueStrings,
+  } = openVsxHarvesterInternals;
 
   assert.equal(readString("  useful  "), "useful");
   assert.equal(readString("   "), undefined);
@@ -117,6 +122,11 @@ void test("Open VSX scalar helpers normalize registry metadata", () => {
     "open-vsx",
     "extension",
   ]);
+  assert.equal(
+    readPublisherVerification({ publisher: { verified: true } }),
+    true,
+  );
+  assert.equal(readPublisherVerification({}), false);
 });
 
 void test("Open VSX harvest handles rich, fallback, bounded, and failed responses", async (t) => {
@@ -130,7 +140,7 @@ void test("Open VSX harvest handles rich, fallback, bounded, and failed response
       JSON.stringify({
         extensions: [
           {
-            namespace: "acme",
+            namespace: { name: "acme", verified: false },
             name: "useful-extension",
             displayName: "Useful Extension",
             description: "TypeScript extension helper",

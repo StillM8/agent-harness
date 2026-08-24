@@ -346,6 +346,34 @@ void test("the dependency-free ARD schema validator reports core schema failures
       { type: "object", properties: { broken: { type: "unknown" } } },
     ).some((error) => /unknown schema type/u.test(error)),
   );
+  assert.ok(
+    validateJsonSchema(
+      "value",
+      false as unknown as Record<string, unknown>,
+    ).some((error) => /schema rejected value/u.test(error)),
+  );
+  assert.deepEqual(
+    validateJsonSchema("value", null as unknown as Record<string, unknown>),
+    [],
+  );
+  const cyclicSchema: Record<string, unknown> = { type: "object" };
+  cyclicSchema.$defs = { self: cyclicSchema };
+  assert.deepEqual(validateJsonSchema({}, cyclicSchema), []);
+  assert.deepEqual(validateJsonSchema(["value"], { const: ["value"] }), []);
+  assert.ok(
+    validateJsonSchema(["value"], { const: "value" }).some((error) =>
+      /does not equal const/u.test(error),
+    ),
+  );
+  assert.deepEqual(
+    validateJsonSchema({ key: "value" }, { const: { key: "value" } }),
+    [],
+  );
+  assert.ok(
+    validateJsonSchema({ key: "value" }, { const: "other" }).some((error) =>
+      /does not equal const/u.test(error),
+    ),
+  );
 });
 
 void test("the dependency-free ARD schema validator covers collection and format constraints", async () => {
