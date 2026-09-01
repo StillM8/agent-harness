@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import {
+  listGitTags,
   main,
   readJsonFile,
   validateVersionSync,
@@ -123,6 +124,139 @@ test("main reports success and failure without throwing", async (t) => {
   assert.equal(process.exitCode, 1);
   assert.equal(errors.length, 2);
 });
+
+test("validateVersionSync accepts a matching git tag on main", () => {
+  const result = validateVersionSync(
+    { version: "2.1.0" },
+    {
+      version: "2.1.0",
+      packages: { "": { version: "2.1.0" } },
+    },
+    ["v2.0.0", "v2.1.0"],
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.version, "2.1.0");
+  assert.deepEqual(result.errors, []);
+});
+
+test("validateVersionSync reports a manifest version with no matching git tag", () => {
+  const result = validateVersionSync(
+    { version: "2.1.0" },
+    {
+      version: "2.1.0",
+      packages: { "": { version: "2.1.0" } },
+    },
+    ["v2.0.0", "v2.0.1"],
+  );
+
+  assert.equal(result.ok, false);
+  assert.match(
+    result.errors[0],
+    /package\.json version \(2\.1\.0\) has no matching git tag \(expected v2\.1\.0\) on main/u,
+  );
+});
+
+test("validateVersionSync matches an unprefixed version tag when present", () => {
+  const result = validateVersionSync(
+    { version: "2.1.0" },
+    {
+      version: "2.1.0",
+      packages: { "": { version: "2.1.0" } },
+    },
+    ["2.1.0"],
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+});
+
+test("validateVersionSync skips the tag check when tags are undefined", () => {
+  const result = validateVersionSync(
+    { version: "2.1.0" },
+    {
+      version: "2.1.0",
+      packages: { "": { version: "2.1.0" } },
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+});
+
+test("validateVersionSync skips the tag check when the tag list is empty", () => {
+  const result = validateVersionSync(
+    { version: "2.1.0" },
+    {
+      version: "2.1.0",
+      packages: { "": { version: "2.1.0" } },
+    },
+    [],
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+});
+
+test("validateVersionSync does not emit a tag error when package.json lacks a version", () => {
+  const result = validateVersionSync({}, { version: "2.1.0" }, ["v2.1.0"]);
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.errors, [
+    "package.json is missing a version field.",
+    "package-lock.json is missing packages[''].version.",
+  ]);
+});
+
+test("listGitTags returns tag names in a git repository", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "version-sync-tags-"));
+  await runGit(dir, ["init", "--quiet"]);
+  await runGit(dir, ["config", "user.email", "test@example.com"]);
+  await runGit(dir, ["config", "user.name", "Test Runner"]);
+  await writeFile(join(dir, "gitignore"), "node_modules\n", "utf8");
+  await runGit(dir, ["add", "."]);
+  await runGit(dir, ["commit", "--quiet", "-m", "initial", "--no-verify"]);
+  await runGit(dir, ["tag", "v2.1.0"]);
+  await runGit(dir, ["tag", "v2.0.0"]);
+
+  const tags = listGitTags(dir);
+  assert.deepEqual(tags.sort(), ["v2.0.0", "v2.1.0"]);
+});
+
+test("listGitTags returns null outside a git repository", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "version-sync-no-git-"));
+  assert.equal(listGitTags(dir), null);
+});
+
+test("listGitTags returns null when git is unavailable", () => {
+  assert.equal(listGitTags("Z:/definitely-not-a-directory/path"), null);
+});
+
+test("main fails when the manifest version has no matching git tag", async (t) => {
+  const originalExitCode = process.exitCode;
+  const originalError = console.error;
+  const errors = [];
+  console.error = (...args) => errors.push(args.join(" "));
+  t.after(() => {
+    console.error = originalError;
+    process.exitCode = originalExitCode;
+  });
+
+  const dir = await mkdtemp(join(tmpdir(), "version-sync-tag-fail-"));
+  await writeVersionFiles(dir, "2.1.0", "2.1.0", "2.1.0");
+  process.exitCode = undefined;
+  const result = main({ cwd: dir, tags: ["v2.0.0"] });
+
+  assert.equal(result.ok, false);
+  assert.equal(process.exitCode, 1);
+  assert.deepEqual(errors, [
+    "package.json version (2.1.0) has no matching git tag (expected v2.1.0) on main.",
+  ]);
+});
+
+async function runGit(cwd, args) {
+  await execFileAsync("git", args, { cwd });
+}
 
 async function writeVersionFiles(
   dir,

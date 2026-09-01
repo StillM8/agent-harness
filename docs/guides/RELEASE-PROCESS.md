@@ -156,13 +156,19 @@ After the local gate passes and the changelog is ready:
 ```bash
 git status --short
 npm version <version> --no-git-tag-version
-npm run check:version-sync
 git add package.json package-lock.json CHANGELOG.md
 git commit -m "chore(release): prepare v<version>"
 git tag v<version>
+npm run check:version-sync
 git push origin <branch>
 git push origin v<version>
 ```
+
+`check:version-sync` runs a tag-vs-manifest guard (it fails when the manifest
+version has no matching `v<version>` git tag on main), so the tag must be
+created before the check runs — hence `git tag v<version>` precedes it.
+On a shallow CI checkout with no tags fetched, the guard is skipped; the
+workflows fetch full history (`fetch-depth: 0`) so releases are verified.
 
 If `npm version` is not used, update both `package.json` and `package-lock.json` manually and keep `npm run check:version-sync` green.
 
