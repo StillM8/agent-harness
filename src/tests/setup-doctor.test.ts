@@ -300,6 +300,33 @@ void test(
   },
 );
 
+// A bare DOMException TimeoutError rejection with an un-aborted cumulative
+// signal must surface the per-adapter doctor timeout diagnostic — NOT the
+// cumulative-timeout diagnostic. The cumulative arm is covered above; this
+// drives the adapter-specific arm so both branches of the
+// cumulative-vs-adapter discrimination are exercised (review thread
+// ...6bbJOK).
+void test("runDoctorWithAdapters: a per-adapter TimeoutError surfaces doctor-timeout when the cumulative signal is not aborted", async () => {
+  const adapter = buildNoRuntimeAdapter("adapter-timeout-test");
+  const preflightRunner = async (): Promise<PreflightDiagnostic[]> => {
+    throw new DOMException("adapter timed out", "TimeoutError");
+  };
+
+  const { results } = await runDoctorWithAdapters(
+    [adapter],
+    5_000,
+    undefined,
+    60_000, // cumulative signal will NOT fire within this test
+    preflightRunner,
+  );
+
+  assert.equal(results.length, 1);
+  const diags = results[0].diagnostics;
+  assert.equal(diags.length, 1);
+  assert.equal(diags[0].code, "adapter-timeout-test-doctor-timeout");
+  assert.equal(diags[0].severity, "warning");
+});
+
 void test("runAdapterPreflight returns skipped diagnostic when AbortSignal is already aborted", async () => {
   const adapter = buildNoRuntimeAdapter("pre-aborted");
   const signal = AbortSignal.abort();
