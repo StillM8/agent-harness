@@ -1,9 +1,11 @@
-import { readdir } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 
 import {
+  pathExists,
   readJsonFileOrNull,
+  readTextFileOrNull,
   removePath,
+  toPosixPath,
   writeJsonFile,
   writeTextFile,
 } from "../files.js";
@@ -47,6 +49,28 @@ const CODEX_MANAGED_MARKETPLACE_ENTRY = {
 } as const;
 
 type CodexMarketplaceStyle = "current" | "legacy";
+
+/**
+ * Claims a Codex plugin directory for this apply. Refuses to write an
+ * ownership marker into a directory that already exists without one — that
+ * would be adopting a user-owned collision, which reset would then treat as
+ * managed and recursively delete (review / Greptile P1). A directory we
+ * created this apply (absent before) or one already carrying our marker is
+ * safe to claim.
+ */
+async function claimCodexPluginDirectory(pluginRoot: string): Promise<void> {
+  const exists = await pathExists(pluginRoot);
+  if (
+    exists &&
+    !(await hasManagedPluginMarker(pluginRoot, CODEX_PLUGIN_NAME))
+  ) {
+    throw new Error(
+      `Refusing to claim existing unmarked Codex plugin directory: ${toPosixPath(pluginRoot)}. ` +
+        "Move or remove the user-owned directory (or its ownership marker) before wiring Codex.",
+    );
+  }
+  await writeManagedPluginMarker(pluginRoot, CODEX_PLUGIN_NAME);
+}
 
 /**
  * Writes Codex-native managed files using the current repo/team plugin and
@@ -93,7 +117,7 @@ export async function writeCodexNativeFiles(
   );
 
   const pluginRoot = join(options.workspaceRoot, "plugins", CODEX_PLUGIN_NAME);
-  await writeManagedPluginMarker(pluginRoot, CODEX_PLUGIN_NAME);
+  await claimCodexPluginDirectory(pluginRoot);
   await writeJsonFile(
     join(pluginRoot, ".codex-plugin", "plugin.json"),
     buildCodexPluginManifest(),
@@ -185,19 +209,58 @@ export function buildLegacyCodexHooksManifest(
   };
 }
 
+/** A single Codex custom-agent profile file Agent Harness owns. */
+interface CodexAgentProfileRecord {
+  fileName: string;
+  /** Original pre-apply content; null when the file did not exist before. */
+  priorContent: string | null;
+}
+
+/**
+ * Records which `agent-harness-*.toml` custom-agent profiles THIS apply owns,
+ * plus their pre-apply content. Reset strips exactly these and restores any
+ * displaced user-owned profile instead of prefix-deleting every match (review
+ * / Greptile P1: deterministic filename collisions must not erase user files).
+ */
+const CODEX_AGENT_PROFILES_MANIFEST_PATH = ".agent-harness-profiles.json";
+
 async function writeCodexAgentProfiles(
   workspaceRoot: string,
   nativeAssets: NativeAsset[],
 ): Promise<void> {
   const agents = nativeAssets.filter((asset) => asset.assetKind === "agent");
+  const agentsDir = join(workspaceRoot, ".codex", "agents");
+  const manifestPath = join(agentsDir, CODEX_AGENT_PROFILES_MANIFEST_PATH);
+  // Preserve the ORIGINAL priorContent for files a previous apply already
+  // owned (indexed by fileName). Without this, a re-apply would re-snapshot
+  // the harness's own written bytes as the new "prior", so a user file
+  // displaced on the first apply would be "restored" to harness content on
+  // remove (re-apply poisons fresh snapshots — same trap as the wire-reset
+  // ownership doctored for opencode's gitignoreOwnedEntries).
+  const previousByFileName = new Map(
+    (await readCodexAgentProfileRecords(workspaceRoot))?.map((record) => [
+      record.fileName,
+      record.priorContent,
+    ]) ?? [],
+  );
+  const records: CodexAgentProfileRecord[] = [];
   for (const asset of agents) {
     const slug = sanitizeAssetId(asset.assetId).replace(
       /[^a-zA-Z0-9_-]+/gu,
       "-",
     );
     const fileName = `${CODEX_AGENT_FILE_PREFIX}${slug}.toml`;
+    const profilePath = join(agentsDir, fileName);
+    const priorPriorContent = previousByFileName.get(fileName);
+    records.push({
+      fileName,
+      priorContent:
+        priorPriorContent !== undefined
+          ? priorPriorContent
+          : await readTextFileOrNull(profilePath),
+    });
     await writeTextFile(
-      join(workspaceRoot, ".codex", "agents", fileName),
+      profilePath,
       [
         `name = ${JSON.stringify(asset.displayName)}`,
         `description = ${JSON.stringify(`Agent Harness asset ${asset.assetId}`)}`,
@@ -206,6 +269,35 @@ async function writeCodexAgentProfiles(
       ].join("\n"),
     );
   }
+
+  if (agents.length > 0) {
+    await writeJsonFile(manifestPath, {
+      schemaVersion: 1,
+      profiles: records,
+    });
+  } else {
+    // No agent assets in this apply — drop any stale ownership manifest so
+    // nothing dangles in the user's tree.
+    await removePath(manifestPath);
+  }
+}
+
+/** Reads the owned-profile manifest recorded by the last apply (null if none). */
+async function readCodexAgentProfileRecords(
+  workspaceRoot: string,
+): Promise<CodexAgentProfileRecord[] | null> {
+  const manifest = await readJsonFileOrNull<{
+    profiles?: unknown;
+  }>(
+    join(workspaceRoot, ".codex", "agents", CODEX_AGENT_PROFILES_MANIFEST_PATH),
+  );
+  if (!manifest || !Array.isArray(manifest.profiles)) {
+    return null;
+  }
+  return manifest.profiles.filter(
+    (entry): entry is CodexAgentProfileRecord =>
+      isJsonObject(entry) && typeof entry.fileName === "string",
+  );
 }
 
 /** Merges the managed plugin into the repo/team Codex marketplace. */
@@ -280,7 +372,7 @@ async function writeLegacyCodexCompatibilityPlugin(
     "plugins",
     CODEX_PLUGIN_NAME,
   );
-  await writeManagedPluginMarker(legacyPluginRoot, CODEX_PLUGIN_NAME);
+  await claimCodexPluginDirectory(legacyPluginRoot);
   const hookAssets = options.nativeAssets.filter(
     (asset) => asset.assetKind === "hook",
   );
@@ -372,27 +464,24 @@ export async function resetCodexNativeHost(
 
 async function removeCodexAgentProfiles(workspaceRoot: string): Promise<void> {
   const agentsDir = join(workspaceRoot, ".codex", "agents");
-  let entries: string[];
-  try {
-    entries = await readdir(agentsDir);
-  } catch (error) {
-    if (
-      isJsonObject(error) &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ENOENT"
-    ) {
-      return;
-    }
-    throw error;
+  const records = await readCodexAgentProfileRecords(workspaceRoot);
+  if (records === null) {
+    // No ownership record: do NOT prefix-delete. Over-preservation is safe —
+    // never delete user files we cannot prove we own (review / Greptile P1).
+    return;
   }
-  await Promise.all(
-    entries
-      .filter(
-        (entry) =>
-          entry.startsWith(CODEX_AGENT_FILE_PREFIX) && entry.endsWith(".toml"),
-      )
-      .map((entry) => removePath(join(agentsDir, entry))),
-  );
+  for (const record of records) {
+    const profilePath = join(agentsDir, record.fileName);
+    if (record.priorContent === null) {
+      // This apply created the profile (absent before apply) — remove it.
+      await removePath(profilePath);
+    } else {
+      // A user-owned profile was displaced at apply — restore its original
+      // content instead of deleting it.
+      await writeTextFile(profilePath, record.priorContent);
+    }
+  }
+  await removePath(join(agentsDir, CODEX_AGENT_PROFILES_MANIFEST_PATH));
 }
 
 async function removeCodexMarketplaceEntry(filePath: string): Promise<void> {

@@ -22,7 +22,14 @@ import type {
   MaterializedNativeAssets,
   NativeAsset,
 } from "../host-adapters/native-utils.js";
-import { writeJsonFile } from "../files.js";
+import { pathExists, writeJsonFile } from "../files.js";
+import { sanitizeAssetId } from "../lib/safe-paths.js";
+
+/** Computes the deterministic Codex profile filename for an asset id. */
+function codexProfileFileName(assetId: string): string {
+  const slug = sanitizeAssetId(assetId).replace(/[^a-zA-Z0-9_-]+/gu, "-");
+  return `agent-harness-${slug}.toml`;
+}
 
 void test("native preview specs advertise the current Claude and Codex managed paths", () => {
   const codexPaths =
@@ -346,6 +353,198 @@ void test("Codex reset preserves an unmarked plugin and tolerates a missing agen
     await writeFile(userFile, "user content\n", "utf8");
     await resetCodexNativeHost(workspaceRoot, undefined);
     assert.equal(await readFile(userFile, "utf8"), "user content\n");
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex write refuses to claim a pre-existing unmarked plugin directory", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-claim-guard-"),
+  );
+  try {
+    // A user-owned plugin directory that already exists WITHOUT our marker is
+    // a collision, not an adoptable directory (Greptile P1).
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeFile(
+      join(pluginRoot, "user-owned.md"),
+      "user content\n",
+      "utf8",
+    );
+
+    await assert.rejects(
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: [nativeAsset("codex.agent", "agent", "Agent body")],
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      }),
+      /Refusing to claim existing unmarked Codex plugin directory/u,
+    );
+    // The user's directory and its content are untouched.
+    assert.equal(
+      await readFile(join(pluginRoot, "user-owned.md"), "utf8"),
+      "user content\n",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex write re-adopts an already-marked plugin directory", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-readopt-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    // Our marker proves prior Agent Harness ownership; re-apply is safe.
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+
+    await writeCodexNativeFiles({
+      workspaceRoot,
+      managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+      nativeAssets: [nativeAsset("codex.agent", "agent", "Agent body")],
+      materializedAssets: emptyMaterializedAssets(),
+      mcpServers: [],
+    });
+
+    const manifest = JSON.parse(
+      await readFile(join(pluginRoot, ".codex-plugin", "plugin.json"), "utf8"),
+    ) as { name: string };
+    assert.equal(manifest.name, "agent-harness");
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex reset restores a displaced user-owned agent profile instead of deleting it", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-profile-restore-"),
+  );
+  try {
+    // Pre-existing user-owned profile whose deterministic name collides with
+    // what the adapter writes (Greptile P1).
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const collidingProfile = join(
+      agentsDir,
+      codexProfileFileName("codex.agent"),
+    );
+    await writeFile(collidingProfile, "user TOML content\n", "utf8");
+
+    // Keep the plugin dir owned so write succeeds; only the profile collision
+    // matters for this assertion. Ensure the plugin dir is marked (re-apply).
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+
+    await writeCodexNativeFiles({
+      workspaceRoot,
+      managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+      nativeAssets: [nativeAsset("codex.agent", "agent", "Agent body")],
+      materializedAssets: emptyMaterializedAssets(),
+      mcpServers: [],
+    });
+    // Apply displaced the user profile with harness content.
+    await assert.match(
+      await readFile(collidingProfile, "utf8"),
+      /^name = "codex\.agent"/mu,
+    );
+
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    // Reset restores the pre-apply user content rather than deleting the file.
+    assert.equal(
+      await readFile(collidingProfile, "utf8"),
+      "user TOML content\n",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex reset preserves unrelated agent-harness-prefixed profiles when no ownership record exists", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-norecord-"),
+  );
+  try {
+    // No apply ran here, so no ownership manifest exists. A user-owned
+    // `agent-harness-*.toml` in the agents dir must NOT be prefix-deleted.
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const userProfile = join(agentsDir, "agent-harness-user-custom.toml");
+    await writeFile(userProfile, "user custom profile\n", "utf8");
+
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    assert.equal(await readFile(userProfile, "utf8"), "user custom profile\n");
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex re-apply preserves the original priorContent and the manifest is removed on reset", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-readd-"),
+  );
+  try {
+    // Keep the plugin dir owned so write succeeds; the profile ownership is
+    // what this test exercises.
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const collidingProfile = join(
+      agentsDir,
+      codexProfileFileName("codex.agent"),
+    );
+    // User-owned colliding profile displaced by the first apply.
+    await writeFile(collidingProfile, "user ORIGINAL content\n", "utf8");
+
+    const firstApply = () =>
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: [nativeAsset("codex.agent", "agent", "Agent body")],
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      });
+
+    await firstApply();
+    await assert.match(
+      await readFile(collidingProfile, "utf8"),
+      /^name = "codex\.agent"/mu,
+    );
+
+    // Re-apply over the harness-written file must NOT re-snapshot harness
+    // bytes as the new "prior" — the original user content must survive.
+    await firstApply();
+
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    assert.equal(
+      await readFile(collidingProfile, "utf8"),
+      "user ORIGINAL content\n",
+    );
+    // The ownership manifest itself must not dangle in the user's tree.
+    assert.equal(
+      await pathExists(join(agentsDir, ".agent-harness-profiles.json")),
+      false,
+    );
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }
