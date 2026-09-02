@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-import { readJsonFileOrNull, writeJsonFile } from "../files.js";
+import { pathExists, readJsonFileOrNull, writeJsonFile } from "../files.js";
 
 const OWNERSHIP_MARKER_FILE = ".agent-harness-managed.json";
 const OWNERSHIP_MARKER_VERSION = 1;
@@ -15,6 +15,31 @@ export async function writeManagedPluginMarker(
     markerVersion: OWNERSHIP_MARKER_VERSION,
     pluginName,
   });
+}
+
+/**
+ * Claims a host plugin directory for this apply, refusing to adopt a
+ * directory that already exists WITHOUT our ownership marker. Writing a
+ * marker into a pre-existing unmarked directory would make reset treat the
+ * whole (possibly user-owned) directory as Agent Harness-managed and
+ * recursively delete it (review / Greptile P1). A directory created this
+ * apply (absent before) or one already carrying our marker is safe to claim.
+ * Returns whether the marker was written (true when the dir is newly claimed).
+ */
+export async function claimManagedPluginDirectory(
+  pluginRoot: string,
+  pluginName: string,
+): Promise<void> {
+  if (
+    (await pathExists(pluginRoot)) &&
+    !(await hasManagedPluginMarker(pluginRoot, pluginName))
+  ) {
+    throw new Error(
+      `Refusing to claim existing unmarked ${pluginName} plugin directory: ${pluginRoot}. ` +
+        "Move or remove the user-owned directory (or its ownership marker) before wiring.",
+    );
+  }
+  await writeManagedPluginMarker(pluginRoot, pluginName);
 }
 
 /** Returns true only for a plugin directory explicitly marked by this adapter. */

@@ -1,11 +1,9 @@
 import { dirname, join, relative } from "node:path";
 
 import {
-  pathExists,
   readJsonFileOrNull,
   readTextFileOrNull,
   removePath,
-  toPosixPath,
   writeJsonFile,
   writeTextFile,
 } from "../files.js";
@@ -32,8 +30,8 @@ import {
   replaceManagedMarketplaceEntry,
 } from "./marketplace-utils.js";
 import {
+  claimManagedPluginDirectory,
   hasManagedPluginMarker,
-  writeManagedPluginMarker,
 } from "./ownership-marker.js";
 
 const CODEX_PLUGIN_NAME = "agent-harness";
@@ -51,25 +49,12 @@ const CODEX_MANAGED_MARKETPLACE_ENTRY = {
 type CodexMarketplaceStyle = "current" | "legacy";
 
 /**
- * Claims a Codex plugin directory for this apply. Refuses to write an
- * ownership marker into a directory that already exists without one — that
- * would be adopting a user-owned collision, which reset would then treat as
- * managed and recursively delete (review / Greptile P1). A directory we
- * created this apply (absent before) or one already carrying our marker is
- * safe to claim.
+ * Claims a Codex plugin directory for this apply via the shared ownership
+ * helper: refuses a pre-existing unmarked dir (user-owned collision), allows
+ * a dir we created this apply or already marked (re-apply safe).
  */
 async function claimCodexPluginDirectory(pluginRoot: string): Promise<void> {
-  const exists = await pathExists(pluginRoot);
-  if (
-    exists &&
-    !(await hasManagedPluginMarker(pluginRoot, CODEX_PLUGIN_NAME))
-  ) {
-    throw new Error(
-      `Refusing to claim existing unmarked Codex plugin directory: ${toPosixPath(pluginRoot)}. ` +
-        "Move or remove the user-owned directory (or its ownership marker) before wiring Codex.",
-    );
-  }
-  await writeManagedPluginMarker(pluginRoot, CODEX_PLUGIN_NAME);
+  await claimManagedPluginDirectory(pluginRoot, CODEX_PLUGIN_NAME);
 }
 
 /**

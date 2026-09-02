@@ -246,6 +246,41 @@ void test("Claude Code reset preserves an unmarked same-name plugin directory", 
   }
 });
 
+void test("Claude Code write refuses to claim a pre-existing unmarked plugin directory", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-claude-claim-guard-"),
+  );
+  try {
+    // A user-owned plugin directory that already exists WITHOUT our marker is
+    // a collision, not an adoptable directory (review thread ...bbJOF).
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeFile(
+      join(pluginRoot, "user-owned.md"),
+      "user content\n",
+      "utf8",
+    );
+
+    await assert.rejects(
+      writeClaudeCodeNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".claude", "agent-harness"),
+        nativeAssets: [nativeAsset("claude.agent", "agent", "Agent body")],
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      }),
+      /Refusing to claim existing unmarked agent-harness plugin directory/u,
+    );
+    // The user's directory and its content are untouched.
+    assert.equal(
+      await readFile(join(pluginRoot, "user-owned.md"), "utf8"),
+      "user content\n",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 function nativeAsset(
   assetId: string,
   assetKind: "skill" | "agent" | "prompt-pack",

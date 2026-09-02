@@ -30,8 +30,8 @@ import {
   replaceManagedMarketplaceEntry,
 } from "./marketplace-utils.js";
 import {
+  claimManagedPluginDirectory,
   hasManagedPluginMarker,
-  writeManagedPluginMarker,
 } from "./ownership-marker.js";
 
 const CLAUDE_PLUGIN_NAME = "agent-harness";
@@ -130,7 +130,9 @@ async function writeClaudePlugin(
   managedLines: string[],
 ): Promise<void> {
   const pluginRoot = join(options.workspaceRoot, "plugins", CLAUDE_PLUGIN_NAME);
-  await writeManagedPluginMarker(pluginRoot, CLAUDE_PLUGIN_NAME);
+  // Claim via the shared ownership guard — refuse a pre-existing unmarked
+  // user-owned plugin dir instead of adopting it (review thread ...bbJOF).
+  await claimManagedPluginDirectory(pluginRoot, CLAUDE_PLUGIN_NAME);
   await writeJsonFile(join(pluginRoot, ".claude-plugin", "plugin.json"), {
     name: CLAUDE_PLUGIN_NAME,
     description: "Curated Agent Harness project assets for Claude Code.",

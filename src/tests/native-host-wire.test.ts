@@ -313,7 +313,13 @@ void test("Claude Code, Pi, and Codex native wire apply/reset manage project-loc
             schemaVersion: 2,
             plugins: [
               { name: "existing", path: "./existing" },
-              { name: "agent-harness", path: "./stale-agent-harness" },
+              // An unrelated user-owned entry that happens to share the
+              // "agent-harness" NAME but not the managed identity (its path is
+              // neither localSourcePath ./plugins/agent-harness nor legacyPath
+              // ./agent-harness). isManagedMarketplaceEntry keys on identity,
+              // not name alone — so this SAME-NAME user entry must survive both
+              // apply and reset (review thread ...byOS).
+              { name: "agent-harness", path: "./user-owned-same-name" },
               "ignored malformed entry",
             ],
           },
@@ -429,7 +435,7 @@ void test("Claude Code, Pi, and Codex native wire apply/reset manage project-loc
             schemaVersion: 2,
             plugins: [
               { name: "existing", path: "./existing" },
-              { name: "agent-harness", path: "./stale-agent-harness" },
+              { name: "agent-harness", path: "./user-owned-same-name" },
               "ignored malformed entry",
               { name: "agent-harness", path: "./agent-harness" },
             ],
@@ -560,7 +566,7 @@ void test("Claude Code, Pi, and Codex native wire apply/reset manage project-loc
             schemaVersion: 2,
             plugins: [
               { name: "existing", path: "./existing" },
-              { name: "agent-harness", path: "./stale-agent-harness" },
+              { name: "agent-harness", path: "./user-owned-same-name" },
               "ignored malformed entry",
             ],
           },

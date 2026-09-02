@@ -381,7 +381,7 @@ void test("Codex write refuses to claim a pre-existing unmarked plugin directory
         materializedAssets: emptyMaterializedAssets(),
         mcpServers: [],
       }),
-      /Refusing to claim existing unmarked Codex plugin directory/u,
+      /Refusing to claim existing unmarked agent-harness plugin directory/u,
     );
     // The user's directory and its content are untouched.
     assert.equal(
