@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -49,6 +49,23 @@ const FORBIDDEN_PACKED_PATH_PATTERNS = [
   /^.*\.tgz$/u,
 ];
 
+/**
+ * Normalizes npm's `pack --json` payload into a list of pack records. npm <12
+ * emits an ARRAY of pack objects; npm 12+ emits an OBJECT keyed by package
+ * name (`{ "@scope/name": { files, filename, ... } }`). Returning the full
+ * object/array as a flat list lets callers treat the result uniformly without
+ * breaking on either shape (review: npm-12 pack --json format change).
+ * Returns the flattened list (possibly empty).
+ */
+export function toPackRecordList(value) {
+  if (value === null || value === undefined) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === "object" && !Array.isArray(value)) {
+    return Object.values(value);
+  }
+  return [];
+}
+
 export async function runPackageAudit({ cwd = process.cwd() } = {}) {
   const packResult = await runNpm(
     ["pack", "--dry-run", "--json", "--ignore-scripts"],
@@ -56,7 +73,7 @@ export async function runPackageAudit({ cwd = process.cwd() } = {}) {
       cwd,
     },
   );
-  const packEntries = JSON.parse(packResult.stdout);
+  const packEntries = toPackRecordList(JSON.parse(packResult.stdout));
   const pack = packEntries[0];
   if (!pack || !Array.isArray(pack.files)) {
     throw new Error("npm pack --dry-run did not return a package file list.");
@@ -109,7 +126,7 @@ export async function runPackedPackageSmoke({ cwd = process.cwd() } = {}) {
     const packResult = await runNpm(["pack", "--json", "--ignore-scripts"], {
       cwd,
     });
-    const packEntries = JSON.parse(packResult.stdout);
+    const packEntries = toPackRecordList(JSON.parse(packResult.stdout));
     const packedFileName = packEntries[0]?.filename;
     if (!packedFileName) {
       throw new Error("npm pack did not report a tarball filename.");
@@ -157,20 +174,58 @@ export async function runPackedPackageSmoke({ cwd = process.cwd() } = {}) {
   }
 }
 
+/**
+ * Resolves the path to npm's JS CLI so `npm` can be launched shell-less via
+ * `node <npm-cli>`. This avoids `shell: true` entirely — the DEP0190 doctrine
+ * forbids passing args through a shell on Windows (args concatenate unescaped,
+ * cmd.exe re-parses them), and `npm.cmd` cannot be spawned directly by
+ * `execFile` without a shell. Resolution order:
+ *   1. an explicit npmExecPath option (tests inject a fake npm here);
+ *   2. process.env.npm_execpath (set by `npm run` under the real gate);
+ *   3. npm_config_prefix/node_modules/npm/bin/npm-cli.js (npm's own prefix);
+ *   4. the node install's bundled npm (dirname(process.execPath)/node_modules).
+ * Falls back to launching `npm` directly (POSIX shell-script shebang works
+ * without a shell) only when no JS CLI can be located.
+ */
+export function resolveNpmCliPath(options = {}) {
+  const explicit =
+    options.npmExecPath !== undefined
+      ? options.npmExecPath
+      : process.env.npm_execpath;
+  if (explicit) return explicit;
+  const prefix = options.npmConfigPrefix ?? process.env.npm_config_prefix;
+  if (prefix) {
+    return posixJoin(prefix, "node_modules", "npm", "bin", "npm-cli.js");
+  }
+  return posixJoin(
+    dirname(process.execPath).replaceAll("\\", "/"),
+    "node_modules",
+    "npm",
+    "bin",
+    "npm-cli.js",
+  );
+}
+
+const posixJoin = (...parts) => posix.join(...parts);
+
 export function buildNpmInvocation(args, options = {}) {
-  const npmCliPath = options.npmExecPath ?? process.env.npm_execpath;
-  const platform = options.platform ?? process.platform;
   const nodeExecPath = options.nodeExecPath ?? process.execPath;
-  const command = npmCliPath
-    ? nodeExecPath
-    : platform === "win32"
-      ? "npm.cmd"
-      : "npm";
-  const commandArgs = npmCliPath ? [npmCliPath, ...args] : args;
+  const npmCliPath = resolveNpmCliPath(options);
+  // Prefer running npm through node+npm-cli (shell-less, cross-platform, no
+  // DEP0190). Fall back to the bare `npm` launcher ONLY on POSIX, where npm's
+  // shebang executes without a shell; on win32 without a resolvable JS CLI we
+  // still never use shell:true — we spawn node with the resolved cli instead.
+  if (npmCliPath) {
+    return {
+      command: nodeExecPath,
+      commandArgs: [npmCliPath, ...args],
+      shell: false,
+    };
+  }
   return {
-    command,
-    commandArgs,
-    shell: !npmCliPath && platform === "win32",
+    command: "npm",
+    commandArgs: args,
+    shell: false,
   };
 }
 

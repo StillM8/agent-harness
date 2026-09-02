@@ -9,13 +9,20 @@ import { promisify } from "node:util";
 import {
   REQUIRED_PACKED_FILES,
   buildNpmInvocation,
+  resolveNpmCliPath,
   resolvePackageAuditAction,
   runPackageAudit,
   runPackedPackageSmoke,
   toPackageAuditErrorMessage,
+  toPackRecordList,
 } from "../package-audit.mjs";
 
 const execFileAsync = promisify(execFile);
+
+const posixJoin = (...parts) =>
+  join(...parts)
+    .split("\\")
+    .join("/");
 
 // The fixture represents a compliant package; derive it from the audit's
 // pinned required set so the two can never drift apart again.
@@ -73,32 +80,96 @@ test("package audit builds deterministic npm invocations", () => {
       shell: false,
     },
   );
+  // win32 also routes through node+npm-cli (NEVER a shell — DEP0190 doctrine).
   assert.deepEqual(
     buildNpmInvocation(["pack"], {
-      npmExecPath: "",
+      npmExecPath: "C:/tools/npm-cli.js",
+      nodeExecPath: "C:/node/node.exe",
       platform: "win32",
     }),
     {
-      command: "npm.cmd",
-      commandArgs: ["pack"],
-      shell: true,
-    },
-  );
-  assert.deepEqual(
-    buildNpmInvocation(["pack"], {
-      npmExecPath: "",
-      platform: "linux",
-    }),
-    {
-      command: "npm",
-      commandArgs: ["pack"],
+      command: "C:/node/node.exe",
+      commandArgs: ["C:/tools/npm-cli.js", "pack"],
       shell: false,
     },
   );
+  // Without an explicit npm-cli, the bare `npm` launcher is shell-less; it is
+  // valid on POSIX (shebang), and on win32 resolveNpmCliPath provides a JS CLI.
+  const resolvedNpmInvocation = buildNpmInvocation(["pack"], {
+    npmExecPath: "",
+    npmConfigPrefix: "/prefix",
+    nodeExecPath: "/node",
+    platform: "win32",
+  });
+  assert.deepEqual(resolvedNpmInvocation, {
+    command: "/node",
+    commandArgs: ["/prefix/node_modules/npm/bin/npm-cli.js", "pack"],
+    shell: false,
+  });
   assert.equal(resolvePackageAuditAction("smoke"), runPackedPackageSmoke);
   assert.equal(resolvePackageAuditAction("audit"), runPackageAudit);
   assert.equal(toPackageAuditErrorMessage(new Error("boom")), "boom");
   assert.equal(toPackageAuditErrorMessage("plain"), "plain");
+});
+
+test("toPackRecordList normalizes npm array, object, null, and scalar pack payloads", () => {
+  const arrayRecord = { files: [] };
+  assert.equal(toPackRecordList([arrayRecord])[0], arrayRecord);
+  assert.equal(toPackRecordList({ "@scope/pkg": arrayRecord })[0], arrayRecord);
+  assert.deepEqual(toPackRecordList(null), []);
+  assert.deepEqual(toPackRecordList(undefined), []);
+  assert.deepEqual(toPackRecordList("scalar"), []);
+  assert.equal(toPackRecordList([arrayRecord, { files: [] }]).length, 2);
+});
+
+test("resolveNpmCliPath prefers explicit, then env prefix, then node-bundled npm", () => {
+  const before = {
+    npmExecPath: process.env.npm_execpath,
+    npmConfigPrefix: process.env.npm_config_prefix,
+  };
+  try {
+    process.env.npm_config_prefix = "/custom/prefix";
+    assert.equal(
+      resolveNpmCliPath({ npmExecPath: "/explicit/cli.js" }),
+      "/explicit/cli.js",
+    );
+    delete process.env.npm_execpath;
+    assert.equal(
+      resolveNpmCliPath({
+        npmConfigPrefix: "/custom/prefix",
+      }),
+      "/custom/prefix/node_modules/npm/bin/npm-cli.js",
+    );
+    // Falls back to the node install's bundled npm when nothing is configured.
+    process.env.npm_config_prefix = "";
+    assert.equal(
+      resolveNpmCliPath({}),
+      posixJoin(
+        dirname(process.execPath).replaceAll("\\", "/"),
+        "node_modules",
+        "npm",
+        "bin",
+        "npm-cli.js",
+      ),
+    );
+    // An empty npmExecPath means "no explicit path" — it falls through to the
+    // prefix resolution, exactly as buildNpmInvocation relies on.
+    assert.equal(
+      resolveNpmCliPath({ npmExecPath: "", npmConfigPrefix: "/fallback" }),
+      "/fallback/node_modules/npm/bin/npm-cli.js",
+    );
+  } finally {
+    if (before.npmExecPath === undefined) {
+      delete process.env.npm_execpath;
+    } else {
+      process.env.npm_execpath = before.npmExecPath;
+    }
+    if (before.npmConfigPrefix === undefined) {
+      delete process.env.npm_config_prefix;
+    } else {
+      process.env.npm_config_prefix = before.npmConfigPrefix;
+    }
+  }
 });
 
 test("package audit rejects malformed npm pack payloads", async () => {
