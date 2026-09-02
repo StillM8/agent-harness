@@ -184,9 +184,14 @@ async function runAdapterPreflightWithTimeout(
     if (err instanceof DOMException && err.name === "TimeoutError") {
       return [doctorTimeoutDiagnostic(adapter, adapterTimeoutMs)];
     }
-    if (signal.aborted) {
-      return [doctorTimeoutDiagnostic(adapter, adapterTimeoutMs)];
-    }
+    // DELETED the prior `if (signal.aborted) return doctorTimeoutDiagnostic`
+    // fallback: `signal` is AbortSignal.timeout(adapterTimeoutMs) and the only
+    // reject source keyed on it (the race's abort listener) always rejects
+    // with `signal.reason`, which IS a DOMException TimeoutError. So every
+    // signal-abort lands on the DOMException arm above and this branch could
+    // never be reached (verified empirically: a plain error thrown after the
+    // abort still settles the race via the DOMException reason first). A plain
+    // (non-timeout) error from the pipeline reaches `throw err` below.
     throw err;
   }
 }

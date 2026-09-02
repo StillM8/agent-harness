@@ -327,6 +327,58 @@ void test("runDoctorWithAdapters: a per-adapter TimeoutError surfaces doctor-tim
   assert.equal(diags[0].severity, "warning");
 });
 
+// A stalling preflight plus a tiny per-adapter timeout drives the
+// DOMException TimeoutError arm of runAdapterPreflightWithTimeout (the signal
+// is AbortSignal.timeout(...), whose abort listener rejects the race with a
+// TimeoutError DOMException). Call the timed wrapper directly (not through
+// runDoctorWithAdapters, whose own cumulative signal would mask the adapter
+// timeout) via the injectable preflight override (review thread ...bbJOK).
+void test("runAdapterPreflight surfaces doctor-timeout from a stalling preflight", async () => {
+  const adapter = buildNoRuntimeAdapter("stall-timeout-test");
+  const diagnostics = await setupInternals.runAdapterPreflightWithTimeout(
+    adapter,
+    30, // tiny per-adapter timeout — fires long before any cumulative budget
+    undefined,
+    undefined, // no cumulative signal
+    {
+      runHostPreflight: async () => [],
+      runAdapterPreflight: async () => {
+        // Never resolve — forces the per-adapter signal to abort the race.
+        // The trailing `return []` is unreachable at runtime (the await above
+        // never resolves) but keeps the function type-conformant.
+        await new Promise<never>(() => {});
+        return [];
+      },
+      collectActivatedAssetPrerequisiteDiagnostics: async () => [],
+    },
+  );
+
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].code, "stall-timeout-test-doctor-timeout");
+  assert.equal(diagnostics[0].severity, "warning");
+});
+
+void test("runAdapterPreflight rethrows a plain preflight error when neither timeout fires", async () => {
+  const adapter = buildNoRuntimeAdapter("plain-err-test");
+  const plainError = new Error("boom");
+  await assert.rejects(
+    setupInternals.runAdapterPreflightWithTimeout(
+      adapter,
+      60_000,
+      undefined,
+      undefined,
+      {
+        runHostPreflight: async () => [],
+        runAdapterPreflight: async () => {
+          throw plainError;
+        },
+        collectActivatedAssetPrerequisiteDiagnostics: async () => [],
+      },
+    ),
+    (error: unknown) => error === plainError,
+  );
+});
+
 void test("runAdapterPreflight returns skipped diagnostic when AbortSignal is already aborted", async () => {
   const adapter = buildNoRuntimeAdapter("pre-aborted");
   const signal = AbortSignal.abort();
