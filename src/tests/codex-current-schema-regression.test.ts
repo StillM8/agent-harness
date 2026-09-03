@@ -550,6 +550,244 @@ void test("Codex re-apply preserves the original priorContent and the manifest i
   }
 });
 
+void test("Codex no-agent re-apply consumes profile ownership: restores displaced user content", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-noagent-reapply-"),
+  );
+  try {
+    // Keep the plugin dir owned so write succeeds; the profile ownership is
+    // what this test exercises.
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const collidingProfile = join(
+      agentsDir,
+      codexProfileFileName("codex.agent"),
+    );
+    // User-owned colliding profile displaced by the first (agent) apply.
+    await writeFile(collidingProfile, "user ORIGINAL content\n", "utf8");
+
+    const applyWithAgents = () =>
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: [nativeAsset("codex.agent", "agent", "Agent body")],
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      });
+    const applyWithoutAgents = () =>
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: [nativeAsset("codex.skill", "skill", "Skill body")],
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      });
+
+    await applyWithAgents();
+    await assert.match(
+      await readFile(collidingProfile, "utf8"),
+      /^name = "codex\.agent"/mu,
+    );
+
+    // Re-apply WITHOUT agent assets must consume the previous ownership:
+    // restore the displaced user profile, remove the generated one, and drop
+    // the manifest — so nothing strands in the tree (Greptile P1 / CodeRabbit).
+    await applyWithoutAgents();
+    assert.equal(
+      await readFile(collidingProfile, "utf8"),
+      "user ORIGINAL content\n",
+      "displaced user content restored by the no-agent re-apply",
+    );
+    assert.equal(
+      await pathExists(join(agentsDir, ".agent-harness-profiles.json")),
+      false,
+      "ownership manifest consumed by the no-agent re-apply",
+    );
+
+    // A later reset is profile-safe and must not disturb the restored file.
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    assert.equal(
+      await readFile(collidingProfile, "utf8"),
+      "user ORIGINAL content\n",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex reset drops hostile profile-manifest entries instead of traversing outside .codex/agents", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-hostile-"),
+  );
+  try {
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    // A real file OUTSIDE the agents dir that a traversal would try to reach.
+    const outside = join(workspaceRoot, "escape-target.toml");
+    await writeFile(outside, "keep me\n", "utf8");
+    // A real non-managed user profile that must NOT be touched (no prefix).
+    const userProfile = join(agentsDir, "user.toml");
+    await writeFile(userProfile, "user\n", "utf8");
+    // A real mis-typed priorContent record must be ignored, not written over.
+    const misTyped = join(agentsDir, codexProfileFileName("bad.agent"));
+    await writeFile(misTyped, "harness-written\n", "utf8");
+    // A harness-created profile that IS validly owned → removed on reset.
+    const okProfile = join(agentsDir, codexProfileFileName("ok.agent"));
+    await writeFile(okProfile, "generated\n", "utf8");
+
+    await writeJsonFile(join(agentsDir, ".agent-harness-profiles.json"), {
+      schemaVersion: 1,
+      profiles: [
+        { fileName: "../../../escape-target.toml", priorContent: null },
+        { fileName: "user.toml", priorContent: null },
+        { fileName: codexProfileFileName("bad.agent"), priorContent: 42 },
+        { fileName: codexProfileFileName("ok.agent"), priorContent: null },
+        "not-an-object",
+        { fileName: 42, priorContent: null },
+      ],
+    });
+
+    await resetCodexNativeHost(workspaceRoot, undefined);
+
+    assert.equal(
+      await readFile(outside, "utf8"),
+      "keep me\n",
+      "path-traversal filename must not escape .codex/agents",
+    );
+    assert.equal(
+      await readFile(userProfile, "utf8"),
+      "user\n",
+      "non-prefixed profile preserved",
+    );
+    assert.equal(
+      await readFile(misTyped, "utf8"),
+      "harness-written\n",
+      "mis-typed priorContent record ignored (over-preservation)",
+    );
+    assert.equal(
+      await pathExists(okProfile),
+      false,
+      "validly-owned harness profile removed",
+    );
+    assert.equal(
+      await pathExists(join(agentsDir, ".agent-harness-profiles.json")),
+      false,
+      "ownership manifest consumed after reset",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex reset preserves a user-owned fresh-shaped marketplace it did not create", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-market-userowned-"),
+  );
+  try {
+    const marketplacePath = join(
+      workspaceRoot,
+      ".agents",
+      "plugins",
+      "marketplace.json",
+    );
+    const ownershipManifest = join(
+      workspaceRoot,
+      ".agents",
+      "plugins",
+      ".agent-harness-marketplace.json",
+    );
+    // A user-owned `agent-harness-local` marketplace that matches the managed
+    // shape but that Agent Harness never created must survive reset
+    // (Greptile P1: never infer whole-file ownership from a shape heuristic).
+    const userOwned = {
+      name: "agent-harness-local",
+      interface: { displayName: "User's own local shopping list" },
+      plugins: [],
+    };
+    await writeJsonFile(marketplacePath, userOwned);
+
+    await resetCodexNativeHost(workspaceRoot, undefined);
+
+    assert.deepEqual(
+      JSON.parse(await readFile(marketplacePath, "utf8")),
+      userOwned,
+      "user-owned fresh-shaped marketplace must survive reset (Greptile P1)",
+    );
+    assert.equal(
+      await pathExists(ownershipManifest),
+      false,
+      "no ownership manifest dangles in the user's tree",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex reset deletes only marketplace files Agent Harness actually created", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-market-created-"),
+  );
+  try {
+    const marketplacePath = join(
+      workspaceRoot,
+      ".agents",
+      "plugins",
+      "marketplace.json",
+    );
+    const ownershipManifest = join(
+      workspaceRoot,
+      ".agents",
+      "plugins",
+      ".agent-harness-marketplace.json",
+    );
+    // (a) Agent Harness created the file from scratch on apply → records
+    //     whole-file ownership and reset deletes it entirely.
+    await mergeCodexPluginMarketplace(marketplacePath);
+    assert.equal(await pathExists(marketplacePath), true);
+    assert.equal(await pathExists(ownershipManifest), true);
+
+    // (b) A managed file the user edited after apply is stripped of the
+    //     managed entry but never wholesale-deleted.
+    await writeJsonFile(marketplacePath, {
+      name: "agent-harness-local",
+      interface: { displayName: "Agent Harness Local" },
+      plugins: [
+        {
+          name: "agent-harness",
+          source: { source: "local", path: "./plugins/agent-harness" },
+          policy: {
+            installation: "AVAILABLE",
+            authentication: "ON_INSTALL",
+          },
+          category: "Productivity",
+        },
+      ],
+      provenance: "user edit",
+    });
+
+    await resetCodexNativeHost(workspaceRoot, undefined);
+
+    // (a) swallowed a fresh-shaped file; (b) survives (extra key → not the
+    // pristine managed shape), with the managed entry stripped.
+    const survivor = JSON.parse(await readFile(marketplacePath, "utf8")) as {
+      provenance?: string;
+      plugins: unknown[];
+    };
+    assert.equal(survivor.provenance, "user edit");
+    assert.deepEqual(survivor.plugins, []);
+    assert.equal(await pathExists(ownershipManifest), false);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 function nativeAsset(
   assetId: string,
   assetKind: NativeAsset["assetKind"],

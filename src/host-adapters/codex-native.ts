@@ -38,6 +38,15 @@ const CODEX_PLUGIN_NAME = "agent-harness";
 const CODEX_PLUGIN_VERSION = "2.1.0";
 const CODEX_MARKETPLACE_NAME = "agent-harness-local";
 const CODEX_AGENT_FILE_PREFIX = "agent-harness-";
+/**
+ * The only filename shape `readCodexAgentProfileRecords` accepts for an owned
+ * profile. Rejecting separators and requiring a non-empty `[a-zA-Z0-9_-]`
+ * slug guarantees `removeCodexAgentProfiles` can never join a path that
+ * escapes `.codex/agents` (review / CodeRabbit CWE-22: arbitrary filenames
+ * from an ownership manifest must not become a path traversal).
+ */
+const CODEX_AGENT_PROFILE_NAME_PATTERN =
+  /^agent-harness-[a-zA-Z0-9_-]+\.toml$/u;
 const CODEX_PLUGIN_SOURCE_PATH = `./plugins/${CODEX_PLUGIN_NAME}`;
 const CODEX_LEGACY_PLUGIN_PATH = `./${CODEX_PLUGIN_NAME}`;
 const CODEX_MANAGED_MARKETPLACE_ENTRY = {
@@ -208,6 +217,16 @@ interface CodexAgentProfileRecord {
  * / Greptile P1: deterministic filename collisions must not erase user files).
  */
 const CODEX_AGENT_PROFILES_MANIFEST_PATH = ".agent-harness-profiles.json";
+/**
+ * Records whether THIS apply created the repo marketplace file from scratch
+ * (plain name/interface/plugins) versus merged into a user-owned or repo-owned
+ * marketplace that already existed. Reset deletes the whole marketplace file
+ * ONLY when this manifest proves Agent Harness created it; a user's own
+ * `agent-harness-local` marketplace that merely looks managed-shaped must
+ * survive (review / Greptile P1: never infer whole-file ownership from a
+ * shape heuristic).
+ */
+const CODEX_MARKETPLACE_OWNERSHIP_MANIFEST = ".agent-harness-marketplace.json";
 
 async function writeCodexAgentProfiles(
   workspaceRoot: string,
@@ -261,9 +280,13 @@ async function writeCodexAgentProfiles(
       profiles: records,
     });
   } else {
-    // No agent assets in this apply — drop any stale ownership manifest so
-    // nothing dangles in the user's tree.
-    await removePath(manifestPath);
+    // No agent assets in this apply. Consume the previous ownership manifest
+    // BEFORE dropping it: restore any displaced user profile content and remove
+    // profiles this harness created, so a generated profile never strands in
+    // the user's tree and a later reset can still reclaim it (review: Greptile
+    // P1 + CodeRabbit — a no-agent re-apply must not lose profile ownership).
+    await removeCodexAgentProfiles(workspaceRoot);
+    return;
   }
 }
 
@@ -279,10 +302,19 @@ async function readCodexAgentProfileRecords(
   if (!manifest || !Array.isArray(manifest.profiles)) {
     return null;
   }
-  return manifest.profiles.filter(
-    (entry): entry is CodexAgentProfileRecord =>
-      isJsonObject(entry) && typeof entry.fileName === "string",
-  );
+  return manifest.profiles.filter((entry): entry is CodexAgentProfileRecord => {
+    if (!isJsonObject(entry)) return false;
+    if (typeof entry.fileName !== "string") return false;
+    // A plain `agent-harness-*.toml` filename only — reject separators and
+    // the empty slug so a hostile manifest can never point cleanup at a path
+    // outside `.codex/agents` (review / CodeRabbit CWE-22 path traversal).
+    if (!CODEX_AGENT_PROFILE_NAME_PATTERN.test(entry.fileName)) return false;
+    // priorContent is exactly the recorded shape (string | null).
+    if (entry.priorContent !== null && typeof entry.priorContent !== "string") {
+      return false;
+    }
+    return true;
+  });
 }
 
 /** Merges the managed plugin into the repo/team Codex marketplace. */
@@ -290,6 +322,9 @@ export async function mergeCodexPluginMarketplace(
   filePath: string,
 ): Promise<CodexMarketplaceStyle> {
   const existing = await readJsonFileOrNull<unknown>(filePath);
+  // Whole-file ownership: true only when the marketplace file did NOT exist
+  // before this apply, so reset can later delete it (and only it) safely.
+  const createdNow = existing === null;
   const marketplace =
     existing === null ? {} : assertJsonObject(existing, filePath);
   const rawPlugins: unknown[] = Array.isArray(marketplace.plugins)
@@ -310,6 +345,7 @@ export async function mergeCodexPluginMarketplace(
         { name: CODEX_PLUGIN_NAME, path: CODEX_LEGACY_PLUGIN_PATH },
       ),
     });
+    await recordCodexMarketplaceOwnership(filePath, createdNow);
     return "legacy";
   }
 
@@ -345,7 +381,24 @@ export async function mergeCodexPluginMarketplace(
       },
     ),
   });
+  await recordCodexMarketplaceOwnership(filePath, createdNow);
   return "current";
+}
+
+/**
+ * Records whether this apply created the marketplace file from scratch, so
+ * `removeCodexMarketplaceEntry` can distinguish an Agent-Harness-created file
+ * (safe to delete on reset) from a user/repo-owned one that merely looks
+ * managed-shaped (must survive — Greptile P1).
+ */
+async function recordCodexMarketplaceOwnership(
+  filePath: string,
+  created: boolean,
+): Promise<void> {
+  await writeJsonFile(
+    join(dirname(filePath), CODEX_MARKETPLACE_OWNERSHIP_MANIFEST),
+    { schemaVersion: 1, created },
+  );
 }
 
 async function writeLegacyCodexCompatibilityPlugin(
@@ -470,6 +523,17 @@ async function removeCodexAgentProfiles(workspaceRoot: string): Promise<void> {
 }
 
 async function removeCodexMarketplaceEntry(filePath: string): Promise<void> {
+  const ownershipManifestPath = join(
+    dirname(filePath),
+    CODEX_MARKETPLACE_OWNERSHIP_MANIFEST,
+  );
+  const ownership = await readJsonFileOrNull<{
+    created?: unknown;
+  }>(ownershipManifestPath);
+  const ownsWholeFile = ownership !== null && ownership.created === true;
+  // Always consume the ownership manifest — this apply is done with it.
+  await removePath(ownershipManifestPath);
+
   const existing = await readJsonFileOrNull<unknown>(filePath);
   if (existing === null) return;
   const marketplace = assertJsonObject(existing, filePath);
@@ -487,7 +551,12 @@ async function removeCodexMarketplaceEntry(filePath: string): Promise<void> {
     Object.keys(marketplace).every((key) =>
       ["name", "interface", "plugins"].includes(key),
     );
-  if (isManagedFreshMarketplace) {
+  // Delete the ENTIRE file only when the ownership manifest proves this apply
+  // created it AND it is still the un-touched managed shape. A user-owned
+  // `agent-harness-local` marketplace that merely looks managed-shaped must
+  // survive (review / Greptile P1); a managed file the user edited since
+  // apply is stripped of the managed entry but never wholesale-deleted.
+  if (ownsWholeFile && isManagedFreshMarketplace) {
     await removePath(filePath);
     return;
   }
