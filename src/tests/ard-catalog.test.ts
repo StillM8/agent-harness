@@ -374,6 +374,18 @@ void test("the dependency-free ARD schema validator reports core schema failures
       /does not equal const/u.test(error),
     ),
   );
+  // minLength counts Unicode code points, not UTF-16 code units: an emoji is
+  // one logical character despite occupying two code units (review / CodeRabbit).
+  assert.ok(
+    validateJsonSchema("😀", { type: "string", minLength: 2 }).some((error) =>
+      /expected at least 2 characters/u.test(error),
+    ),
+    "an emoji is ONE code point and must fail minLength: 2",
+  );
+  assert.deepEqual(
+    validateJsonSchema("😀", { type: "string", minLength: 1 }),
+    [],
+  );
 });
 
 void test("the dependency-free ARD schema validator covers collection and format constraints", async () => {

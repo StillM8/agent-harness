@@ -104,7 +104,7 @@ function validateNode(value, schema, rootSchema, path, errors) {
   if (typeof value === "string") {
     if (
       typeof schema.minLength === "number" &&
-      value.length < schema.minLength
+      Array.from(value).length < schema.minLength
     ) {
       errors.push(`${path}: expected at least ${schema.minLength} characters`);
     }
