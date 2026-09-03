@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, posix, resolve } from "node:path";
@@ -182,46 +183,81 @@ export async function runPackedPackageSmoke({ cwd = process.cwd() } = {}) {
  * `execFile` without a shell. Resolution order:
  *   1. an explicit npmExecPath option (tests inject a fake npm here);
  *   2. process.env.npm_execpath (set by `npm run` under the real gate);
- *   3. npm_config_prefix/node_modules/npm/bin/npm-cli.js (npm's own prefix);
- *   4. the node install's bundled npm (dirname(process.execPath)/node_modules).
- * Falls back to launching `npm` directly (POSIX shell-script shebang works
- * without a shell) only when no JS CLI can be located.
+ *   3. npm_config_prefix/node_modules/npm/bin/npm-cli.js — plus the POSIX
+ *      `lib/node_modules` layout distro packages use (prefix/lib/node_modules);
+ *   4. the node install's bundled npm (dirname(process.execPath)/node_modules)
+ *      and its POSIX lib sibling (dirname/../lib/node_modules).
+ * Each candidate is checked with existsSync; the first existing path wins, so a
+ * guessed-but-absent layout never launches a dead `node <path>`. When no
+ * candidate exists the resolver returns "" so buildNpmInvocation can fall back
+ * to bare `npm` — the POSIX `npm` is a shell-script with a shebang and spawns
+ * cleanly shell-less, while on Windows there is no shell-less bare launcher
+ * (review / CodeRabbit: a nonexistent default must not defeat the fallback).
  */
-export function resolveNpmCliPath(options = {}) {
+export function resolveNpmCliPath(options = {}, exists = existsSync) {
   const explicit =
     options.npmExecPath !== undefined
       ? options.npmExecPath
       : process.env.npm_execpath;
   if (explicit) return explicit;
+  const candidates = [];
   const prefix = options.npmConfigPrefix ?? process.env.npm_config_prefix;
+  const execDir = dirname(process.execPath).replaceAll("\\", "/");
   if (prefix) {
-    return posixJoin(prefix, "node_modules", "npm", "bin", "npm-cli.js");
+    candidates.push(
+      posixJoin(prefix, "node_modules", "npm", "bin", "npm-cli.js"),
+    );
+    // POSIX distro packages install node_modules under prefix/lib.
+    candidates.push(
+      posixJoin(prefix, "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+    );
   }
-  return posixJoin(
-    dirname(process.execPath).replaceAll("\\", "/"),
-    "node_modules",
-    "npm",
-    "bin",
-    "npm-cli.js",
+  candidates.push(
+    posixJoin(execDir, "node_modules", "npm", "bin", "npm-cli.js"),
   );
+  // POSIX: the bundled npm may sit next to the lib tree (execDir/../lib).
+  candidates.push(
+    posix.join(
+      execDir,
+      "..",
+      "lib",
+      "node_modules",
+      "npm",
+      "bin",
+      "npm-cli.js",
+    ),
+  );
+  return candidates.find((candidate) => exists(candidate)) ?? "";
 }
 
 const posixJoin = (...parts) => posix.join(...parts);
 
 export function buildNpmInvocation(args, options = {}) {
   const nodeExecPath = options.nodeExecPath ?? process.execPath;
-  const npmCliPath = resolveNpmCliPath(options);
-  // Always node + npm-cli, shell-less. There is deliberately NO bare-`npm`
-  // fallback: resolveNpmCliPath unconditionally returns a non-empty JS CLI
-  // path (explicit -> npm_execpath -> npm_config_prefix -> node-bundled, the
-  // last of which is never empty), so the `if (npmCliPath)` guard could never
-  // be false. Launching bare `npm` would also reintroduce the DEP0190
-  // shell:true trap on Windows (npm.cmd cannot spawn shell-less), so this is
-  // both unreachable AND wrong to reach — removed, not fallback-covered
-  // (coverage gate: 2026-09-03 flagged 225-229 as dead).
+  const npmCliPath = resolveNpmCliPath(options, options.exists);
+  const platform = options.platform ?? process.platform;
+  if (npmCliPath) {
+    // Always node + npm-cli, shell-less (DEP0190: never a shell).
+    return {
+      command: nodeExecPath,
+      commandArgs: [npmCliPath, ...args],
+      shell: false,
+    };
+  }
+  // No npm JS CLI was found. Bare `npm` is a shell-script shebang on POSIX and
+  // spawns cleanly with shell: false — the doctrine violation is Windows
+  // `npm.cmd`, which cannot launch shell-less. Reintroducing bare `npm` on
+  // win32 would reopen the DEP0190 trap the audit exists to prevent, so that
+  // combination fails loudly with a descriptive error instead of a dead path.
+  if (platform === "win32") {
+    throw new Error(
+      "Cannot resolve an npm JS CLI (node_modules/npm/bin/npm-cli.js absent); " +
+        "bare npm.cmd cannot be spawned shell-less (DEP0190).",
+    );
+  }
   return {
-    command: nodeExecPath,
-    commandArgs: [npmCliPath, ...args],
+    command: "npm",
+    commandArgs: [...args],
     shell: false,
   };
 }
