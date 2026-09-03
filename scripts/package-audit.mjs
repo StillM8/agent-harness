@@ -211,20 +211,17 @@ const posixJoin = (...parts) => posix.join(...parts);
 export function buildNpmInvocation(args, options = {}) {
   const nodeExecPath = options.nodeExecPath ?? process.execPath;
   const npmCliPath = resolveNpmCliPath(options);
-  // Prefer running npm through node+npm-cli (shell-less, cross-platform, no
-  // DEP0190). Fall back to the bare `npm` launcher ONLY on POSIX, where npm's
-  // shebang executes without a shell; on win32 without a resolvable JS CLI we
-  // still never use shell:true — we spawn node with the resolved cli instead.
-  if (npmCliPath) {
-    return {
-      command: nodeExecPath,
-      commandArgs: [npmCliPath, ...args],
-      shell: false,
-    };
-  }
+  // Always node + npm-cli, shell-less. There is deliberately NO bare-`npm`
+  // fallback: resolveNpmCliPath unconditionally returns a non-empty JS CLI
+  // path (explicit -> npm_execpath -> npm_config_prefix -> node-bundled, the
+  // last of which is never empty), so the `if (npmCliPath)` guard could never
+  // be false. Launching bare `npm` would also reintroduce the DEP0190
+  // shell:true trap on Windows (npm.cmd cannot spawn shell-less), so this is
+  // both unreachable AND wrong to reach — removed, not fallback-covered
+  // (coverage gate: 2026-09-03 flagged 225-229 as dead).
   return {
-    command: "npm",
-    commandArgs: args,
+    command: nodeExecPath,
+    commandArgs: [npmCliPath, ...args],
     shell: false,
   };
 }
