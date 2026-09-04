@@ -895,6 +895,48 @@ void test("Codex reapply with a smaller agent set reconciles orphaned profiles",
   }
 });
 
+void test("Codex reset preserves a user's replacement of a harness-created marketplace", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-market-replaced-"),
+  );
+  try {
+    const marketplacePath = join(
+      workspaceRoot,
+      ".agents",
+      "plugins",
+      "marketplace.json",
+    );
+    // Harness creates the marketplace from scratch → records created:true with
+    // a fingerprint of the exact bytes it wrote.
+    await mergeCodexPluginMarketplace(marketplacePath);
+    assert.equal(await pathExists(marketplacePath), true);
+
+    // User REPLACES the whole file with their own minimal marketplace that
+    // happens to use the agent-harness-local name + a three-key shape.
+    await writeJsonFile(marketplacePath, {
+      name: "agent-harness-local",
+      interface: { displayName: "My Company Marketplace" },
+      plugins: [],
+      sourcedBy: "user",
+    });
+
+    // Reset must NOT delete the user's replacement wholesale — the bytes no
+    // longer match the harness fingerprint, so it is preserved; only the
+    // managed entry is stripped (there is none) (Greptile P1: "marketplace
+    // replacement is deleted by reset").
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    const survivor = JSON.parse(
+      await readFile(marketplacePath, "utf8"),
+    ) as Record<string, unknown>;
+    assert.equal(survivor.sourcedBy, "user");
+    assert.deepEqual(survivor.interface, {
+      displayName: "My Company Marketplace",
+    });
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 function nativeAsset(
   assetId: string,
   assetKind: NativeAsset["assetKind"],

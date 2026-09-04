@@ -1,6 +1,7 @@
 import { dirname, join, relative } from "node:path";
 
 import {
+  createContentHash,
   readJsonFileOrNull,
   readTextFileOrNull,
   removePath,
@@ -361,19 +362,24 @@ export async function mergeCodexPluginMarketplace(
     );
 
   if (legacy) {
-    await writeJsonFile(filePath, {
+    const legacyMarketplace = {
       ...marketplace,
       plugins: replaceManagedMarketplaceEntry(
         rawPlugins,
         CODEX_MANAGED_MARKETPLACE_ENTRY,
         { name: CODEX_PLUGIN_NAME, path: CODEX_LEGACY_PLUGIN_PATH },
       ),
-    });
-    await recordCodexMarketplaceOwnership(filePath, createdNow);
+    };
+    await writeJsonFile(filePath, legacyMarketplace);
+    await recordCodexMarketplaceOwnership(
+      filePath,
+      createdNow,
+      createContentHash(serializeMarketplaceFile(legacyMarketplace)),
+    );
     return "legacy";
   }
 
-  await writeJsonFile(filePath, {
+  const currentMarketplace = {
     ...marketplace,
     name:
       typeof marketplace.name === "string"
@@ -404,23 +410,31 @@ export async function mergeCodexPluginMarketplace(
         category: "Productivity",
       },
     ),
-  });
-  await recordCodexMarketplaceOwnership(filePath, createdNow);
+  };
+  await writeJsonFile(filePath, currentMarketplace);
+  await recordCodexMarketplaceOwnership(
+    filePath,
+    createdNow,
+    createContentHash(serializeMarketplaceFile(currentMarketplace)),
+  );
   return "current";
 }
 
 /**
  * Records whether the marketplace file is Agent-Harness-create-able on reset:
- * `true` if this apply created it from nothing, OR a prior apply already
- * recorded `created: true`. Preserving a prior positive record across
- * reapplies is essential: on a second unchanged apply the file necessarily
- * exists, so `createdNow` alone would flip a harness-created marketplace to
- * `false` and reset would strand the leftover empty file it owns (Greptile P1
- * / CodeRabbit: "marketplace ownership is lost on reapply").
+ * `created` is `true` if this apply created it from scratch OR a prior apply
+ * recorded `created: true` (preserved so an unchanged reapply cannot flip a
+ * harness-created marketplace to `false` and strand it). `fingerprint` is the
+ * content hash of the EXACT bytes this apply wrote, so reset can delete the
+ * whole file ONLY when the current bytes still match what the harness wrote.
+ * A user who replaces a harness-created marketplace with their own file (even
+ * one that happens to look managed-shaped) changes the bytes, so reset keeps
+ * it instead of deleting the user's replacement (Greptile P1).
  */
 async function recordCodexMarketplaceOwnership(
   filePath: string,
   created: boolean,
+  fingerprint: string,
 ): Promise<void> {
   const ownershipManifestPath = join(
     dirname(filePath),
@@ -428,12 +442,19 @@ async function recordCodexMarketplaceOwnership(
   );
   const priorOwnership = await readJsonFileOrNull<{
     created?: unknown;
+    fingerprint?: unknown;
   }>(ownershipManifestPath);
   const wasCreatedPreviously = priorOwnership?.created === true;
   await writeJsonFile(ownershipManifestPath, {
     schemaVersion: 1,
     created: created || wasCreatedPreviously,
+    fingerprint,
   });
+}
+
+/** Serializes a marketplace object exactly as writeJsonFile writes it. */
+function serializeMarketplaceFile(value: unknown): string {
+  return `${JSON.stringify(value, null, 2)}\n`;
 }
 
 async function writeLegacyCodexCompatibilityPlugin(
@@ -564,14 +585,32 @@ async function removeCodexMarketplaceEntry(filePath: string): Promise<void> {
   );
   const ownership = await readJsonFileOrNull<{
     created?: unknown;
+    fingerprint?: unknown;
   }>(ownershipManifestPath);
   const ownsWholeFile = ownership !== null && ownership.created === true;
+  const recordedFingerprint =
+    typeof ownership?.fingerprint === "string" ? ownership.fingerprint : null;
   // Always consume the ownership manifest — this apply is done with it.
   await removePath(ownershipManifestPath);
 
-  const existing = await readJsonFileOrNull<unknown>(filePath);
-  if (existing === null) return;
-  const marketplace = assertJsonObject(existing, filePath);
+  const existingText = await readTextFileOrNull(filePath);
+  if (existingText === null) return;
+  // Delete the ENTIRE file ONLY when the ownership manifest proves this apply
+  // created it AND the current bytes still match the exact content the harness
+  // wrote. A user who replaces a harness-created marketplace with their own
+  // file (even one shaped like `agent-harness-local`) changes the bytes, so
+  // reset keeps it rather than deleting the user's replacement (Greptile P1 /
+  // review). A managed file the user edited since apply is likewise preserved.
+  if (
+    ownsWholeFile &&
+    recordedFingerprint !== null &&
+    createContentHash(existingText) === recordedFingerprint
+  ) {
+    await removePath(filePath);
+    return;
+  }
+
+  const marketplace = assertJsonObject(JSON.parse(existingText), filePath);
   const rawPlugins: unknown[] = Array.isArray(marketplace.plugins)
     ? marketplace.plugins
     : [];
@@ -579,22 +618,5 @@ async function removeCodexMarketplaceEntry(filePath: string): Promise<void> {
     rawPlugins,
     CODEX_MANAGED_MARKETPLACE_ENTRY,
   );
-
-  const isManagedFreshMarketplace =
-    marketplace.name === CODEX_MARKETPLACE_NAME &&
-    plugins.length === 0 &&
-    Object.keys(marketplace).every((key) =>
-      ["name", "interface", "plugins"].includes(key),
-    );
-  // Delete the ENTIRE file only when the ownership manifest proves this apply
-  // created it AND it is still the un-touched managed shape. A user-owned
-  // `agent-harness-local` marketplace that merely looks managed-shaped must
-  // survive (review / Greptile P1); a managed file the user edited since
-  // apply is stripped of the managed entry but never wholesale-deleted.
-  if (ownsWholeFile && isManagedFreshMarketplace) {
-    await removePath(filePath);
-    return;
-  }
-
   await writeJsonFile(filePath, { ...marketplace, plugins });
 }
