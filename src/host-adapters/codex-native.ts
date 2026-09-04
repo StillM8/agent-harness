@@ -241,12 +241,36 @@ async function writeCodexAgentProfiles(
   // displaced on the first apply would be "restored" to harness content on
   // remove (re-apply poisons fresh snapshots — same trap as the wire-reset
   // ownership doctored for opencode's gitignoreOwnedEntries).
+  const previousRecords =
+    ((await readCodexAgentProfileRecords(workspaceRoot)) as
+      CodexAgentProfileRecord[] | null) ?? [];
   const previousByFileName = new Map(
-    (await readCodexAgentProfileRecords(workspaceRoot))?.map((record) => [
-      record.fileName,
-      record.priorContent,
-    ]) ?? [],
+    previousRecords.map((record) => [record.fileName, record]),
   );
+  const incomingFileNames = new Set<string>();
+  for (const asset of agents) {
+    const slug = sanitizeAssetId(asset.assetId).replace(
+      /[^a-zA-Z0-9_-]+/gu,
+      "-",
+    );
+    incomingFileNames.add(`${CODEX_AGENT_FILE_PREFIX}${slug}.toml`);
+  }
+
+  // Reconcile prior records absent from the incoming agent set BEFORE the
+  // manifest is replaced: a removed agent's generated profile would otherwise
+  // stay on disk yet vanish from the ownership manifest, so reset could never
+  // remove it (or restore the user profile it displaced) — orphaned, active,
+  // and untracked (Greptile P1: "reduced agent sets strand Codex profiles").
+  for (const [fileName, priorRecord] of previousByFileName) {
+    if (incomingFileNames.has(fileName)) continue;
+    const orphanedPath = join(agentsDir, fileName);
+    if (priorRecord.priorContent === null) {
+      await removePath(orphanedPath);
+    } else {
+      await writeTextFile(orphanedPath, priorRecord.priorContent);
+    }
+  }
+
   const records: CodexAgentProfileRecord[] = [];
   for (const asset of agents) {
     const slug = sanitizeAssetId(asset.assetId).replace(
@@ -255,12 +279,12 @@ async function writeCodexAgentProfiles(
     );
     const fileName = `${CODEX_AGENT_FILE_PREFIX}${slug}.toml`;
     const profilePath = join(agentsDir, fileName);
-    const priorPriorContent = previousByFileName.get(fileName);
+    const priorRecord = previousByFileName.get(fileName);
     records.push({
       fileName,
       priorContent:
-        priorPriorContent !== undefined
-          ? priorPriorContent
+        priorRecord !== undefined
+          ? priorRecord.priorContent
           : await readTextFileOrNull(profilePath),
     });
     await writeTextFile(
@@ -386,19 +410,30 @@ export async function mergeCodexPluginMarketplace(
 }
 
 /**
- * Records whether this apply created the marketplace file from scratch, so
- * `removeCodexMarketplaceEntry` can distinguish an Agent-Harness-created file
- * (safe to delete on reset) from a user/repo-owned one that merely looks
- * managed-shaped (must survive — Greptile P1).
+ * Records whether the marketplace file is Agent-Harness-create-able on reset:
+ * `true` if this apply created it from nothing, OR a prior apply already
+ * recorded `created: true`. Preserving a prior positive record across
+ * reapplies is essential: on a second unchanged apply the file necessarily
+ * exists, so `createdNow` alone would flip a harness-created marketplace to
+ * `false` and reset would strand the leftover empty file it owns (Greptile P1
+ * / CodeRabbit: "marketplace ownership is lost on reapply").
  */
 async function recordCodexMarketplaceOwnership(
   filePath: string,
   created: boolean,
 ): Promise<void> {
-  await writeJsonFile(
-    join(dirname(filePath), CODEX_MARKETPLACE_OWNERSHIP_MANIFEST),
-    { schemaVersion: 1, created },
+  const ownershipManifestPath = join(
+    dirname(filePath),
+    CODEX_MARKETPLACE_OWNERSHIP_MANIFEST,
   );
+  const priorOwnership = await readJsonFileOrNull<{
+    created?: unknown;
+  }>(ownershipManifestPath);
+  const wasCreatedPreviously = priorOwnership?.created === true;
+  await writeJsonFile(ownershipManifestPath, {
+    schemaVersion: 1,
+    created: created || wasCreatedPreviously,
+  });
 }
 
 async function writeLegacyCodexCompatibilityPlugin(

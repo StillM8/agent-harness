@@ -645,7 +645,7 @@ void test("Codex reset drops hostile profile-manifest entries instead of travers
     await writeJsonFile(join(agentsDir, ".agent-harness-profiles.json"), {
       schemaVersion: 1,
       profiles: [
-        { fileName: "../../../escape-target.toml", priorContent: null },
+        { fileName: "../../escape-target.toml", priorContent: null },
         { fileName: "user.toml", priorContent: null },
         { fileName: codexProfileFileName("bad.agent"), priorContent: 42 },
         { fileName: codexProfileFileName("ok.agent"), priorContent: null },
@@ -783,6 +783,104 @@ void test("Codex reset deletes only marketplace files Agent Harness actually cre
     assert.equal(survivor.provenance, "user edit");
     assert.deepEqual(survivor.plugins, []);
     assert.equal(await pathExists(ownershipManifest), false);
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex marketplace ownership survives an unchanged reapply so reset removes the harness-created file", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-market-reapply-"),
+  );
+  try {
+    const marketplacePath = join(
+      workspaceRoot,
+      ".agents",
+      "plugins",
+      "marketplace.json",
+    );
+    const ownershipManifest = join(
+      workspaceRoot,
+      ".agents",
+      "plugins",
+      ".agent-harness-marketplace.json",
+    );
+    // First apply creates the marketplace from nothing → records created:true.
+    await mergeCodexPluginMarketplace(marketplacePath);
+    assert.equal(await pathExists(marketplacePath), true);
+    assert.equal(await pathExists(ownershipManifest), true);
+
+    // Unchanged reapply: the file now exists, so createdNow would be false —
+    // but the prior created:true ownership must be PRESERVED (Greptile P1:
+    // "marketplace ownership is lost on reapply").
+    await mergeCodexPluginMarketplace(marketplacePath);
+    const ownership = JSON.parse(await readFile(ownershipManifest, "utf8")) as {
+      created: boolean;
+    };
+    assert.equal(ownership.created, true);
+
+    // Reset must therefore still delete the whole harness-created file.
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    assert.equal(
+      await pathExists(marketplacePath),
+      false,
+      "marketplace created by harness and reapplied unchanged is deleted on reset",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex reapply with a smaller agent set reconciles orphaned profiles", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-reduced-set-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const alphaProfile = join(agentsDir, codexProfileFileName("codex.alpha"));
+    const betaProfile = join(agentsDir, codexProfileFileName("codex.beta"));
+    // beta displaces a user-owned profile on the first apply.
+    await writeFile(betaProfile, "user BETA content\n", "utf8");
+
+    const apply = (assetIds: string[]) =>
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: assetIds.map((id) =>
+          nativeAsset(id, "agent", `${id} body`),
+        ),
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      });
+
+    await apply(["codex.alpha", "codex.beta"]);
+    assert.equal(await pathExists(alphaProfile), true);
+    assert.equal(await pathExists(betaProfile), true);
+
+    // Reapply with only alpha: beta is no longer in the incoming set, so it
+    // must be reconciled (harness-created → removed, or user-displaced →
+    // restored) instead of stranded in the tree (Greptile P1: "reduced agent
+    // sets strand profiles").
+    await apply(["codex.alpha"]);
+    assert.equal(
+      await readFile(betaProfile, "utf8"),
+      "user BETA content\n",
+      "beta's displaced user content restored on reduced reapply",
+    );
+    assert.equal(
+      await pathExists(alphaProfile),
+      true,
+      "alpha profile still written",
+    );
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }
