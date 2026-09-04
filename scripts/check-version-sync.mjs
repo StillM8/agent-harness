@@ -93,10 +93,11 @@ export function validateVersionSync(packageDocument, lockDocument, tags) {
       if (!hasMatchingTag) {
         if (latestTagVersion === null) {
           // No parseable released tag existed yet; treat as a forward bump.
+          // `version` is packageVersion directly: this branch is only reached
+          // when packageVersion is truthy (the surrounding guard).
           return {
             ok: errors.length === 0,
-            version:
-              packageVersion ?? lockfileVersion ?? rootPackageVersion ?? null,
+            version: packageVersion,
             errors,
           };
         }

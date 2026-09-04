@@ -176,6 +176,55 @@ test("validateVersionSync rejects a manifest that regresses against a newer tag 
   );
 });
 
+test("validateVersionSync treats a tag list with no parseable versions as a forward bump", () => {
+  // Tags exist but none are version-shaped ([major].[minor].[patch]): there is
+  // no released version to regress below, so a pre-release manifest must pass.
+  const result = validateVersionSync(
+    { version: "2.1.0" },
+    {
+      version: "2.1.0",
+      packages: { "": { version: "2.1.0" } },
+    },
+    ["experiments/canary", "latest-canary"],
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.version, "2.1.0");
+  assert.deepEqual(result.errors, []);
+});
+
+test("validateVersionSync ignores non-version tags when computing the latest released tag", () => {
+  // A mix of version and non-version tags: only version-shaped tags count
+  // toward "latest released", so this is a forward bump over v2.0.0.
+  const result = validateVersionSync(
+    { version: "2.1.0" },
+    {
+      version: "2.1.0",
+      packages: { "": { version: "2.1.0" } },
+    },
+    ["v2.0.0", "experiments/canary", "refs/heads/topic"],
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+});
+
+test("validateVersionSync treats duplicate released tags as a single latest version", () => {
+  // Two tags sharing the same version triple must not error: the latest
+  // released tag is v2.1.0 (present), even with a duplicate v2.1.0.
+  const result = validateVersionSync(
+    { version: "2.1.0" },
+    {
+      version: "2.1.0",
+      packages: { "": { version: "2.1.0" } },
+    },
+    ["v2.1.0", "v2.1.0"],
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+});
+
 test("validateVersionSync matches an unprefixed version tag when present", () => {
   const result = validateVersionSync(
     { version: "2.1.0" },
