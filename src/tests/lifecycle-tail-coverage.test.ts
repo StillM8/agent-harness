@@ -1022,7 +1022,7 @@ void test("setup doctor maps adapter-specific timeout failures", async () => {
   ]);
 });
 
-void test("setup doctor maps a non-timeout error after the adapter signal aborts", async () => {
+void test("setup doctor does not mask a non-timeout adapter error as a per-adapter timeout", async () => {
   const { setupInternals } = await import("../setup.js");
   const { listHostAdapters } = await import("../host-adapters/registry.js");
   const adapter = listHostAdapters()[0];
@@ -1035,20 +1035,29 @@ void test("setup doctor maps a non-timeout error after the adapter signal aborts
     const preflightFns = {
       runHostPreflight: async () => [],
       runAdapterPreflight: async () => {
+        // Abort the per-adapter timeout signal BEFORE throwing. The abort
+        // listener rejects the race with signal.reason, and — because the
+        // reason here is a plain Error rather than a DOMException TimeoutError
+        // (the only reason a real AbortSignal.timeout produces) — this is NOT a
+        // timeout. A genuine adapter failure must propagate, not be relabeled
+        // as a doctor-timeout warning (the removed `if (signal.aborted)` arm,
+        // commit 01b8205).
         controller.abort(new Error("adapter signal aborted"));
         throw new Error("adapter failed after abort");
       },
       collectActivatedAssetPrerequisiteDiagnostics: async () => [],
     } as never;
 
-    const diagnostics = await setupInternals.runAdapterPreflightWithTimeout(
-      adapter,
-      5_000,
-      undefined,
-      undefined,
-      preflightFns,
+    await assert.rejects(
+      setupInternals.runAdapterPreflightWithTimeout(
+        adapter,
+        5_000,
+        undefined,
+        undefined,
+        preflightFns,
+      ),
+      /adapter (?:signal aborted|failed after abort)/u,
     );
-    assert.equal(diagnostics[0]?.code, `${adapter.id}-doctor-timeout`);
   } finally {
     (AbortSignal as unknown as { timeout: typeof originalTimeout }).timeout =
       originalTimeout;
