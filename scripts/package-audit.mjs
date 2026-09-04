@@ -7,7 +7,13 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const DEFAULT_TIMEOUT_MS = 120_000;
+// Anti-hang bound for the packed-package smoke's spawn steps (npm pack,
+// npm install, installed-CLI exec). A cold ubuntu/macos/windows hosted runner
+// with a fresh npm cache plus real-time AV can exceed 120s on `npm install` of
+// a local tarball while warm/local runs finish in ~3s; SIGTERM at exactly the
+// execFile timeout with empty stdout/stderr is the cold-runner signature, not a
+// hang. 300s matches the `smoke:pack` counterpart (NPM_STEP_TIMEOUT_MS).
+const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_BUFFER = 10_000_000;
 
 /**
