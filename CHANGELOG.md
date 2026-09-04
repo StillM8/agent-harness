@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [2.1.0] - 2026-08-10
+## [2.1.0] - 2026-09-04
 
 ### Added
 
@@ -82,6 +82,15 @@ All notable changes to this project will be documented in this file.
 - **`recommend` subcommand --help shows subcommand-specific options** — `recommend report --help`, `recommend evaluate --help`, `recommend ai-review --help`, and `recommend policy:print --help` now show subcommand-specific usage and options instead of the parent recommend command list (#416)
 - **`install refresh --help` uses correct command name** — help headings and usage lines now show `install` (the primary command) instead of the legacy `stage` alias. Parent help says "install commands (stage is a legacy alias)" (#417)
 - **`bundle explain --help` shows correct heading** — `bundle explain --help` now shows "bundle explain — Explain why assets are present in a bundle lock" instead of the incorrect "mirror explain" heading (#418)
+- **ARD 1.0 export** — `discover ard-export` now emits the public ARD 1.0 root contract: `specVersion`, optional `host`, and `entries`; every entry carries exactly one of `url` or inline `data`, `urn:air:` URN identifiers, and ARD `metadata` for harness round-trip fields. The importer stays backward-compatible with older `data.assetKind` catalogs, trust metadata uses schema-valid HTTPS identity envelopes without inventing unverifiable attestations, and a vendored snapshot of the upstream ARD 1.0 schema plus a dependency-free validator check the generated catalog in tests and in `validate:release` (release, review)
+- **`setup doctor` readiness verdict** — stdout reports per-adapter and cumulative timeout scopes separately, routes diagnostics to stderr, and finishes with an explicit `N/M hosts ready` line so the per-adapter vs cumulative timeout contract is checkable (release, review)
+- **Unicode-aware ARD schema minLength** — the ARD schema validator counts Unicode code points (not UTF-16 code units) for `minLength` checks, so multi-byte text is validated correctly (release)
+- **`kind: docs` sources are metadata-only provenance references** — the 8 existing docs-kind sources (and any future docs-kind source from packs) are disabled before enabled-source, health, harvest, and selection counts are computed; the measured registry is 50 configured sources / 39 enabled asset-producing sources, and tests assert enabled-source counts include only asset-producing kinds (#477)
+- **Windsurf dropped from the compatible-host matrix** (#475) — Windsurf is no longer treated as a wiring target; source packs must not imply the harness wires it, and the adapter-development guide uses a neutral example host instead of Windsurf-specific wiring
+- **Claude Code wires a real local plugin root** — `wire claude-code` emits `.claude-plugin/marketplace.json` (a managed local `./plugins/agent-harness` source) and `plugins/agent-harness/.claude-plugin/plugin.json`, and both Claude and Codex share a plugin-dir claim guard so an unowned plugin directory is never silently adopted (release, review P1)
+- **package-audit runs npm shell-less** — the packed-package audit launches `npm` via `node <npm-cli>` with `shell: false` (no `shell: true`), normalizes the npm 12 `pack --json` shape, exists-checks npm-cli resolution, and drops the dead bare-npm fallback; the DEP0190 shell-script doctrine is never violated (release, review)
+- **packed-package smoke tolerates cold runners** — the pack-smoke spawn timeout is raised to 300 s so a cold CI runner (fresh npm cache + AV scan) does not fail the gate at the old 120 s bound; a real cold-runner SIGTERM at the old bound is documented as the failure signature, not a product bug (release, review)
+- **`setup doctor` propagates non-timeout adapter errors after signal abort** — the dead `signal.aborted` arm is removed; a real `AbortSignal.timeout` abort surfaces a DOMException `TimeoutError`, while a non-timeout adapter error now propagates/rejects instead of being masked as a timeout (release, review)
 
 ### Changed
 
@@ -101,6 +110,7 @@ All notable changes to this project will be documented in this file.
 - **ARD export drops `updatedAt` for epoch-sentinel catalog entries** — entries whose `updatedAt` was the epoch sentinel (1970-01-01) no longer emit the field; consumers must treat a missing `updatedAt` as unknown rather than parsing it as the epoch (#449)
 - **Recommendation ranking and `fit:exact-stack` gating tightened** — evidence strength now describes the asset side only (workspace-side signals are no longer attributed to assets), and `fit:exact-stack` requires ecosystem affinity plus declared-dependency identity, so single-token collisions no longer push unrelated assets to the top of exact-stack results (#444)
 - **Native install plans no longer auto-include single-token lookalike extensions** — `install native` excludes extensions whose only recommendation match is a coincidence token (no curated-identity match) from the plan and from apply/remove execution, with a visible note; automation that consumed the previous plan output should re-read the plan (review)
+- **ARD export is now ARD 1.0** — `discover ard-export` emits the ARD 1.0 root contract: `specVersion` (no root `version`/publisher fields), `urn:air:` URN identifiers (replacing `urn:ai:`), and exactly one of `url` or inline `data` per entry; harness round-trip fields move into ARD `metadata`. Consumers of pre-1.0 output must migrate, and the doc covers the 492 stale `legacy` records removed at the 2026-08-21 fix-up (release, review)
 
 ## [2.0.0] - 2026-08-02
 

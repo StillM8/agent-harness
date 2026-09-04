@@ -164,11 +164,7 @@ git push origin <branch>
 git push origin v<version>
 ```
 
-`check:version-sync` runs a tag-vs-manifest guard (it fails when the manifest
-version has no matching `v<version>` git tag on main), so the tag must be
-created before the check runs — hence `git tag v<version>` precedes it.
-On a shallow CI checkout with no tags fetched, the guard is skipped; the
-workflows fetch full history (`fetch-depth: 0`) so releases are verified.
+`check:version-sync` runs a tag-vs-manifest guard (#467): the manifest version must **not regress** at or below the highest released git tag unless it has a matching tag of its own. A **forward bump** — the manifest ahead of the latest released tag with no matching tag yet — is the normal pre-release state and passes, because the release workflow creates the `v<version>` tag on main when the release is cut. The guard therefore fails only on a genuine regression or re-tag (e.g. publishing `2.0.0` when `v2.0.0` already exists on main with no matching new tag). A `v`-prefix is required for the guard to treat a tag as a release tag, and prerelease tags (`vX.Y.Z-*`) never stand in as the "latest released" version. On a shallow CI checkout with no tags fetched, the guard is skipped; the workflows fetch full history (`fetch-depth: 0`) so releases are verified. Running the check after `git tag v<version>` (as in the block above) additionally confirms the freshly created tag is recognized before pushing.
 
 If `npm version` is not used, update both `package.json` and `package-lock.json` manually and keep `npm run check:version-sync` green.
 
