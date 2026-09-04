@@ -27,15 +27,26 @@ function compareVersionTriples(a, b) {
   return 0;
 }
 
+function isPrereleaseTag(tag) {
+  // "v2.1.0-rc.1" → "-rc.1"; a stable tag has no `-` suffix.
+  return /^v?\d+\.\d+\.\d+-/u.test(tag);
+}
+
 /**
- * Returns the highest released version tag present in `tags` as a
+ * Returns the highest released STABLE version tag present in `tags` as a
  * [major, minor, patch] triple, or null when no parseable version tag exists.
+ * Prerelease tags (`v2.1.0-rc.1`) are excluded: a stable release must be
+ * allowed to follow its own release candidates, and an RC should not stand in
+ * as the "latest released" version a stable manifest could regress against
+ * (review / CodeRabbit: preserve prerelease precedence).
  */
 function findLatestTagVersion(tags) {
   let latest = null;
   for (const tag of tags) {
     const parsed = parseTagVersion(tag);
     if (parsed === null) continue;
+    // Prerelease tags (vX.Y.Z-*) are not released stable versions.
+    if (isPrereleaseTag(tag)) continue;
     if (latest === null || compareVersionTriples(parsed, latest) > 0) {
       latest = parsed;
     }
@@ -86,9 +97,7 @@ export function validateVersionSync(packageDocument, lockDocument, tags) {
   // a pre-merge gate must reject).
   if (Array.isArray(tags) && tags.length > 0) {
     if (packageVersion && parseTagVersion(`v${packageVersion}`) !== null) {
-      const hasMatchingTag = tags.some(
-        (tag) => tag === `v${packageVersion}` || tag === packageVersion,
-      );
+      const hasMatchingTag = tags.some((tag) => tag === `v${packageVersion}`);
       const latestTagVersion = findLatestTagVersion(tags);
       if (!hasMatchingTag) {
         if (latestTagVersion === null) {

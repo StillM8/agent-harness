@@ -225,7 +225,11 @@ test("validateVersionSync treats duplicate released tags as a single latest vers
   assert.deepEqual(result.errors, []);
 });
 
-test("validateVersionSync matches an unprefixed version tag when present", () => {
+test("validateVersionSync requires v<version> and rejects a bare unprefixed tag", () => {
+  // release.yml only fires on refs/tags/v* — a bare "2.1.0" tag would not
+  // trigger a release. With the latest released version being 2.1.0 and no
+  // v2.1.0 tag present, the manifest is not ahead and has no matching release
+  // tag → must fail (CodeRabbit fD17H: require the v-prefixed release tag).
   const result = validateVersionSync(
     { version: "2.1.0" },
     {
@@ -233,6 +237,26 @@ test("validateVersionSync matches an unprefixed version tag when present", () =>
       packages: { "": { version: "2.1.0" } },
     },
     ["2.1.0"],
+  );
+
+  assert.equal(result.ok, false);
+  assert.match(
+    result.errors[0],
+    /package\.json version \(2\.1\.0\) does not exceed the latest released tag \(v2\.1\.0\)/u,
+  );
+});
+
+test("validateVersionSync lets a stable release follow its own prerelease tag", () => {
+  // v2.1.0-rc.1 is a prerelease: it must not count as the "latest released"
+  // stable version, so a forward-bumped manifest at 2.1.0 (awaiting its stable
+  // release tag) passes (CodeRabbit fQ6iR: preserve prerelease precedence).
+  const result = validateVersionSync(
+    { version: "2.1.0" },
+    {
+      version: "2.1.0",
+      packages: { "": { version: "2.1.0" } },
+    },
+    ["v2.0.0", "v2.1.0-rc.1"],
   );
 
   assert.equal(result.ok, true);

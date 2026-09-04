@@ -848,8 +848,11 @@ void test("Codex reapply with a smaller agent set reconciles orphaned profiles",
     await mkdir(agentsDir, { recursive: true });
     const alphaProfile = join(agentsDir, codexProfileFileName("codex.alpha"));
     const betaProfile = join(agentsDir, codexProfileFileName("codex.beta"));
+    const gammaProfile = join(agentsDir, codexProfileFileName("codex.gamma"));
     // beta displaces a user-owned profile on the first apply.
     await writeFile(betaProfile, "user BETA content\n", "utf8");
+    // gamma does NOT pre-exist, so apply creates it as a pure harness-owned
+    // profile (priorContent null → the removePath reconcile arm).
 
     const apply = (assetIds: string[]) =>
       writeCodexNativeFiles({
@@ -862,19 +865,25 @@ void test("Codex reapply with a smaller agent set reconciles orphaned profiles",
         mcpServers: [],
       });
 
-    await apply(["codex.alpha", "codex.beta"]);
+    await apply(["codex.alpha", "codex.beta", "codex.gamma"]);
     assert.equal(await pathExists(alphaProfile), true);
     assert.equal(await pathExists(betaProfile), true);
+    assert.equal(await pathExists(gammaProfile), true);
 
-    // Reapply with only alpha: beta is no longer in the incoming set, so it
-    // must be reconciled (harness-created → removed, or user-displaced →
-    // restored) instead of stranded in the tree (Greptile P1: "reduced agent
-    // sets strand profiles").
+    // Reapply with only alpha: beta and gamma are no longer in the incoming
+    // set, so they must be reconciled — beta's displaced user content is
+    // restored, gamma (harness-created) is removed — instead of stranded in
+    // the tree (Greptile P1: "reduced agent sets strand profiles").
     await apply(["codex.alpha"]);
     assert.equal(
       await readFile(betaProfile, "utf8"),
       "user BETA content\n",
       "beta's displaced user content restored on reduced reapply",
+    );
+    assert.equal(
+      await pathExists(gammaProfile),
+      false,
+      "gamma's harness-created profile removed on reduced reapply",
     );
     assert.equal(
       await pathExists(alphaProfile),
