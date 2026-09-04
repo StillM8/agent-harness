@@ -4,6 +4,45 @@ import { resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+/**
+ * Parses a version tag ("v1.2.3", "1.2.3", "-rc.N"/-beta suffixes) into its
+ * numeric core for semver-order comparison. Returns null for non-version tags
+ * (e.g. "v2.0.0-tag" participants, arbitrary refs) so they are ignored when
+ * computing the latest released tag.
+ */
+function parseTagVersion(tag) {
+  const value = String(tag).replace(/^v/u, "");
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/u.exec(value);
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+/**
+ * Compares two [major, minor, patch] version triples. Returns <0, 0, or >0.
+ */
+function compareVersionTriples(a, b) {
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] - b[index];
+  }
+  return 0;
+}
+
+/**
+ * Returns the highest released version tag present in `tags` as a
+ * [major, minor, patch] triple, or null when no parseable version tag exists.
+ */
+function findLatestTagVersion(tags) {
+  let latest = null;
+  for (const tag of tags) {
+    const parsed = parseTagVersion(tag);
+    if (parsed === null) continue;
+    if (latest === null || compareVersionTriples(parsed, latest) > 0) {
+      latest = parsed;
+    }
+  }
+  return latest;
+}
+
 export function validateVersionSync(packageDocument, lockDocument, tags) {
   const packageVersion = packageDocument?.version;
   const lockfileVersion = lockDocument?.version;
@@ -38,20 +77,38 @@ export function validateVersionSync(packageDocument, lockDocument, tags) {
     );
   }
 
-  // Tag-vs-manifest guard (#467): the manifest version must correspond to a
-  // released git tag (v<version>) that the human creates on main. When no
-  // tags can be enumerated (shallow CI checkout, non-git cwd) the check is
-  // skipped so PR and temporary-directory runs stay green; it is enforced
-  // wherever the tag list is actually available (full clone, release check).
+  // Tag-vs-manifest guard (#467): the manifest version must NOT regress below
+  // the highest released tag. A FORWARD bump (manifest > latest tag) is the
+  // normal pre-release state — the version is awaiting its post-merge tag
+  // (the release action tags v<version> on main after merge). Exit 0 in that
+  // state. The check fails only when the manifest is AT or BEHIND the latest
+  // released tag without a matching tag of its own (a regression/re-tag, which
+  // a pre-merge gate must reject).
   if (Array.isArray(tags) && tags.length > 0) {
-    if (packageVersion) {
+    if (packageVersion && parseTagVersion(`v${packageVersion}`) !== null) {
       const hasMatchingTag = tags.some(
         (tag) => tag === `v${packageVersion}` || tag === packageVersion,
       );
+      const latestTagVersion = findLatestTagVersion(tags);
       if (!hasMatchingTag) {
-        errors.push(
-          `package.json version (${packageVersion}) has no matching git tag (expected v${packageVersion}) on main.`,
-        );
+        if (latestTagVersion === null) {
+          // No parseable released tag existed yet; treat as a forward bump.
+          return {
+            ok: errors.length === 0,
+            version:
+              packageVersion ?? lockfileVersion ?? rootPackageVersion ?? null,
+            errors,
+          };
+        }
+        const manifestTriple = parseTagVersion(`v${packageVersion}`);
+        if (
+          manifestTriple !== null &&
+          compareVersionTriples(manifestTriple, latestTagVersion) <= 0
+        ) {
+          errors.push(
+            `package.json version (${packageVersion}) does not exceed the latest released tag (v${latestTagVersion.join(".")}) and has no matching git tag on main — a version regression or retagged release.`,
+          );
+        }
       }
     }
   }

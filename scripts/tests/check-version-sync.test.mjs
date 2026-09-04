@@ -140,7 +140,9 @@ test("validateVersionSync accepts a matching git tag on main", () => {
   assert.deepEqual(result.errors, []);
 });
 
-test("validateVersionSync reports a manifest version with no matching git tag", () => {
+test("validateVersionSync accepts a forward-bumped manifest with no matching tag yet", () => {
+  // Manifest 2.1.0 > latest released tag v2.0.1: a normal pre-release state
+  // awaiting its post-merge tag. Must pass (forward bump, reverse of #467).
   const result = validateVersionSync(
     { version: "2.1.0" },
     {
@@ -150,10 +152,27 @@ test("validateVersionSync reports a manifest version with no matching git tag", 
     ["v2.0.0", "v2.0.1"],
   );
 
+  assert.equal(result.ok, true);
+  assert.equal(result.version, "2.1.0");
+  assert.deepEqual(result.errors, []);
+});
+
+test("validateVersionSync rejects a manifest that regresses against a newer tag without a matching tag", () => {
+  // Manifest 2.0.1 <= latest tag v2.1.0 with no v2.0.1 tag: a regression /
+  // retag that a pre-merge gate must reject.
+  const result = validateVersionSync(
+    { version: "2.0.1" },
+    {
+      version: "2.0.1",
+      packages: { "": { version: "2.0.1" } },
+    },
+    ["v2.0.0", "v2.1.0"],
+  );
+
   assert.equal(result.ok, false);
   assert.match(
     result.errors[0],
-    /package\.json version \(2\.1\.0\) has no matching git tag \(expected v2\.1\.0\) on main/u,
+    /package\.json version \(2\.0\.1\) does not exceed the latest released tag \(v2\.1\.0\) and has no matching git tag on main/u,
   );
 });
 
@@ -232,7 +251,27 @@ test("listGitTags returns null when git is unavailable", () => {
   assert.equal(listGitTags("Z:/definitely-not-a-directory/path"), null);
 });
 
-test("main fails when the manifest version has no matching git tag", async (t) => {
+test("main accepts a forward-bumped manifest awaiting its post-merge tag", async (t) => {
+  const originalExitCode = process.exitCode;
+  const originalLog = console.log;
+  const logs = [];
+  console.log = (...args) => logs.push(args.join(" "));
+  t.after(() => {
+    console.log = originalLog;
+    process.exitCode = originalExitCode;
+  });
+
+  const dir = await mkdtemp(join(tmpdir(), "version-sync-tag-fwd-"));
+  await writeVersionFiles(dir, "2.1.0", "2.1.0", "2.1.0");
+  process.exitCode = undefined;
+  const result = main({ cwd: dir, tags: ["v2.0.0"] });
+
+  assert.equal(result.ok, true);
+  assert.equal(process.exitCode, undefined);
+  assert.match(logs.at(-1), /synchronized at 2\.1\.0/u);
+});
+
+test("main fails when the manifest regresses against a newer released tag", async (t) => {
   const originalExitCode = process.exitCode;
   const originalError = console.error;
   const errors = [];
@@ -243,15 +282,17 @@ test("main fails when the manifest version has no matching git tag", async (t) =
   });
 
   const dir = await mkdtemp(join(tmpdir(), "version-sync-tag-fail-"));
-  await writeVersionFiles(dir, "2.1.0", "2.1.0", "2.1.0");
+  await writeVersionFiles(dir, "2.0.1", "2.0.1", "2.0.1");
   process.exitCode = undefined;
-  const result = main({ cwd: dir, tags: ["v2.0.0"] });
+  const result = main({ cwd: dir, tags: ["v2.0.0", "v2.1.0"] });
 
   assert.equal(result.ok, false);
   assert.equal(process.exitCode, 1);
-  assert.deepEqual(errors, [
-    "package.json version (2.1.0) has no matching git tag (expected v2.1.0) on main.",
-  ]);
+  assert.equal(errors.length, 1);
+  assert.match(
+    errors[0],
+    /package\.json version \(2\.0\.1\) does not exceed the latest released tag \(v2\.1\.0\)/u,
+  );
 });
 
 async function runGit(cwd, args) {
