@@ -1033,6 +1033,105 @@ void test("Codex reset preserves a user's post-apply edit to a generated profile
   }
 });
 
+void test("Codex same-agent reapply preserves a user's edit to a generated profile", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-reapply-edit-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const alphaProfile = join(agentsDir, codexProfileFileName("codex.alpha"));
+    await writeFile(alphaProfile, "user ORIGINAL alpha\n", "utf8");
+
+    const apply = () =>
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: [nativeAsset("codex.alpha", "agent", "Alpha body")],
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      });
+
+    await apply();
+    // User edits the generated profile after the first apply.
+    await writeFile(alphaProfile, "user EDITED alpha\n", "utf8");
+
+    // Reapply the SAME agent: the write-direction guard must NOT clobber the
+    // user edit (compare-before-write), and must release ownership.
+    await apply();
+    assert.equal(
+      await readFile(alphaProfile, "utf8"),
+      "user EDITED alpha\n",
+      "same-agent reapply preserves the user's profile edit",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex marketplace reapply relinquishes ownership after a user replacement so reset preserves it", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-market-relaunder-"),
+  );
+  try {
+    const marketplacePath = join(
+      workspaceRoot,
+      ".agents",
+      "plugins",
+      "marketplace.json",
+    );
+    // Harness creates the marketplace from scratch -> records created:true.
+    await mergeCodexPluginMarketplace(marketplacePath);
+    assert.equal(await pathExists(marketplacePath), true);
+
+    // User REPLACES the whole file with their own minimal marketplace.
+    await writeJsonFile(marketplacePath, {
+      name: "agent-harness-local",
+      interface: { displayName: "My Company Marketplace" },
+      plugins: [],
+      sourcedBy: "user",
+    });
+
+    // Reapply: the live bytes no longer match the prior fingerprint, so the
+    // harness RELINQUISHES whole-file ownership (created:false) rather than
+    // re-blessing the user replacement as reset-deletable.
+    await mergeCodexPluginMarketplace(marketplacePath);
+    const ownership = JSON.parse(
+      await readFile(
+        join(
+          workspaceRoot,
+          ".agents",
+          "plugins",
+          ".agent-harness-marketplace.json",
+        ),
+        "utf8",
+      ),
+    ) as { created: boolean };
+    assert.equal(
+      ownership.created,
+      false,
+      "ownership relinquished after user replacement + reapply",
+    );
+
+    // Reset must therefore preserve the user's replacement.
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    const survivor = JSON.parse(
+      await readFile(marketplacePath, "utf8"),
+    ) as Record<string, unknown>;
+    assert.equal(survivor.sourcedBy, "user");
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 function nativeAsset(
   assetId: string,
   assetKind: NativeAsset["assetKind"],
