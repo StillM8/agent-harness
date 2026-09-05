@@ -956,6 +956,56 @@ void test("Codex reduced-agent reconcile preserves a user-edited orphaned profil
   }
 });
 
+void test("Codex reduced-agent reconcile preserves an already user-owned orphaned profile", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-reduced-owned-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const alphaProfile = join(agentsDir, codexProfileFileName("codex.alpha"));
+    const betaProfile = join(agentsDir, codexProfileFileName("codex.beta"));
+
+    const apply = (assetIds: string[]) =>
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: assetIds.map((id) =>
+          nativeAsset(id, "agent", `${id} body`),
+        ),
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      });
+
+    await apply(["codex.alpha", "codex.beta"]);
+    // User edits beta, then a full reapply marks beta user-owned.
+    await writeFile(betaProfile, "user EDITED beta\n", "utf8");
+    await apply(["codex.alpha", "codex.beta"]);
+    // beta is now user-owned; a reduced reapply orphans it.
+    await apply(["codex.alpha"]);
+    assert.equal(
+      await readFile(betaProfile, "utf8"),
+      "user EDITED beta\n",
+      "already user-owned orphaned profile preserved on reduced reapply",
+    );
+    assert.equal(
+      await pathExists(alphaProfile),
+      true,
+      "alpha profile still written",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 void test("Codex reset preserves a user's replacement of a harness-created marketplace", async () => {
   const workspaceRoot = await mkdtemp(
     join(tmpdir(), "agent-harness-codex-market-replaced-"),

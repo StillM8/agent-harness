@@ -329,12 +329,16 @@ async function writeCodexAgentProfiles(
         createContentHash(live) !== priorRecord.contentFingerprint);
     if (preserveUserEdit) {
       // Keep the user's bytes, never regenerate; retain the record as
-      // user-owned so later applies preserve it too.
-      records.push({
-        fileName,
-        priorContent: live ?? priorRecord?.priorContent ?? null,
-        userOwned: true,
-      });
+      // user-owned so later applies preserve it too. If the user-owned file
+      // has since been DELETED (live === null), there is nothing to preserve
+      // — drop ownership entirely rather than record a ghost.
+      if (live !== null) {
+        records.push({
+          fileName,
+          priorContent: live,
+          userOwned: true,
+        });
+      }
       continue;
     }
     records.push({
