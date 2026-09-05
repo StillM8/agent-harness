@@ -653,6 +653,11 @@ void test("Codex reset drops hostile profile-manifest entries instead of travers
           priorContent: null,
           contentFingerprint: 42,
         },
+        {
+          fileName: codexProfileFileName("badowned.agent"),
+          priorContent: null,
+          userOwned: "yes",
+        },
         { fileName: codexProfileFileName("ok.agent"), priorContent: null },
         "not-an-object",
         { fileName: 42, priorContent: null },
@@ -1071,6 +1076,25 @@ void test("Codex same-agent reapply preserves a user's edit to a generated profi
       await readFile(alphaProfile, "utf8"),
       "user EDITED alpha\n",
       "same-agent reapply preserves the user's profile edit",
+    );
+
+    // A SECOND reapply must keep preserving the user-owned profile — the
+    // retained userOwned record stops it being treated as untracked and
+    // regenerated (Greptile P1: "Profile ownership vanishes after reapply").
+    await apply();
+    assert.equal(
+      await readFile(alphaProfile, "utf8"),
+      "user EDITED alpha\n",
+      "second same-agent reapply still preserves the user's profile edit",
+    );
+
+    // Reset must likewise preserve the user-owned profile, not restore the
+    // stale harness snapshot or delete it.
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    assert.equal(
+      await readFile(alphaProfile, "utf8"),
+      "user EDITED alpha\n",
+      "reset preserves the user-owned profile edit",
     );
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
