@@ -648,6 +648,11 @@ void test("Codex reset drops hostile profile-manifest entries instead of travers
         { fileName: "../../escape-target.toml", priorContent: null },
         { fileName: "user.toml", priorContent: null },
         { fileName: codexProfileFileName("bad.agent"), priorContent: 42 },
+        {
+          fileName: codexProfileFileName("badfingerprint.agent"),
+          priorContent: null,
+          contentFingerprint: 42,
+        },
         { fileName: codexProfileFileName("ok.agent"), priorContent: null },
         "not-an-object",
         { fileName: 42, priorContent: null },
@@ -884,6 +889,57 @@ void test("Codex reapply with a smaller agent set reconciles orphaned profiles",
       await pathExists(gammaProfile),
       false,
       "gamma's harness-created profile removed on reduced reapply",
+    );
+    assert.equal(
+      await pathExists(alphaProfile),
+      true,
+      "alpha profile still written",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex reduced-agent reconcile preserves a user-edited orphaned profile", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-reduced-edit-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const alphaProfile = join(agentsDir, codexProfileFileName("codex.alpha"));
+    const betaProfile = join(agentsDir, codexProfileFileName("codex.beta"));
+
+    const apply = (assetIds: string[]) =>
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: assetIds.map((id) =>
+          nativeAsset(id, "agent", `${id} body`),
+        ),
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      });
+
+    await apply(["codex.alpha", "codex.beta"]);
+    // User edits beta's generated profile after apply.
+    await writeFile(betaProfile, "user EDITED beta\n", "utf8");
+
+    // Reapply with only alpha: beta is orphaned AND user-edited, so the
+    // reconcile must PRESERVE it (not delete/restore) — the fingerprint differs.
+    await apply(["codex.alpha"]);
+    assert.equal(
+      await readFile(betaProfile, "utf8"),
+      "user EDITED beta\n",
+      "user-edited orphaned profile preserved on reduced reapply",
     );
     assert.equal(
       await pathExists(alphaProfile),
