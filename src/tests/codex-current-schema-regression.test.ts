@@ -937,6 +937,46 @@ void test("Codex reset preserves a user's replacement of a harness-created marke
   }
 });
 
+void test("Codex reset preserves a user's post-apply edit to a generated profile", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-profile-edit-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    // Displaced user profile (priorContent non-null) so reset would restore it.
+    const alphaProfile = join(agentsDir, codexProfileFileName("codex.alpha"));
+    await writeFile(alphaProfile, "user ORIGINAL alpha\n", "utf8");
+
+    await writeCodexNativeFiles({
+      workspaceRoot,
+      managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+      nativeAssets: [nativeAsset("codex.alpha", "agent", "Agent body")],
+      materializedAssets: emptyMaterializedAssets(),
+      mcpServers: [],
+    });
+    // User edits the generated profile after apply — must not be overwritten.
+    await writeFile(alphaProfile, "user EDITED alpha\n", "utf8");
+
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    assert.equal(
+      await readFile(alphaProfile, "utf8"),
+      "user EDITED alpha\n",
+      "user's post-apply edit survives reset (not overwritten by snapshot)",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 function nativeAsset(
   assetId: string,
   assetKind: NativeAsset["assetKind"],
