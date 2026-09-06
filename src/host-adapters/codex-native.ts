@@ -374,7 +374,14 @@ async function writeCodexAgentProfiles(
     // (live === null) has nothing to preserve — regenerate the profile so the
     // selected agent is provisioned this apply (Greptile/CodeRabbit P1:
     // deleted user-owned profile must be regenerated, not left absent).
-    const regeneratingUserOwned = wasUserOwned && live === null;
+    // Any ABSENT profile with a prior ownership record is regenerated as
+    // harness-created from scratch — whether it was user-owned or a legacy
+    // fingerprint-less record. Its new record must carry priorContent:null so
+    // reset/reconcile NEVER resurrect the stale bytes the user explicitly
+    // deleted (Greptile P1: a legacy no-fingerprint record kept its old
+    // snapshot on regeneration and reset then restored it).
+    const regeneratingAbsentProfile =
+      priorRecord !== undefined && live === null;
     const preserveUserEdit =
       live !== null &&
       (wasUserOwned ||
@@ -401,13 +408,14 @@ async function writeCodexAgentProfiles(
     }
     records.push({
       fileName,
-      // A regenerated formerly-user-owned profile is now harness-created: its
-      // priorContent must be null so reset/reconcile never resurrect the stale
-      // bytes the user explicitly deleted (Greptile P1: "Deleted profile
-      // content resurfaces"). Otherwise keep the recorded priorContent (the
-      // displaced user bytes a reset should restore) or snapshot the current
-      // file.
-      priorContent: regeneratingUserOwned
+      // A REGENERATED profile (its file was absent this apply — the user
+      // deleted it, including a legacy fingerprint-less record) is now
+      // harness-created: its priorContent must be null so reset/reconcile
+      // never resurrect the stale bytes the user explicitly deleted (Greptile
+      // P1: "Deleted legacy content resurfaces"). Otherwise keep the recorded
+      // priorContent (the displaced user bytes a reset should restore) or
+      // snapshot the current file.
+      priorContent: regeneratingAbsentProfile
         ? null
         : priorRecord !== undefined
           ? priorRecord.priorContent

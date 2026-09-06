@@ -1874,6 +1874,83 @@ void test("Codex reset preserves a legacy fingerprint-less profile a user edited
   }
 });
 
+void test("Codex regenerates a deleted legacy profile with priorContent null so reset never resurrects it", async () => {
+  // Greptile P1 ("Deleted legacy content resurfaces"): a legacy fingerprint-
+  // less record whose profile file was DELETED kept its old priorContent on
+  // regeneration, and reset then restored the bytes the user explicitly
+  // deleted. The regenerated record must carry priorContent:null
+  // (harness-created from scratch) so reset removes it instead of restoring it.
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-legacy-regenerate-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const alphaProfile = join(agentsDir, codexProfileFileName("codex.alpha"));
+    const manifestPath = join(agentsDir, ".agent-harness-profiles.json");
+    // A legacy record predating the contentFingerprint field: fileName +
+    // priorContent only, with NO fingerprint and NO userOwned flag. The user
+    // then deleted the generated profile entirely.
+    await writeJsonFile(manifestPath, {
+      schemaVersion: 1,
+      profiles: [
+        {
+          fileName: codexProfileFileName("codex.alpha"),
+          priorContent: "user OLD content\n",
+        },
+      ],
+    });
+    assert.equal(
+      await pathExists(alphaProfile),
+      false,
+      "precondition: the user deleted the profile file",
+    );
+
+    // Re-applying the same agent regenerates the deleted legacy profile.
+    await writeCodexNativeFiles({
+      workspaceRoot,
+      managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+      nativeAssets: [nativeAsset("codex.alpha", "agent", "Alpha body")],
+      materializedAssets: emptyMaterializedAssets(),
+      mcpServers: [],
+    });
+    assert.equal(
+      await pathExists(alphaProfile),
+      true,
+      "deleted profile regenerated so the selected agent stays provisioned",
+    );
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      profiles: Array<{ fileName: string; priorContent?: string | null }>;
+    };
+    const alphaRecord = manifest.profiles.find(
+      (p) => p.fileName === codexProfileFileName("codex.alpha"),
+    );
+    assert.equal(
+      alphaRecord?.priorContent,
+      null,
+      "regenerated record drops the stale priorContent so reset cannot resurrect it",
+    );
+
+    // Reset must REMOVE the regenerated harness file, not restore "user OLD".
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    assert.equal(
+      await pathExists(alphaProfile),
+      false,
+      "reset removes the regenerated profile instead of resurrecting user-deleted content",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 void test("Codex reduced-set reconcile preserves a legacy fingerprint-less profile the user edited", async () => {
   // Gap 2 reconcile-arm: when a reduced agent set orphans a legacy no-
   // fingerprint profile, reconcile must preserve its bytes (isCodexProfile-
