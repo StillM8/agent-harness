@@ -1488,6 +1488,59 @@ void test("Codex reset: a user-owned profile's record survives reset so a later 
   }
 });
 
+void test("Codex ghost-drop: a user-owned profile DELETED by the user has its record dropped on reset so no stale record dangles", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-ghost-drop-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const alphaProfile = join(agentsDir, codexProfileFileName("codex.alpha"));
+    const manifestPath = join(agentsDir, ".agent-harness-profiles.json");
+
+    const apply = () =>
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: [nativeAsset("codex.alpha", "agent", "Alpha body")],
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      });
+
+    await apply();
+    // User edits alpha, then a full re-apply marks it user-owned.
+    await writeFile(alphaProfile, "user EDITED alpha\n", "utf8");
+    await apply();
+    // User DELETES the user-owned profile entirely.
+    await rm(alphaProfile, { force: true });
+
+    // Reset: alpha is user-owned, so removeCodexAgentProfiles would normally
+    // retain it — but its live file is now absent, so retainUserOwnedProfile
+    // must DROP the ghost record rather than re-assert ownership of nothing.
+    // With no profile surviving, the ownership manifest is removed outright.
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    assert.equal(
+      await pathExists(alphaProfile),
+      false,
+      "deleted profile stays deleted after reset",
+    );
+    assert.equal(
+      await pathExists(manifestPath),
+      false,
+      "no stale user-owned inline manifest dangles after the file was deleted",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 function nativeAsset(
   assetId: string,
   assetKind: NativeAsset["assetKind"],
