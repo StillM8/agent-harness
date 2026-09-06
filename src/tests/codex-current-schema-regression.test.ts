@@ -1006,6 +1006,54 @@ void test("Codex reduced-agent reconcile preserves an already user-owned orphane
   }
 });
 
+void test("Codex regenerates a deleted user-owned profile so the agent stays provisioned", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-regen-deleted-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const alphaProfile = join(agentsDir, codexProfileFileName("codex.alpha"));
+
+    const apply = () =>
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: [nativeAsset("codex.alpha", "agent", "Alpha body")],
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      });
+
+    await apply();
+    // User edits, then deletes the generated profile — it is now user-owned
+    // but absent.
+    await writeFile(alphaProfile, "user EDITED alpha\n", "utf8");
+    await apply();
+    await rm(alphaProfile, { force: true });
+
+    // Reapply: the deleted user-owned file must be REGENERATED so the selected
+    // agent is provisioned, not left absent (Greptile/CodeRabbit P1: deleted
+    // user-owned profile is not regenerated).
+    await apply();
+    assert.equal(await pathExists(alphaProfile), true);
+    assert.match(
+      await readFile(alphaProfile, "utf8"),
+      /^name = "codex\.alpha"/mu,
+      "deleted user-owned profile regenerated on reapply",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 void test("Codex reset preserves a user's replacement of a harness-created marketplace", async () => {
   const workspaceRoot = await mkdtemp(
     join(tmpdir(), "agent-harness-codex-market-replaced-"),

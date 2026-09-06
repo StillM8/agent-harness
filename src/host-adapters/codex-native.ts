@@ -331,24 +331,24 @@ async function writeCodexAgentProfiles(
     // (bytes match), was never owned, or is absent.
     const live = await readTextFileOrNull(profilePath);
     const wasUserOwned = priorRecord?.userOwned === true;
+    // Preserve only a user-edited file that STILL EXISTS. A deleted file
+    // (live === null) has nothing to preserve — regenerate the profile so the
+    // selected agent is provisioned this apply (Greptile/CodeRabbit P1:
+    // deleted user-owned profile must be regenerated, not left absent).
     const preserveUserEdit =
-      wasUserOwned ||
-      (priorRecord !== undefined &&
-        priorRecord.contentFingerprint !== undefined &&
-        live !== null &&
-        createContentHash(live) !== priorRecord.contentFingerprint);
+      live !== null &&
+      (wasUserOwned ||
+        (priorRecord !== undefined &&
+          priorRecord.contentFingerprint !== undefined &&
+          createContentHash(live) !== priorRecord.contentFingerprint));
     if (preserveUserEdit) {
       // Keep the user's bytes, never regenerate; retain the record as
-      // user-owned so later applies preserve it too. If the user-owned file
-      // has since been DELETED (live === null), there is nothing to preserve
-      // — drop ownership entirely rather than record a ghost.
-      if (live !== null) {
-        records.push({
-          fileName,
-          priorContent: live,
-          userOwned: true,
-        });
-      }
+      // user-owned so later applies preserve it too.
+      records.push({
+        fileName,
+        priorContent: live,
+        userOwned: true,
+      });
       continue;
     }
     records.push({
