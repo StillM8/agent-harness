@@ -1206,6 +1206,288 @@ void test("Codex marketplace reapply relinquishes ownership after a user replace
   }
 });
 
+void test("Codex omit→re-add: a user-owned profile's record survives the omission so re-add never regenerates over the user's edit", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-omit-readd-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const betaProfile = join(agentsDir, codexProfileFileName("codex.beta"));
+    const manifestPath = join(agentsDir, ".agent-harness-profiles.json");
+
+    const apply = (assetIds: string[]) =>
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: assetIds.map((id) =>
+          nativeAsset(id, "agent", `${id} body`),
+        ),
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      });
+
+    // (1) apply alpha + beta
+    await apply(["codex.alpha", "codex.beta"]);
+    // (2) user edits beta
+    await writeFile(betaProfile, "user EDITED beta\n", "utf8");
+    // (3) re-apply marks beta user-owned
+    await apply(["codex.alpha", "codex.beta"]);
+    // (4) omit beta: reduced-set reconcile must RETAIN beta's userOwned record
+    await apply(["codex.alpha"]);
+    const afterOmit = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      profiles: Array<{ fileName: string; userOwned?: boolean }>;
+    };
+    const betaOmitRecord = afterOmit.profiles.find(
+      (p) => p.fileName === codexProfileFileName("codex.beta"),
+    );
+    assert.ok(
+      betaOmitRecord?.userOwned === true,
+      "user-owned beta record RETAINED across omit (not dropped)",
+    );
+    assert.equal(
+      await readFile(betaProfile, "utf8"),
+      "user EDITED beta\n",
+      "beta file preserved across the omission",
+    );
+    // (5) re-add beta: the retained record must stop the writer-guard from
+    // treating beta as untracked pre-existing and regenerating over the edit
+    await apply(["codex.alpha", "codex.beta"]);
+    assert.equal(
+      await readFile(betaProfile, "utf8"),
+      "user EDITED beta\n",
+      "omit→re-add does not clobber the user-owned beta profile",
+    );
+    // (6) reset honors the surviving record
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    assert.equal(
+      await readFile(betaProfile, "utf8"),
+      "user EDITED beta\n",
+      "reset after omit→re-add still preserves the user-owned beta profile",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex reduced-set reconcile: a user-edited (not-yet-owned) profile is PRESERVED and promoted to userOwned in the manifest", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-reduced-promote-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const betaProfile = join(agentsDir, codexProfileFileName("codex.beta"));
+    const manifestPath = join(agentsDir, ".agent-harness-profiles.json");
+
+    const apply = (assetIds: string[]) =>
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: assetIds.map((id) =>
+          nativeAsset(id, "agent", `${id} body`),
+        ),
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      });
+
+    await apply(["codex.alpha", "codex.beta"]);
+    // User edits beta but does NOT re-apply: the record still says harness-owned.
+    await writeFile(betaProfile, "user EDITED beta\n", "utf8");
+
+    // Reduced-set reconcile (alpha only): beta is orphaned AND user-edited.
+    // The preserve arm must run, AND the record must be (re)recorded as
+    // userOwned so a later re-add does not regenerate over it.
+    await apply(["codex.alpha"]);
+    assert.equal(
+      await readFile(betaProfile, "utf8"),
+      "user EDITED beta\n",
+      "user-edited orphaned profile preserved on reduced reapply",
+    );
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      profiles: Array<{ fileName: string; userOwned?: boolean }>;
+    };
+    const betaRecord = manifest.profiles.find(
+      (p) => p.fileName === codexProfileFileName("codex.beta"),
+    );
+    assert.ok(
+      betaRecord?.userOwned === true,
+      "user-edited profile promoted to userOwned during reduced reconcile",
+    );
+
+    // Re-add beta: must NOT clobber the user's edit.
+    await apply(["codex.alpha", "codex.beta"]);
+    assert.equal(
+      await readFile(betaProfile, "utf8"),
+      "user EDITED beta\n",
+      "re-add after promotion does not clobber the user's edit",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex no-agent apply: a user-owned profile's record survives and a later re-add preserves it", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-noagent-survive-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const alphaProfile = join(agentsDir, codexProfileFileName("codex.alpha"));
+    const manifestPath = join(agentsDir, ".agent-harness-profiles.json");
+
+    const apply = (assetIds: string[]) =>
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: assetIds.map((id) =>
+          nativeAsset(id, "agent", `${id} body`),
+        ),
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      });
+    const applyNoAgents = () =>
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: [nativeAsset("codex.skill", "skill", "Skill body")],
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      });
+
+    await apply(["codex.alpha"]);
+    // User edits alpha, then a full re-apply marks it user-owned.
+    await writeFile(alphaProfile, "user EDITED alpha\n", "utf8");
+    await apply(["codex.alpha"]);
+
+    // No-agent apply: alpha is user-owned, so it is preserved AND its record is
+    // RETAINED (not consumed) — a later re-add must keep preserving it.
+    await applyNoAgents();
+    assert.equal(
+      await readFile(alphaProfile, "utf8"),
+      "user EDITED alpha\n",
+      "no-agent apply preserves the user-owned profile",
+    );
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      profiles: Array<{ fileName: string; userOwned?: boolean }>;
+    };
+    const alphaRecord = manifest.profiles.find(
+      (p) => p.fileName === codexProfileFileName("codex.alpha"),
+    );
+    assert.ok(
+      alphaRecord?.userOwned === true,
+      "user-owned record RETAINED across no-agent apply",
+    );
+
+    // Re-add alpha: must not regenerate over the user's edit.
+    await apply(["codex.alpha"]);
+    assert.equal(
+      await readFile(alphaProfile, "utf8"),
+      "user EDITED alpha\n",
+      "re-add after no-agent apply does not clobber the user-owned profile",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex reset: a user-owned profile's record survives reset so a later re-add preserves it", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-reset-survive-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const alphaProfile = join(agentsDir, codexProfileFileName("codex.alpha"));
+    const manifestPath = join(agentsDir, ".agent-harness-profiles.json");
+
+    const apply = () =>
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: [nativeAsset("codex.alpha", "agent", "Alpha body")],
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      });
+
+    await apply();
+    // User edits alpha, then a full re-apply marks it user-owned.
+    await writeFile(alphaProfile, "user EDITED alpha\n", "utf8");
+    await apply();
+
+    // Reset: alpha is user-owned, so it is preserved AND its record RETAINED
+    // so a later apply still recognizes it (not treated as untracked).
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    assert.equal(
+      await readFile(alphaProfile, "utf8"),
+      "user EDITED alpha\n",
+      "reset preserves the user-owned profile",
+    );
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      profiles: Array<{ fileName: string; userOwned?: boolean }>;
+    };
+    const alphaRecord = manifest.profiles.find(
+      (p) => p.fileName === codexProfileFileName("codex.alpha"),
+    );
+    assert.ok(
+      alphaRecord?.userOwned === true,
+      "user-owned record RETAINED across reset",
+    );
+
+    // A later apply must keep preserving the survived record.
+    const pluginRootNeedsReclaim = join(
+      workspaceRoot,
+      "plugins",
+      "agent-harness",
+    );
+    await writeJsonFile(
+      join(pluginRootNeedsReclaim, ".agent-harness-managed.json"),
+      {
+        managedBy: "agent-harness",
+        markerVersion: 1,
+        pluginName: "agent-harness",
+      },
+    );
+    await apply();
+    assert.equal(
+      await readFile(alphaProfile, "utf8"),
+      "user EDITED alpha\n",
+      "re-add after reset does not clobber the user-owned profile",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 function nativeAsset(
   assetId: string,
   assetKind: NativeAsset["assetKind"],
