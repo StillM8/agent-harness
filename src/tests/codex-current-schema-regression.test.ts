@@ -321,6 +321,40 @@ void test("current Codex marketplace repairs a non-string interface display name
   }
 });
 
+void test("legacy layout is detected from a path-only entries array (no schemaVersion)", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-legacy-array-edge-"),
+  );
+  try {
+    const marketplacePath = join(
+      workspaceRoot,
+      ".agents",
+      "plugins",
+      "marketplace.json",
+    );
+    // No schemaVersion, a non-object entry in the array, and an object entry
+    // whose `path` selects legacy — covers every isLegacyCodexMarketplace
+    // predicate outcome (isJsonObject false, then path-string true).
+    await writeJsonFile(marketplacePath, {
+      plugins: ["non-object-entry", { name: "existing", path: "./existing" }],
+    });
+
+    assert.equal(await mergeCodexPluginMarketplace(marketplacePath), "legacy");
+    const marketplace = JSON.parse(await readFile(marketplacePath, "utf8")) as {
+      plugins: Array<unknown>;
+    };
+    assert.equal(marketplace.plugins[0], "non-object-entry");
+    assert.deepEqual(
+      (marketplace.plugins as Array<Record<string, unknown>>).find(
+        (plugin) => plugin.name === "agent-harness",
+      ),
+      { name: "agent-harness", path: "./agent-harness" },
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
 void test("Codex reset rethrows unexpected agent-profile directory errors", async () => {
   const workspaceRoot = await mkdtemp(
     join(tmpdir(), "agent-harness-codex-reset-edge-"),
@@ -388,20 +422,87 @@ void test("Codex write refuses to claim a pre-existing unmarked plugin directory
       await readFile(join(pluginRoot, "user-owned.md"), "utf8"),
       "user content\n",
     );
-    // Claim-first atomicity (Greptile P1): the reject happened BEFORE any
-    // managed path was written, so no AGENTS.md section / .agents/skills tree
-    // is left behind on the failed apply.
+    // Atomic apply (the claim-first arm): the rejected collision must NOT have
+    // left ANY managed file behind — no AGENTS.md section, no managed SKILL.md
+    // path (Greptile P1: the old order wrote both before claiming, orphaning
+    // active Agent Harness config behind a reported failure).
     assert.equal(
       await pathExists(join(workspaceRoot, "AGENTS.md")),
       false,
-      "AGENTS.md not written when the plugin claim is rejected",
+      "AGENTS.md must not be written when the plugin claim rejects",
     );
     assert.equal(
       await pathExists(
         join(workspaceRoot, ".agents", "skills", "agent-harness"),
       ),
       false,
-      ".agents/skills not written when the plugin claim is rejected",
+      "managed .agents/skills/agent-harness must not be written when the plugin claim rejects",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex write refuses a legacy unmarked .agents/plugins/agent-harness with zero writes", async () => {
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-legacy-claim-guard-"),
+  );
+  try {
+    // A legacy-shaped marketplace routes the managed plugin to the NESTED
+    // `.agents/plugins/agent-harness` root. A pre-existing unmarked dir there
+    // is a user-owned collision that must reject BEFORE AGENTS.md / SKILL.md
+    // are written — not after the fallback legacy layout is discovered.
+    const legacyRoot = join(
+      workspaceRoot,
+      ".agents",
+      "plugins",
+      "agent-harness",
+    );
+    await mkdir(legacyRoot, { recursive: true });
+    await writeFile(
+      join(legacyRoot, "user-owned.md"),
+      "user content\n",
+      "utf8",
+    );
+    await writeJsonFile(
+      join(workspaceRoot, ".agents", "plugins", "marketplace.json"),
+      {
+        schemaVersion: 2,
+        plugins: [{ name: "existing", path: "./existing" }],
+      },
+    );
+
+    await assert.rejects(
+      writeCodexNativeFiles({
+        workspaceRoot,
+        managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+        nativeAssets: [nativeAsset("codex.agent", "agent", "Agent body")],
+        materializedAssets: emptyMaterializedAssets(),
+        mcpServers: [],
+      }),
+      /Refusing to claim existing unmarked agent-harness plugin directory/u,
+    );
+    assert.equal(
+      await readFile(join(legacyRoot, "user-owned.md"), "utf8"),
+      "user content\n",
+    );
+    // None of the managed files may have been written before the reject.
+    assert.equal(
+      await pathExists(join(workspaceRoot, "AGENTS.md")),
+      false,
+      "AGENTS.md must not be written when the legacy claim rejects",
+    );
+    assert.equal(
+      await pathExists(
+        join(workspaceRoot, ".agents", "skills", "agent-harness"),
+      ),
+      false,
+      "managed .agents/skills/agent-harness must not be written when the legacy claim rejects",
+    );
+    assert.equal(
+      await pathExists(join(workspaceRoot, "plugins", "agent-harness")),
+      false,
+      "the top-level managed plugin must not be written when the legacy claim rejects",
     );
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });

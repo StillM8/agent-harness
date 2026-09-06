@@ -18,15 +18,16 @@ export async function writeManagedPluginMarker(
 }
 
 /**
- * Claims a host plugin directory for this apply, refusing to adopt a
- * directory that already exists WITHOUT our ownership marker. Writing a
- * marker into a pre-existing unmarked directory would make reset treat the
- * whole (possibly user-owned) directory as Agent Harness-managed and
- * recursively delete it (review / Greptile P1). A directory created this
- * apply (absent before) or one already carrying our marker is safe to claim.
- * Returns whether the marker was written (true when the dir is newly claimed).
+ * Read-only adoption check: throws when `pluginRoot` already exists WITHOUT
+ * our ownership marker (a user-owned collision), and otherwise does nothing.
+ * Separated from `claimManagedPluginDirectory` so an apply can gate ALL of its
+ * plugin roots against collisions FIRST — rejecting on a clean tree with zero
+ * side effects — and only then claim (write markers into) each root, when no
+ * rejection is possible. Writing a marker into a pre-existing unmarked
+ * directory would make reset treat the whole (possibly user-owned) directory
+ * as Agent Harness-managed and recursively delete it (review / Greptile P1).
  */
-export async function claimManagedPluginDirectory(
+export async function assertPluginDirectoryAdoptable(
   pluginRoot: string,
   pluginName: string,
 ): Promise<void> {
@@ -39,6 +40,22 @@ export async function claimManagedPluginDirectory(
         "Move or remove the user-owned directory (or its ownership marker) before wiring.",
     );
   }
+}
+
+/**
+ * Claims a host plugin directory for this apply, refusing to adopt a
+ * directory that already exists WITHOUT our ownership marker. Writing a
+ * marker into a pre-existing unmarked directory would make reset treat the
+ * whole (possibly user-owned) directory as Agent Harness-managed and
+ * recursively delete it (review / Greptile P1). A directory created this
+ * apply (absent before) or one already carrying our marker is safe to claim.
+ * Returns whether the marker was written (true when the dir is newly claimed).
+ */
+export async function claimManagedPluginDirectory(
+  pluginRoot: string,
+  pluginName: string,
+): Promise<void> {
+  await assertPluginDirectoryAdoptable(pluginRoot, pluginName);
   await writeManagedPluginMarker(pluginRoot, pluginName);
 }
 

@@ -31,6 +31,7 @@ import {
   replaceManagedMarketplaceEntry,
 } from "./marketplace-utils.js";
 import {
+  assertPluginDirectoryAdoptable,
   claimManagedPluginDirectory,
   hasManagedPluginMarker,
 } from "./ownership-marker.js";
@@ -76,13 +77,47 @@ async function claimCodexPluginDirectory(pluginRoot: string): Promise<void> {
 export async function writeCodexNativeFiles(
   options: WireNativeFilesOptions,
 ): Promise<NativeConfigOperation[]> {
-  // Claim the plugin directory BEFORE writing ANY managed path. If it already
-  // exists unowned, claimCodexPluginDirectory rejects the collision — and that
-  // reject must happen on a clean tree, not after AGENTS.md / SKILL.md were
+  // Gate EVERY adoptable plugin root against collisions BEFORE writing any
+  // managed path or ownership marker. If a root already exists unowned, the
+  // read-only assertPluginDirectoryAdoptable check rejects — on a clean tree
+  // with ZERO side effects, not after AGENTS.md / SKILL.md / a marker were
   // already written (Greptile P1: a failed setup left active Agent Harness
   // config behind despite reporting failure — non-atomic apply).
   const pluginRoot = join(options.workspaceRoot, "plugins", CODEX_PLUGIN_NAME);
+  await assertPluginDirectoryAdoptable(pluginRoot, CODEX_PLUGIN_NAME);
+
+  // A legacy-shaped marketplace routes the managed plugin to the nested
+  // `.agents/plugins/agent-harness` root; precheck that root here too so a
+  // user-owned collision there also rejects BEFORE the top-level marker lands.
+  const marketplacePath = join(
+    options.workspaceRoot,
+    ".agents",
+    "plugins",
+    "marketplace.json",
+  );
+  const existingMarketplace =
+    await readJsonFileOrNull<unknown>(marketplacePath);
+  const usesLegacyLayout = isLegacyCodexMarketplace(
+    existingMarketplace === null
+      ? {}
+      : assertJsonObject(existingMarketplace, marketplacePath),
+  );
+  const legacyPluginRoot = join(
+    options.workspaceRoot,
+    ".agents",
+    "plugins",
+    CODEX_PLUGIN_NAME,
+  );
+  if (usesLegacyLayout) {
+    await assertPluginDirectoryAdoptable(legacyPluginRoot, CODEX_PLUGIN_NAME);
+  }
+
+  // All adoptable roots passed their read-only check, so no claim can reject:
+  // commit the markers, then write the managed files.
   await claimCodexPluginDirectory(pluginRoot);
+  if (usesLegacyLayout) {
+    await claimCodexPluginDirectory(legacyPluginRoot);
+  }
 
   const managedLines = buildManagedInstructionLines({
     hostName: "OpenAI Codex",
@@ -142,9 +177,7 @@ export async function writeCodexNativeFiles(
   );
 
   await writeCodexAgentProfiles(options.workspaceRoot, options.nativeAssets);
-  const marketplaceStyle = await mergeCodexPluginMarketplace(
-    join(options.workspaceRoot, ".agents", "plugins", "marketplace.json"),
-  );
+  const marketplaceStyle = await mergeCodexPluginMarketplace(marketplacePath);
 
   if (marketplaceStyle === "legacy") {
     await writeLegacyCodexCompatibilityPlugin(options);
@@ -441,6 +474,29 @@ async function readCodexAgentProfileRecords(
   });
 }
 
+/**
+ * True when a marketplace value (the parsed `.agents/plugins/marketplace.json`
+ * object) selects the LEGACY plugin layout, which routes the managed Codex
+ * plugin to the nested `.agents/plugins/agent-harness` path instead of the
+ * top-level `plugins/agent-harness`. Shared by the apply-time claim gate (so a
+ * user-owned collision at the legacy root rejects BEFORE any managed file is
+ * written) and by `mergeCodexPluginMarketplace` (single source of truth for the
+ * layout decision).
+ */
+function isLegacyCodexMarketplace(
+  marketplace: Record<string, unknown>,
+): boolean {
+  const rawPlugins: unknown[] = Array.isArray(marketplace.plugins)
+    ? marketplace.plugins
+    : [];
+  return (
+    typeof marketplace.schemaVersion === "number" ||
+    rawPlugins.some(
+      (entry) => isJsonObject(entry) && typeof entry.path === "string",
+    )
+  );
+}
+
 /** Merges the managed plugin into the repo/team Codex marketplace. */
 export async function mergeCodexPluginMarketplace(
   filePath: string,
@@ -478,11 +534,7 @@ export async function mergeCodexPluginMarketplace(
   const rawPlugins: unknown[] = Array.isArray(marketplace.plugins)
     ? marketplace.plugins
     : [];
-  const legacy =
-    typeof marketplace.schemaVersion === "number" ||
-    rawPlugins.some(
-      (entry) => isJsonObject(entry) && typeof entry.path === "string",
-    );
+  const legacy = isLegacyCodexMarketplace(marketplace);
 
   if (legacy) {
     const legacyMarketplace = {
