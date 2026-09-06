@@ -830,6 +830,7 @@ void test("Codex reset drops hostile profile-manifest entries instead of travers
     ) as { profiles: Array<{ fileName: string; userOwned?: boolean }> };
     assert.ok(
       Array.isArray(retainedManifest.profiles) &&
+        retainedManifest.profiles.length === 1 &&
         retainedManifest.profiles.every(
           (p) =>
             p.fileName === codexProfileFileName("legacy.agent") &&
