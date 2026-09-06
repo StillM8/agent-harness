@@ -76,6 +76,14 @@ async function claimCodexPluginDirectory(pluginRoot: string): Promise<void> {
 export async function writeCodexNativeFiles(
   options: WireNativeFilesOptions,
 ): Promise<NativeConfigOperation[]> {
+  // Claim the plugin directory BEFORE writing ANY managed path. If it already
+  // exists unowned, claimCodexPluginDirectory rejects the collision — and that
+  // reject must happen on a clean tree, not after AGENTS.md / SKILL.md were
+  // already written (Greptile P1: a failed setup left active Agent Harness
+  // config behind despite reporting failure — non-atomic apply).
+  const pluginRoot = join(options.workspaceRoot, "plugins", CODEX_PLUGIN_NAME);
+  await claimCodexPluginDirectory(pluginRoot);
+
   const managedLines = buildManagedInstructionLines({
     hostName: "OpenAI Codex",
     managedRoot: options.managedRoot,
@@ -111,8 +119,6 @@ export async function writeCodexNativeFiles(
     ),
   );
 
-  const pluginRoot = join(options.workspaceRoot, "plugins", CODEX_PLUGIN_NAME);
-  await claimCodexPluginDirectory(pluginRoot);
   await writeJsonFile(
     join(pluginRoot, ".codex-plugin", "plugin.json"),
     buildCodexPluginManifest(),

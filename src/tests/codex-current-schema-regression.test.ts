@@ -388,6 +388,21 @@ void test("Codex write refuses to claim a pre-existing unmarked plugin directory
       await readFile(join(pluginRoot, "user-owned.md"), "utf8"),
       "user content\n",
     );
+    // Claim-first atomicity (Greptile P1): the reject happened BEFORE any
+    // managed path was written, so no AGENTS.md section / .agents/skills tree
+    // is left behind on the failed apply.
+    assert.equal(
+      await pathExists(join(workspaceRoot, "AGENTS.md")),
+      false,
+      "AGENTS.md not written when the plugin claim is rejected",
+    );
+    assert.equal(
+      await pathExists(
+        join(workspaceRoot, ".agents", "skills", "agent-harness"),
+      ),
+      false,
+      ".agents/skills not written when the plugin claim is rejected",
+    );
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }
