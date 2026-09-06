@@ -1607,6 +1607,25 @@ void test("Codex ghost-drop: a user-owned profile DELETED by the user has its re
     // User edits alpha, then a full re-apply marks it user-owned.
     await writeFile(alphaProfile, "user EDITED alpha\n", "utf8");
     await apply();
+    // Prove the re-apply PRESERVED the edit and recorded userOwned before the
+    // test deletes the profile — otherwise a preservation regression would
+    // silently take the normal harness-owned path through the later delete/
+    // regeneration/reset assertions (CodeRabbit functional-correctness thread).
+    assert.equal(
+      await readFile(alphaProfile, "utf8"),
+      "user EDITED alpha\n",
+      "re-apply preserved the user edit before deletion",
+    );
+    const ghostManifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      profiles: Array<{ fileName: string; userOwned?: boolean }>;
+    };
+    assert.equal(
+      ghostManifest.profiles.find(
+        (p) => p.fileName === codexProfileFileName("codex.alpha"),
+      )?.userOwned,
+      true,
+      "re-apply marked the preserved profile userOwned before deletion",
+    );
     // User DELETES the user-owned profile entirely.
     await rm(alphaProfile, { force: true });
 
