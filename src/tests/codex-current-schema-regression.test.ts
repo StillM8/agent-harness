@@ -1049,6 +1049,17 @@ void test("Codex regenerates a deleted user-owned profile so the agent stays pro
       /^name = "codex\.alpha"/mu,
       "deleted user-owned profile regenerated on reapply",
     );
+
+    // Reset must NOT resurrect the deleted user content: the regenerated
+    // profile is now harness-owned (priorContent null), so reset removes it
+    // cleanly rather than restoring the stale "user EDITED alpha" bytes
+    // (Greptile P1: "Deleted profile content resurfaces").
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    assert.equal(
+      await pathExists(alphaProfile),
+      false,
+      "reset removes the regenerated harness-owned profile, no deleted-content resurfacing",
+    );
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }
