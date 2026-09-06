@@ -638,9 +638,16 @@ void test("Codex reset drops hostile profile-manifest entries instead of travers
     // A real mis-typed priorContent record must be ignored, not written over.
     const misTyped = join(agentsDir, codexProfileFileName("bad.agent"));
     await writeFile(misTyped, "harness-written\n", "utf8");
-    // A harness-created profile that IS validly owned → removed on reset.
+    // A harness-created profile that IS validly owned → removed on reset
+    // (record carries a real contentFingerprint matching the live bytes, so
+    // removal-by-byte-match is proven).
     const okProfile = join(agentsDir, codexProfileFileName("ok.agent"));
     await writeFile(okProfile, "generated\n", "utf8");
+    // A legacy fingerprint-less record (predates the contentFingerprint field):
+    // reset/preserve must NOT delete or restore it — we can't prove we own the
+    // bytes ("never delete what we can't prove we own" / Gap 2).
+    const legacyProfile = join(agentsDir, codexProfileFileName("legacy.agent"));
+    await writeFile(legacyProfile, "user EDITED legacy\n", "utf8");
 
     await writeJsonFile(join(agentsDir, ".agent-harness-profiles.json"), {
       schemaVersion: 1,
@@ -658,7 +665,16 @@ void test("Codex reset drops hostile profile-manifest entries instead of travers
           priorContent: null,
           userOwned: "yes",
         },
-        { fileName: codexProfileFileName("ok.agent"), priorContent: null },
+        {
+          fileName: codexProfileFileName("ok.agent"),
+          priorContent: null,
+          contentFingerprint:
+            "9f5936ff15d3a2ba7d3d8f21858338a6c1e2adc9fe34c685c7de5b4a00caa29a",
+        },
+        {
+          fileName: codexProfileFileName("legacy.agent"),
+          priorContent: null,
+        },
         "not-an-object",
         { fileName: 42, priorContent: null },
       ],
@@ -687,9 +703,23 @@ void test("Codex reset drops hostile profile-manifest entries instead of travers
       "validly-owned harness profile removed",
     );
     assert.equal(
-      await pathExists(join(agentsDir, ".agent-harness-profiles.json")),
-      false,
-      "ownership manifest consumed after reset",
+      await readFile(legacyProfile, "utf8"),
+      "user EDITED legacy\n",
+      "legacy fingerprint-less profile preserved by reset (never deleted/restored)",
+    );
+    // The retained legacy profile keeps a refreshed manifest so a later apply
+    // still recognizes it as owned rather than treating it as untracked.
+    const retainedManifest = JSON.parse(
+      await readFile(join(agentsDir, ".agent-harness-profiles.json"), "utf8"),
+    ) as { profiles: Array<{ fileName: string; userOwned?: boolean }> };
+    assert.ok(
+      Array.isArray(retainedManifest.profiles) &&
+        retainedManifest.profiles.every(
+          (p) =>
+            p.fileName === codexProfileFileName("legacy.agent") &&
+            p.userOwned === true,
+        ),
+      "only the preserved legacy profile survives in the retained manifest, marked userOwned",
     );
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
@@ -1594,6 +1624,177 @@ void test("Codex ghost-drop: a user-owned profile DELETED by the user has its re
       await pathExists(manifestPath),
       false,
       "no stale user-owned inline manifest dangles after the file was deleted",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex legacy-manifest reapply preserves a user's edit to a pre-fingerprint profile and marks it userOwned", async () => {
+  // Gap 2 write-arm: an ownership record written BEFORE the contentFingerprint
+  // field existed (no contentFingerprint, no userOwned) must never let a
+  // same-agent reapply regenerate over a user's post-apply edit. Over-
+  // preservation: we cannot prove we wrote those bytes, so treat them as
+  // user-owned (CodeRabbit Major 5124991541).
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-legacy-reapply-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const alphaProfile = join(agentsDir, codexProfileFileName("codex.alpha"));
+    const manifestPath = join(agentsDir, ".agent-harness-profiles.json");
+    // A legacy manifest predating the contentFingerprint field: the record
+    // carries a fileName + priorContent but NEITHER a fingerprint NOR
+    // userOwned — exactly the shape a pre-field apply leaves behind.
+    await writeFile(alphaProfile, "user ORIGINAL alpha\n", "utf8");
+    await writeJsonFile(manifestPath, {
+      schemaVersion: 1,
+      profiles: [
+        {
+          fileName: codexProfileFileName("codex.alpha"),
+          priorContent: "user ORIGINAL alpha\n",
+        },
+      ],
+    });
+    // The user edits the legacy-owned profile after the original apply.
+    await writeFile(alphaProfile, "user EDITED alpha\n", "utf8");
+
+    await writeCodexNativeFiles({
+      workspaceRoot,
+      managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+      nativeAssets: [nativeAsset("codex.alpha", "agent", "Alpha body")],
+      materializedAssets: emptyMaterializedAssets(),
+      mcpServers: [],
+    });
+
+    assert.equal(
+      await readFile(alphaProfile, "utf8"),
+      "user EDITED alpha\n",
+      "same-agent reapply must NOT rewrite a legacy fingerprint-less profile the user edited",
+    );
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      profiles: Array<{ fileName: string; userOwned?: boolean }>;
+    };
+    const alphaRecord = manifest.profiles.find(
+      (p) => p.fileName === codexProfileFileName("codex.alpha"),
+    );
+    assert.equal(
+      alphaRecord?.userOwned,
+      true,
+      "legacy profile is marked userOwned so later applies keep preserving it",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex reset preserves a legacy fingerprint-less profile a user edited (does not delete/restore)", async () => {
+  // Gap 2 cleanup-arm: reset must never delete or restore-overwrite a legacy
+  // no-fingerprint record — we cannot prove we own its bytes, so preserve.
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-legacy-reset-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const alphaProfile = join(agentsDir, codexProfileFileName("codex.alpha"));
+    const manifestPath = join(agentsDir, ".agent-harness-profiles.json");
+    await writeFile(alphaProfile, "user ORIGINAL alpha\n", "utf8");
+    await writeJsonFile(manifestPath, {
+      schemaVersion: 1,
+      profiles: [
+        {
+          fileName: codexProfileFileName("codex.alpha"),
+          priorContent: "user ORIGINAL alpha\n",
+        },
+      ],
+    });
+    await writeFile(alphaProfile, "user EDITED alpha\n", "utf8");
+
+    await resetCodexNativeHost(workspaceRoot, undefined);
+    assert.equal(
+      await readFile(alphaProfile, "utf8"),
+      "user EDITED alpha\n",
+      "reset must not delete or restore a legacy no-fingerprint profile the user edited",
+    );
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+void test("Codex reduced-set reconcile preserves a legacy fingerprint-less profile the user edited", async () => {
+  // Gap 2 reconcile-arm: when a reduced agent set orphans a legacy no-
+  // fingerprint profile, reconcile must preserve its bytes (isCodexProfile-
+  // Unedited returns false — never delete what we can't prove we own).
+  const workspaceRoot = await mkdtemp(
+    join(tmpdir(), "agent-harness-codex-legacy-reduce-"),
+  );
+  try {
+    const pluginRoot = join(workspaceRoot, "plugins", "agent-harness");
+    await mkdir(pluginRoot, { recursive: true });
+    await writeJsonFile(join(pluginRoot, ".agent-harness-managed.json"), {
+      managedBy: "agent-harness",
+      markerVersion: 1,
+      pluginName: "agent-harness",
+    });
+
+    const agentsDir = join(workspaceRoot, ".codex", "agents");
+    await mkdir(agentsDir, { recursive: true });
+    const alphaProfile = join(agentsDir, codexProfileFileName("codex.alpha"));
+    const manifestPath = join(agentsDir, ".agent-harness-profiles.json");
+    await writeFile(alphaProfile, "user ORIGINAL alpha\n", "utf8");
+    await writeJsonFile(manifestPath, {
+      schemaVersion: 1,
+      profiles: [
+        {
+          fileName: codexProfileFileName("codex.alpha"),
+          priorContent: "user ORIGINAL alpha\n",
+        },
+      ],
+    });
+    await writeFile(alphaProfile, "user EDITED alpha\n", "utf8");
+
+    // Reduced-set apply (beta only): alpha is NOT in the incoming set, so it
+    // is orphan-reconciled — it must be preserved, not removed/restored.
+    await writeCodexNativeFiles({
+      workspaceRoot,
+      managedRoot: join(workspaceRoot, ".codex", "agent-harness"),
+      nativeAssets: [nativeAsset("codex.beta", "agent", "Beta body")],
+      materializedAssets: emptyMaterializedAssets(),
+      mcpServers: [],
+    });
+    assert.equal(
+      await readFile(alphaProfile, "utf8"),
+      "user EDITED alpha\n",
+      "reduced-set reconcile must not delete/restore a legacy no-fingerprint profile the user edited",
+    );
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      profiles: Array<{ fileName: string; userOwned?: boolean }>;
+    };
+    const alphaRecord = manifest.profiles.find(
+      (p) => p.fileName === codexProfileFileName("codex.alpha"),
+    );
+    assert.equal(
+      alphaRecord?.userOwned,
+      true,
+      "legacy orphaned profile retained as userOwned in the manifest",
     );
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });

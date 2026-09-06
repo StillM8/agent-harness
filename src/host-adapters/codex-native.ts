@@ -341,7 +341,15 @@ async function writeCodexAgentProfiles(
       (wasUserOwned ||
         (priorRecord !== undefined &&
           priorRecord.contentFingerprint !== undefined &&
-          createContentHash(live) !== priorRecord.contentFingerprint));
+          createContentHash(live) !== priorRecord.contentFingerprint) ||
+        // Legacy record written before `contentFingerprint` existed carries no
+        // fingerprint we can verify — treat its live bytes as a user edit we
+        // must not clobber (over-preservation: never overwrite what we can't
+        // prove we wrote / CodeRabbit Major 5124991541). Only a present file
+        // is preserved; a deleted legacy file has nothing to protect and is
+        // regenerated so the selected agent stays provisioned.
+        (priorRecord !== undefined &&
+          priorRecord.contentFingerprint === undefined));
     if (preserveUserEdit) {
       // Keep the user's bytes, never regenerate; retain the record as
       // user-owned so later applies preserve it too.
@@ -730,15 +738,18 @@ async function removeCodexAgentProfiles(workspaceRoot: string): Promise<void> {
  * apply wrote. When the record carries a `contentFingerprint`, the current
  * file is compared against it; a mismatch means the user edited the profile
  * after apply, so cleanup must preserve it rather than delete/overwrite the
- * user's changes. Records without a fingerprint (legacy manifests written
- * before this field existed) are treated as untouched for backward-compatible
- * cleanup.
+ * user's changes. Records WITHOUT a fingerprint (legacy manifests written
+ * before this field existed) are treated as EDITED — preserved, never
+ * deleted/restored by cleanup — because we cannot prove we own their bytes
+ * ("never delete what we can't prove we own"; Gap 2 / CodeRabbit Major
+ * 5124991541: a legacy manifest must not let cleanup delete a user's
+ * post-apply edit).
  */
 async function isCodexProfileUnedited(
   agentsDir: string,
   record: CodexAgentProfileRecord,
 ): Promise<boolean> {
-  if (record.contentFingerprint === undefined) return true;
+  if (record.contentFingerprint === undefined) return false;
   const current = await readTextFileOrNull(join(agentsDir, record.fileName));
   return (
     current !== null && createContentHash(current) === record.contentFingerprint
