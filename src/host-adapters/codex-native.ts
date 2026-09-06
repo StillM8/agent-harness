@@ -113,79 +113,118 @@ export async function writeCodexNativeFiles(
   }
 
   // All adoptable roots passed their read-only check, so no claim can reject:
-  // commit the markers, then write the managed files.
+  // commit the markers, then write the managed files. If a LATER step fails,
+  // roll back exactly what this apply wrote so a reported failure leaves a
+  // clean tree — never orphaned managed config + a marker (Greptile P1 / codex
+  // atomicity: "Late write failure leaves managed state").
   await claimCodexPluginDirectory(pluginRoot);
   if (usesLegacyLayout) {
     await claimCodexPluginDirectory(legacyPluginRoot);
   }
 
-  const managedLines = buildManagedInstructionLines({
-    hostName: "OpenAI Codex",
-    managedRoot: options.managedRoot,
-    nativeAssets: options.nativeAssets,
-    materializedAssets: options.materializedAssets,
-    mcpServers: options.mcpServers,
-  });
-
-  await upsertManagedSectionFile(
-    join(options.workspaceRoot, "AGENTS.md"),
-    "agent-harness-codex",
-    managedLines,
+  // Snapshot every text path the apply OVERWRITES before writing, so a late
+  // failure restores byte-for-byte — never a delete that destroys a user's
+  // pre-existing file (review: rollback = snapshot-then-restore, not delete).
+  const agentsPath = join(options.workspaceRoot, "AGENTS.md");
+  const agentsSnapshot = await readTextFileOrNull(agentsPath);
+  const managedSkillPath = join(
+    options.workspaceRoot,
+    ".agents",
+    "skills",
+    CODEX_PLUGIN_NAME,
+    "SKILL.md",
   );
-  await writeTextFile(
-    join(
-      options.workspaceRoot,
-      ".agents",
-      "skills",
-      CODEX_PLUGIN_NAME,
-      "SKILL.md",
-    ),
-    buildSkillFile(
-      CODEX_PLUGIN_NAME,
-      "Use curated Agent Harness assets for this Codex project.",
-      [
-        ...managedLines,
-        ...buildNativeAssetContentSections(options.nativeAssets, [
-          "skill",
-          "instruction",
-          "reference-pack",
-        ]),
-      ],
-    ),
-  );
+  const managedSkillSnapshot = await readTextFileOrNull(managedSkillPath);
 
-  await writeJsonFile(
-    join(pluginRoot, ".codex-plugin", "plugin.json"),
-    buildCodexPluginManifest(),
-  );
-  await writeTextFile(
-    join(pluginRoot, "skills", CODEX_PLUGIN_NAME, "SKILL.md"),
-    buildSkillFile(
-      CODEX_PLUGIN_NAME,
-      "Use curated Agent Harness assets for this Codex project.",
-      [
-        ...managedLines,
-        ...buildNativeAssetContentSections(options.nativeAssets, [
-          "skill",
-          "instruction",
-          "reference-pack",
-          "prompt-pack",
-          "workflow",
-        ]),
-      ],
-    ),
-  );
+  try {
+    const managedLines = buildManagedInstructionLines({
+      hostName: "OpenAI Codex",
+      managedRoot: options.managedRoot,
+      nativeAssets: options.nativeAssets,
+      materializedAssets: options.materializedAssets,
+      mcpServers: options.mcpServers,
+    });
 
-  await writeCodexAgentProfiles(options.workspaceRoot, options.nativeAssets);
-  const marketplaceStyle = await mergeCodexPluginMarketplace(marketplacePath);
+    await upsertManagedSectionFile(
+      agentsPath,
+      "agent-harness-codex",
+      managedLines,
+    );
+    await writeTextFile(
+      managedSkillPath,
+      buildSkillFile(
+        CODEX_PLUGIN_NAME,
+        "Use curated Agent Harness assets for this Codex project.",
+        [
+          ...managedLines,
+          ...buildNativeAssetContentSections(options.nativeAssets, [
+            "skill",
+            "instruction",
+            "reference-pack",
+          ]),
+        ],
+      ),
+    );
 
-  if (marketplaceStyle === "legacy") {
-    await writeLegacyCodexCompatibilityPlugin(options);
+    await writeJsonFile(
+      join(pluginRoot, ".codex-plugin", "plugin.json"),
+      buildCodexPluginManifest(),
+    );
+    await writeTextFile(
+      join(pluginRoot, "skills", CODEX_PLUGIN_NAME, "SKILL.md"),
+      buildSkillFile(
+        CODEX_PLUGIN_NAME,
+        "Use curated Agent Harness assets for this Codex project.",
+        [
+          ...managedLines,
+          ...buildNativeAssetContentSections(options.nativeAssets, [
+            "skill",
+            "instruction",
+            "reference-pack",
+            "prompt-pack",
+            "workflow",
+          ]),
+        ],
+      ),
+    );
+
+    await writeCodexAgentProfiles(options.workspaceRoot, options.nativeAssets);
+    const marketplaceStyle = await mergeCodexPluginMarketplace(marketplacePath);
+
+    if (marketplaceStyle === "legacy") {
+      await writeLegacyCodexCompatibilityPlugin(options);
+    }
+
+    return applyStructuredNativeConfig(options.workspaceRoot, "codex", {
+      nativeAssets: options.nativeAssets,
+    });
+  } catch (error) {
+    // Restore over-written text files byte-for-byte (snapshot-then-restore,
+    // NOT delete): the apply may have overwritten a user's pre-existing
+    // AGENTS.md / SKILL.md, and a delete-rollback would destroy their content
+    // (review). Marker-proven plugin directories are reclaimed (safe — the
+    // claim gate rejects unmarked dirs, so these are harness-owned).
+    if (agentsSnapshot === null) {
+      await removeManagedSectionFile(agentsPath, "agent-harness-codex");
+    } else {
+      await writeTextFile(agentsPath, agentsSnapshot);
+    }
+    if (managedSkillSnapshot === null) {
+      await removePath(managedSkillPath);
+    } else {
+      await writeTextFile(managedSkillPath, managedSkillSnapshot);
+    }
+    if (await hasManagedPluginMarker(pluginRoot, CODEX_PLUGIN_NAME)) {
+      await removePath(pluginRoot);
+    }
+    if (
+      usesLegacyLayout &&
+      (await hasManagedPluginMarker(legacyPluginRoot, CODEX_PLUGIN_NAME))
+    ) {
+      await removePath(legacyPluginRoot);
+    }
+    throw error;
   }
-
-  return applyStructuredNativeConfig(options.workspaceRoot, "codex", {
-    nativeAssets: options.nativeAssets,
-  });
 }
 
 /** Builds the current Codex plugin manifest. */
